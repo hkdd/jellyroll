@@ -468,6 +468,7 @@ pub fn run<P: Platform, R: Renderer>(
             let t = process_start.elapsed();
             tracing::info!(ms = t.as_millis() as u64, "first frame presented");
             systemd.ready(t);
+            p.start_input_devices();
         }
     }
 }

@@ -105,6 +105,10 @@ pub struct SdlPlatform {
     video: sdl3::VideoSubsystem,
     gamepads: Option<Gamepads>,
     cec: Option<(crate::cec::Cec, std::sync::mpsc::Receiver<PlatformEvent>)>,
+    /// Gamepad/CEC setup waiting for `start_input_devices` (after the
+    /// first frame, so it doesn't delay it).
+    deferred_cec: Option<crate::cec::CecOptions>,
+    deferred_started: bool,
     pump: sdl3::EventPump,
     _sdl: sdl3::Sdl,
     gl: Gl,
@@ -139,8 +143,15 @@ fn init(opts: &SdlOptions) -> Result<(sdl3::Sdl, sdl3::VideoSubsystem), String> 
     }
     // We own the whole screen; never let SDL blank it.
     sdl3::hint::set("SDL_VIDEO_ALLOW_SCREENSAVER", "0");
+    let t0 = std::time::Instant::now();
     let sdl = sdl3::init().map_err(|e| format!("SDL_Init: {e}"))?;
+    let t1 = std::time::Instant::now();
     let video = sdl.video().map_err(|e| format!("SDL video init: {e}"))?;
+    tracing::info!(
+        core_ms = (t1 - t0).as_millis() as u64,
+        video_ms = t1.elapsed().as_millis() as u64,
+        "SDL init timing"
+    );
     Ok((sdl, video))
 }
 
@@ -246,41 +257,20 @@ impl SdlPlatform {
             if wake_type == 0 {
                 return Err("SDL_RegisterEvents failed".into());
             }
-            // Gamepads are optional: a missing subsystem only disables them.
-            let gamepads = match sdl.gamepad() {
-                Ok(g) => Some(Gamepads::new(g)),
-                Err(e) => {
-                    tracing::warn!("gamepad support unavailable: {e}");
-                    None
-                }
-            };
-            let mut platform = Self {
+            return Ok(Self {
                 _gl_ctx: ctx,
                 window,
                 video,
-                gamepads,
+                gamepads: None,
                 cec: None,
+                deferred_cec: opts.cec.clone(),
+                deferred_started: false,
                 pump,
                 _sdl: sdl,
                 gl,
                 info,
                 wake_type,
-            };
-            if let Some(cec_opts) = opts.cec.clone() {
-                let (tx, rx) = std::sync::mpsc::channel();
-                match crate::cec::start(cec_opts, tx, platform.waker()) {
-                    Ok(cec) => {
-                        tracing::info!(
-                            device = %cec.info.device,
-                            driver = %cec.info.driver,
-                            "HDMI-CEC enabled"
-                        );
-                        platform.cec = Some((cec, rx));
-                    }
-                    Err(e) => tracing::info!("HDMI-CEC not available: {e}"),
-                }
-            }
-            return Ok(platform);
+            });
         }
         Err(format!("no usable GL context: {last_err}"))
     }
@@ -491,6 +481,38 @@ impl Platform for SdlPlatform {
 
     fn swap(&mut self) {
         self.window.gl_swap_window();
+    }
+
+    fn start_input_devices(&mut self) {
+        if std::mem::replace(&mut self.deferred_started, true) {
+            return;
+        }
+        let t0 = std::time::Instant::now();
+        // Gamepads are optional: a missing subsystem only disables them.
+        // Pads already plugged in arrive as hotplug events.
+        self.gamepads = match self._sdl.gamepad() {
+            Ok(g) => Some(Gamepads::new(g)),
+            Err(e) => {
+                tracing::warn!("gamepad support unavailable: {e}");
+                None
+            }
+        };
+        let t1 = std::time::Instant::now();
+        if let Some(cec_opts) = self.deferred_cec.take() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            match crate::cec::start(cec_opts, tx, self.waker()) {
+                Ok(cec) => {
+                    tracing::info!(device = %cec.info.device, driver = %cec.info.driver, "HDMI-CEC enabled");
+                    self.cec = Some((cec, rx));
+                }
+                Err(e) => tracing::info!("HDMI-CEC not available: {e}"),
+            }
+        }
+        tracing::info!(
+            gamepad_ms = (t1 - t0).as_millis() as u64,
+            cec_ms = t1.elapsed().as_millis() as u64,
+            "input devices started"
+        );
     }
 
     fn set_text_input(&mut self, on: bool) {

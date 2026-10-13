@@ -257,6 +257,10 @@ pub trait Platform {
     /// C callbacks; it only queues an event.
     fn waker(&self) -> std::sync::Arc<dyn Fn() + Send + Sync>;
 
+    /// Starts gamepad and HDMI-CEC support. Called once, after the first
+    /// frame, so their setup never delays it (spec 2: first frame < 500 ms).
+    fn start_input_devices(&mut self);
+
     /// Turns typed-character events ([`PlatformEvent::Text`]) on or off,
     /// for text fields.
     fn set_text_input(&mut self, on: bool);
