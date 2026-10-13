@@ -14,7 +14,7 @@ and verified versions.
 | Milestone | State |
 |---|---|
 | **M1** Skeleton: SDL3 KMSDRM, GL context, vsync loop, dirty redraw, perf HUD, systemd unit, dev mode | **Done.** Ran on the HTPC: boots to the test screen on a text console, input works, idle CPU near zero. Pacing numbers not yet recorded |
-| **M2** Renderer trait + Skia: rects, rounded rects, gradients, text (incl. CJK), images, animation clock | **Implemented.** Verified in software (Mesa llvmpipe under Xvfb, up to 3840×2160). **Benchmark numbers on real hardware still needed** for the Skia go/no-go; see [`docs/M2-HARDWARE-CHECKLIST.md`](docs/M2-HARDWARE-CHECKLIST.md) |
+| **M2** Renderer trait + Skia: rects, rounded rects, gradients, text (incl. CJK), images, animation clock | **Done.** On the HTPC (Intel HD 530, 4K): steady 60 fps, 0 missed vsyncs; Skia kept. The spec's p99 budgets are not met on this GPU at native 4K (GPU ~8 ms, CPU ~3.3 ms p50); see `docs/DECISIONS.md` |
 | M3 to M10 | Not started |
 
 The app currently shows the M2 render benchmark: a home-screen-like layout

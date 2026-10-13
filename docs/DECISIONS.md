@@ -5,12 +5,13 @@
 | # | Question | Status |
 |---|---|---|
 | 1 | Can SDL3 KMSDRM do refresh-rate matching, or do we need direct DRM/GBM/EGL from the start? | **Open.** M1 lists modes via `--print-diagnostics`. Run it on the reference hardware and check that every TV mode (23.976/24/25/50/59.94/60) appears with exact numerator/denominator. Test actual switching in M8. |
-| 2 | Skia vs a custom GL renderer | **Pending hardware numbers.** Skia backend implemented (D12). Go if `--bench-pacing` at 4K passes on the reference hardware (CPU p99 < 4 ms, GPU p99 < 6 ms, 0 missed vsyncs); otherwise profile, then consider the custom GL backend behind the same trait. Record the numbers below. |
+| 2 | Skia vs a custom GL renderer | **Decided: Skia.** On the HTPC (Intel HD 530, 4K) the scene holds 60 fps with 0 missed vsyncs; recording takes ~1.1 ms. The remaining cost is driver submission (~2 ms) and 4K fill (~8 ms GPU), which a custom renderer would not remove. The spec's p99 budgets (CPU < 4 ms, GPU < 6 ms) are not met on this 2015 GT2 iGPU at native 4K; recorded as a hardware limit, revisit if M3 overlays need the headroom. See "M2 benchmark results". |
 | 3 | redb vs SQLite | Open (M5). |
 | 4 | HDR on DRM/KMS | Open (M9). |
 | 5 | Minimum Jellyfin server version | Open (M5). |
 | 6 | Retained tree vs immediate mode | **Leaning immediate-style** (D15): the scene is rebuilt on each dirty frame, with everything expensive cached by the renderer. Revisit with the M6 10k-item scroll benchmark. |
 | 7 | NVIDIA | Open. M1 code is vendor-neutral, but only Mesa has been exercised. |
+| 8 | Video decode on the reference hardware | **Constraint found.** The HTPC's Intel HD 530 (Skylake) decodes HEVC 8-bit and H.264 in hardware, but not HEVC 10-bit, VP9 or AV1 (intel/media-driver README codec table, SKL column, checked 2026-10-13). M3's exit test (4K HEVC 10-bit) cannot use hardware decode here. Options: server transcoding for unsupported codecs via an accurate device profile (M5), newer hardware, or measured CPU decode. Needs a decision before M3. |
 
 ## Decisions made in M1
 
@@ -155,7 +156,8 @@ still checks the scene's frames.
 | HTPC, Intel HD 530 (SKL GT2), first M2 build | 3840×2160 @ 60 | 10.7 / 14.0 | 16.1 / 17.4 | 1465 of 2135 (locked at 30 fps) | **Fail** |
 | HD 530, fill-rate fixes (`7fdb778`) | 3840×2160 @ 60 | 6.6 / 10.8 (record 4.7, submit 1.9) | 10.9 / 11.2 | 0 (steady 60 fps) | Fail (budgets) |
 | HD 530, same, `ui_render_scale = 0.75` | 3840×2160 @ 60 | 6.5 / 7.4 (record 4.7, submit 1.8) | 6.3 / 7.1 | 0 | Fail (budgets, marginal) |
-| HD 530, text snapping + baked corners + no clear | 3840×2160 @ 60 | _to record_ | _to record_ | _to record_ | _pending_ |
+| HD 530, text snapping + baked corners + no clear (`eff4fcb`) | 3840×2160 @ 60 | 3.3 / 5.5 (record 1.1, submit 2.2) | 8.0 / 10.6 | 0 (steady 60 fps) | Smooth; budgets not met |
+| HD 530, same, `ui_render_scale = 0.75` | 3840×2160 @ 60 | 4.7 / 6.6 (record 1.8, submit 2.9) | 6.1 / 11.3 | 0 | No better than full resolution |
 
 First hardware run analysis: GPU-bound on fill rate. The scene blended
 roughly 31M pixels per 4K frame (backdrop, two near-full-screen scrim
@@ -168,6 +170,12 @@ rendering at 4K the frame time dropped about 20%. The CPU number is now
 split into `record` (building draw commands) and `submit` (Skia flush and
 GL submission); a high `submit` while GPU-bound is the driver making the CPU
 wait, not CPU work.
+
+Third hardware run (after text snapping, baked corners, no redundant
+clear): CPU 3.3 ms p50 with recording down to 1.1 ms; GPU 8.0 ms p50.
+`ui_render_scale = 0.75` did not help on this machine. Intel iGPUs lower
+their clock under lighter load, and the offscreen pass plus the 4K upscale
+blit cost more than they save. Full resolution stays the default.
 
 Second hardware run: steady 60 fps at full 4K, but GPU 10.9 ms and
 recording 4.7 ms. A perf profile (same scene, this container) showed text
