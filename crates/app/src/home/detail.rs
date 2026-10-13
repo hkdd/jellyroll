@@ -208,6 +208,11 @@ impl DetailView {
         let active = self.rows.active && self.button_focus.is_none();
         self.rows.set_rows(rows, &self.vp, now);
         self.rows.active = active;
+        // Rows arrive one at a time; until the user is in them, the first
+        // row is where Down goes (not wherever the first answer was).
+        if !active {
+            self.rows.reset_focus(&self.vp, now);
+        }
         self.rebuild_graph();
     }
 
@@ -607,5 +612,8 @@ mod tests {
         v.on_fetched(eid, &Fetched::Cards(vec![card("e1", Kind::Episode)]), t, &mut ctx);
         let keys: Vec<&str> = v.rows.rows.iter().map(|r| r.key.as_str()).collect();
         assert_eq!(keys, ["seasons", "episodes", "cast"]);
+        // Cast arrived first; focus (where Down from the buttons goes) is
+        // still the first row, Seasons.
+        assert_eq!(v.rows.focus, (0, 0));
     }
 }
