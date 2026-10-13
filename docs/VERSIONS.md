@@ -63,9 +63,9 @@ adds ICU and HarfBuzz we don't use.
 
 | Library | Checked | Notes |
 |---|---|---|
-| libmpv | client API 2.2 (mpv 0.37, Ubuntu 24.04 sandbox) | The binding requires client API major 2 (unit test). The HTPC's Fedora 44 mpv is newer; record its version from `--print-diagnostics` (`mpv.client_api`). |
+| libmpv | client API 2.2 (mpv 0.37, Ubuntu 24.04 sandbox) | The binding requires client API major 2 (unit test). HTPC (Fedora 44): client API **2.5**, confirmed via `--print-diagnostics`. |
 | libva / libva-drm | 1.20 headers | VA profile enum values used by the probe are from va.h and stable across libva 2.x. |
-| Intel media driver (HTPC) | iHD 26.1.5 (RPM Fusion `intel-media-driver`) | Fedora's own `libva-intel-media-driver` 26.3.5 lists no H.264/HEVC. |
+| Intel media driver (HTPC) | iHD 26.1.5 (RPM Fusion `intel-media-driver`); the app's VA-API probe on the HTPC reports decode for MPEG-2, VC-1, H.264, VP8, HEVC 8-bit and none for HEVC 10-bit, VP9, AV1 (matches `vainfo`) | Fedora's own `libva-intel-media-driver` 26.3.5 lists no H.264/HEVC. |
 
 ## Fonts
 
