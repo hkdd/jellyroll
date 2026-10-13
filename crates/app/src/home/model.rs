@@ -37,9 +37,42 @@ pub struct Art {
     pub blurhash: Option<String>,
 }
 
+/// What a card is, so Select knows what to open.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Kind {
+    Movie,
+    Series,
+    Season,
+    Episode,
+    /// A library (My Media tile): opens its grid.
+    Library,
+    /// A cast/crew member.
+    Person,
+    #[default]
+    Other,
+}
+
+impl Kind {
+    pub fn from_item(item: &BaseItemDto) -> Kind {
+        match item.r#type {
+            Some(BaseItemKind::Movie) => Kind::Movie,
+            Some(BaseItemKind::Series) => Kind::Series,
+            Some(BaseItemKind::Season) => Kind::Season,
+            Some(BaseItemKind::Episode) => Kind::Episode,
+            Some(BaseItemKind::CollectionFolder | BaseItemKind::UserView) => Kind::Library,
+            _ => Kind::Other,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Card {
     pub id: String,
+    #[serde(default)]
+    pub kind: Kind,
+    /// Library type, for library tiles (decides the grid's item types).
+    #[serde(default)]
+    pub collection: Option<CollectionType>,
     pub title: String,
     /// Second line under the card: episode, year...
     pub subtitle: String,
@@ -182,6 +215,8 @@ pub fn card(item: &BaseItemDto, shape: Shape) -> Option<Card> {
         .filter(|p| *p > 0.0);
     Some(Card {
         id,
+        kind: Kind::from_item(item),
+        collection: item.collection_type,
         title,
         subtitle,
         meta: meta.join(" · "),
@@ -224,6 +259,184 @@ pub fn has_latest_row(c: Option<CollectionType>) -> bool {
                 | CollectionType::Folders
         )
     )
+}
+
+// ---- detail pages -------------------------------------------------------------
+
+/// A codec/format badge on a detail page. `decode` is the video codec the
+/// GPU must decode, so the UI can flag content this machine can't play in
+/// hardware (D19).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Badge {
+    pub text: String,
+    pub decode: Option<jellyroll_video::va::Codec>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Detail {
+    pub card: Card,
+    pub tagline: String,
+    pub genres: String,
+    pub badges: Vec<Badge>,
+    pub played: bool,
+    pub favorite: bool,
+    pub resume_ticks: i64,
+    pub people: Vec<Card>,
+    pub series_id: Option<String>,
+    pub season_id: Option<String>,
+    /// For playback: the item's default media source.
+    pub media_source_id: String,
+}
+
+fn video_codec(codec: &str, bit_depth: i32, profile: &str) -> Option<jellyroll_video::va::Codec> {
+    use jellyroll_video::va::Codec as C;
+    let ten = bit_depth >= 10 || profile.contains("10");
+    Some(match codec.to_ascii_lowercase().as_str() {
+        "h264" | "avc" => C::H264,
+        "hevc" | "h265" if ten => C::Hevc10,
+        "hevc" | "h265" => C::Hevc8,
+        "vp9" if ten => C::Vp9_10,
+        "vp9" => C::Vp9_8,
+        "av1" => C::Av1,
+        "mpeg2video" | "mpeg2" => C::Mpeg2,
+        "vc1" => C::Vc1,
+        "vp8" => C::Vp8,
+        _ => return None,
+    })
+}
+
+/// Badges for the default video and audio streams and subtitles.
+pub fn badges(item: &BaseItemDto) -> Vec<Badge> {
+    use jellyfin_api::dto::{AudioSpatialFormat, MediaStreamType, VideoRangeType as V};
+    let streams = item.media_streams.as_deref().unwrap_or_default();
+    let mut out = Vec::new();
+    let pick = |t: MediaStreamType| {
+        let mut it = streams.iter().filter(move |s| s.r#type == Some(t));
+        let all: Vec<_> = it.by_ref().collect();
+        all.iter().find(|s| s.is_default == Some(true)).or(all.first()).copied()
+    };
+    if let Some(v) = pick(MediaStreamType::Video) {
+        let (w, h) = (v.width.unwrap_or(0), v.height.unwrap_or(0));
+        let res = if w >= 3800 || h >= 2100 {
+            "4K"
+        } else if w >= 1900 || h >= 1050 {
+            "1080p"
+        } else if w >= 1270 || h >= 700 {
+            "720p"
+        } else if w > 0 {
+            "SD"
+        } else {
+            ""
+        };
+        if !res.is_empty() {
+            out.push(Badge { text: res.into(), decode: None });
+        }
+        let codec = v.codec.as_deref().unwrap_or("");
+        let profile = v.profile.as_deref().unwrap_or("");
+        let decode = video_codec(codec, v.bit_depth.unwrap_or(8), profile);
+        if let Some(c) = decode {
+            out.push(Badge { text: c.name().into(), decode });
+        }
+        let range = match v.video_range_type {
+            Some(V::HDR10) => "HDR10",
+            Some(V::HDR10Plus) => "HDR10+",
+            Some(V::HLG) => "HLG",
+            Some(
+                V::DOVI
+                | V::DOVIWithHDR10
+                | V::DOVIWithHLG
+                | V::DOVIWithSDR
+                | V::DOVIWithEL
+                | V::DOVIWithHDR10Plus
+                | V::DOVIWithELHDR10Plus,
+            ) => "Dolby Vision",
+            _ => "",
+        };
+        if !range.is_empty() {
+            out.push(Badge { text: range.into(), decode: None });
+        }
+    }
+    if let Some(a) = pick(MediaStreamType::Audio) {
+        let codec = match a.codec.as_deref().unwrap_or("").to_ascii_lowercase().as_str() {
+            "truehd" => "TrueHD",
+            "eac3" => "Dolby Digital+",
+            "ac3" => "Dolby Digital",
+            "dts" if a.profile.as_deref().is_some_and(|p| p.contains("MA")) => "DTS-HD MA",
+            "dts" => "DTS",
+            "aac" => "AAC",
+            "flac" => "FLAC",
+            "opus" => "Opus",
+            "mp3" => "MP3",
+            "" => "",
+            _ => "Audio",
+        };
+        let ch = match a.channels.unwrap_or(0) {
+            8 => "7.1",
+            6 => "5.1",
+            2 => "Stereo",
+            1 => "Mono",
+            _ => "",
+        };
+        let text =
+            [codec, ch].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ");
+        if !text.is_empty() {
+            out.push(Badge { text, decode: None });
+        }
+        match a.audio_spatial_format {
+            Some(AudioSpatialFormat::DolbyAtmos) => {
+                out.push(Badge { text: "Atmos".into(), decode: None })
+            }
+            Some(AudioSpatialFormat::DTSX) => {
+                out.push(Badge { text: "DTS:X".into(), decode: None })
+            }
+            _ => {}
+        }
+    }
+    if streams.iter().any(|s| s.r#type == Some(MediaStreamType::Subtitle)) {
+        out.push(Badge { text: "Subtitles".into(), decode: None });
+    }
+    out
+}
+
+fn person(p: &jellyfin_api::dto::BaseItemPerson) -> Option<Card> {
+    let id = p.id.clone()?;
+    Some(Card {
+        image: p.primary_image_tag.clone().map(|tag| Art {
+            item_id: id.clone(),
+            kind: ImageType::Primary,
+            tag,
+            blurhash: None,
+        }),
+        id,
+        kind: Kind::Person,
+        collection: None,
+        title: p.name.clone().unwrap_or_default(),
+        subtitle: p.role.clone().unwrap_or_default(),
+        meta: String::new(),
+        overview: String::new(),
+        backdrop: None,
+        progress: None,
+    })
+}
+
+pub fn detail(item: &BaseItemDto) -> Option<Detail> {
+    let card = card(item, Shape::Poster)?;
+    let ud = item.user_data.as_ref();
+    let mut genres = item.genres.clone().unwrap_or_default();
+    genres.truncate(4);
+    Some(Detail {
+        tagline: item.taglines.as_ref().and_then(|t| t.first().cloned()).unwrap_or_default(),
+        genres: genres.join(" · "),
+        badges: badges(item),
+        played: ud.and_then(|u| u.played).unwrap_or(false),
+        favorite: ud.and_then(|u| u.is_favorite).unwrap_or(false),
+        resume_ticks: ud.and_then(|u| u.playback_position_ticks).unwrap_or(0),
+        people: item.people.iter().flatten().filter_map(person).take(24).collect(),
+        series_id: item.series_id.clone(),
+        season_id: item.season_id.clone(),
+        media_source_id: card.id.clone(),
+        card,
+    })
 }
 
 #[cfg(test)]
@@ -290,6 +503,30 @@ mod tests {
         assert!(!has_latest_row(Some(CollectionType::Playlists)));
         assert!(has_latest_row(Some(CollectionType::Tvshows)));
         assert!(has_latest_row(None));
+    }
+
+    #[test]
+    fn detail_badges_flag_the_decoder() {
+        let m = parse(
+            r#"{"Id":"m","Name":"X","Type":"Movie","Genres":["Drama","Sci-Fi"],
+            "UserData":{"PlaybackPositionTicks":600000000,"IsFavorite":true,"Played":false},
+            "People":[{"Id":"p1","Name":"Amy Adams","Role":"Louise","PrimaryImageTag":"pt"},{"Name":"no id"}],
+            "MediaStreams":[
+              {"Type":"Video","Codec":"hevc","BitDepth":10,"Width":3840,"Height":2160,"VideoRangeType":"HDR10"},
+              {"Type":"Audio","Codec":"truehd","Channels":8,"IsDefault":true,"AudioSpatialFormat":"DolbyAtmos"},
+              {"Type":"Audio","Codec":"aac","Channels":2},
+              {"Type":"Subtitle","Codec":"srt"}]}"#,
+        );
+        let d = detail(&m).unwrap();
+        let texts: Vec<&str> = d.badges.iter().map(|b| b.text.as_str()).collect();
+        assert_eq!(texts, ["4K", "HEVC 10-bit", "HDR10", "TrueHD 7.1", "Atmos", "Subtitles"]);
+        assert_eq!(d.badges[1].decode, Some(jellyroll_video::va::Codec::Hevc10));
+        assert_eq!(d.genres, "Drama · Sci-Fi");
+        assert!(d.favorite && !d.played);
+        assert_eq!(d.resume_ticks, 600_000_000);
+        assert_eq!(d.people.len(), 1, "people without an id are skipped");
+        assert_eq!(d.people[0].subtitle, "Louise");
+        assert_eq!(d.card.kind, Kind::Movie);
     }
 
     #[test]

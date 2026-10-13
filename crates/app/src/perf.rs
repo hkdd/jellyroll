@@ -81,6 +81,19 @@ pub struct FrameStats {
     pub allocs_last_frame: u64,
     /// Frames (after warm-up) that allocated at all.
     pub allocating_frames: u64,
+    /// Frames that loaded something new (requests, uploads, new text);
+    /// their allocations are not counted above (D40).
+    pub loading_frames: u64,
+    /// `cpu_ms` split by frame kind (benchmarks report both).
+    pub steady_cpu_ms: Ring<HISTORY>,
+    pub loading_cpu_ms: Ring<HISTORY>,
+    /// Per frame that uploaded images: time spent uploading.
+    pub upload_ms: Ring<HISTORY>,
+    /// Per frame that shaped new text: how many strings.
+    pub new_text: Ring<HISTORY>,
+    /// Measured time of one texture upload, small and large images, ns
+    /// (set when a benchmark ends).
+    pub upload_ns: [f64; 2],
 }
 
 impl FrameStats {

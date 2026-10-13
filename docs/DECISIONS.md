@@ -515,6 +515,150 @@ URL.
   Quick Connect, home rows, a poster and a placeholder decoded, then a
   restart that shows the cached home first with no sign-in.
 
+**D39: M6 browsing architecture.**
+- A page stack over the home screen: Library, Detail, Search and
+  Settings. Back pops a page; Home clears the stack; `/` (or the remote's
+  Search button) opens Search from anywhere. The home screen gains a nav
+  bar: Home, each library, Search, Settings.
+- Pages never block on the network. They ask through a `Ctx` that
+  collects commands; a fetch worker on the network thread (4 at a time)
+  answers each with `Event::Fetched { id, .. }`, and a page ignores answers
+  for requests it no longer cares about.
+- Library grid: 100-item pages, requested around the visible rows only,
+  so a 10,000-item library costs the same as a small one. Only rows near
+  the viewport are drawn. Sort (name, date added, year, rating), unwatched,
+  favorites and genre filters run on the server; the A-Z column (name sort)
+  asks the server how many items sort before a letter and jumps there.
+- Detail pages for movies, series, seasons and episodes: Play or Resume /
+  From the start, watched and favorite toggles, seasons, episodes, cast,
+  similar items. Video and audio badges come from the media streams;
+  a codec this GPU can't decode turns its badge red and says so (D19:
+  never a silent fallback).
+- Play from the detail page streams the file as-is (`static=true`, the
+  server never transcodes) through mpv with the token as an HTTP header,
+  from the resume point. Progress reporting, next episode and track
+  choice are M7.
+- Search: 300 ms debounce, separate rows for movies, shows and episodes.
+  A keyboard types directly; Enter jumps to the results. The on-screen
+  keyboard is there for a remote or gamepad.
+- Settings: account (sign out, change server) and "About this device"
+  (versions, GPU, display, hardware decode support).
+- Password sign-in (spec 8 fallback): from the Quick Connect screen,
+  username and password with the server's public users to pick from. The
+  password is sent once and never stored.
+- User-visible strings live in `home/strings.rs` (spec 10.4); a test
+  checks that every character exists in the bundled fonts.
+
+**D40: What a steady-state frame is.** M6 added two things to the
+allocation check (D5):
+- **The counter is per thread.** It used to count every thread, so image
+  decoding and JSON parsing on the network thread showed up as render
+  frame allocations (tens of thousands per frame while scrolling). The
+  render thread is the one the check is about.
+- **Loading frames are reported, not failed.** A frame that starts
+  loading something (sends requests, rebuilds the image wants list),
+  uploads a texture or shapes a string for the first time must allocate.
+  Those frames are counted as `loading_frames` and their allocations are
+  excluded. Every other frame, including scrolling over content that is
+  already there, must allocate nothing.
+- Image wants are rebuilt at most every 100 ms while images keep arriving
+  (immediately on input), instead of after every upload.
+
+**D41: `--bench-scroll SECS` (spec 13, M6 exit criterion).** Starts the
+mock server in-process with 10,000 movies and a throwaway signed-in state
+(nothing of the user's is touched, no network needed), opens Movies from
+the nav bar like a user, waits for the grid, then presses Down every 50 ms
+(faster than key repeat) for SECS while pages and artwork load. It prints
+the same numbers as `--bench-pacing` plus presses and loading frames, and
+fails on the spec 2 budgets (CPU p99 < 4 ms, GPU p99 < 6 ms, no missed
+vsyncs, no allocating steady-state frames). Under Xvfb with llvmpipe
+(software GL) it reports 0 allocating frames; CPU/GPU numbers there are
+meaningless, so the hardware checklist runs it on the HTPC.
+
+**D42: Artwork textures are outside Skia's cache budget.** The first
+`--bench-scroll` runs on the HTPC (HD 530, 4K) had 0 missed vsyncs and 0
+allocating frames, but CPU p99 8-11 ms and GPU p99 7.4-8.4 ms.
+- The library grid fetched the focused item's backdrop on every step and
+  never drew it (a 1920x1080 upload per press at 4K). Removed.
+- Artwork was created as *budgeted* Skia textures. The app keeps up to
+  512 MB of artwork (its own LRU, `[cache] textures_mb`); Skia's budget is
+  256 MB, so Skia was always over it, purging and rebuilding its own
+  scratch resources and slowing uploads (3 ms p50 per uploading frame,
+  steady frames at 5.5 ms p50). Artwork is now unbudgeted; the app's LRU
+  is its only cap, and Skia's budget covers its own resources.
+- That changed nothing on the HTPC. The real cause: image uploads. The
+  per-frame upload budget (2 ms) was checked only after each upload, so
+  frames overran it (3 ms p50 per uploading frame), and on top of ~2 ms
+  of other work at 4K that is over the 4 ms CPU budget. Uploads now stop
+  *before* one is expected to overrun (measured ns/byte, moving average),
+  and the budget is 1.5 ms. The benchmark also mislabeled uploading
+  frames as steady (Skia copies pixels in C++, which the Rust allocation
+  counter doesn't see); any frame that uploads or shapes new text is now
+  a loading frame.
+- Next HTPC run: steady frames 1.5 ms p50 (fine); nearly every scrolling
+  frame uploads. Two fixes: the upload-time estimate is kept separately
+  for small placeholders (mostly fixed cost) and artwork (one per-byte
+  rate made every poster look like ~2 ms, so only one upload fit per
+  frame); and pixels are premultiplied on the decoding thread, so Skia
+  has nothing to convert on the render thread (rounded corners made
+  posters non-opaque, uploaded as unpremultiplied). The benchmark prints
+  per-upload timings (opaque check, copy, GPU upload).
+- The GPU p99 is the HD 530 at native 4K, as measured in M2 (see
+  "M2 benchmark results", open question 2): above the 6 ms budget, still
+  60 fps with no missed vsyncs.
+
+**D43: Reused textures for artwork.** `--bench-upload` on the HTPC (HD
+530, Mesa iris), mean ms per image:
+
+| | new texture each (old) | write into an existing one | new empty texture |
+|---|---|---|---|
+| poster 320x480 | 1.03 | 0.72 | 0.26 |
+| placeholder 32x48 | 0.07 | 0.07 | 0.02 |
+| backdrop 1920x1080 | 6.1 | 1.1 | 2.6 |
+
+- Artwork of 64 KB or more is drawn from a pool of GPU textures keyed by
+  (width, height, opaque): a released image's texture is kept (up to 48
+  per size) and the next image of that size is written into it. This
+  mostly matters for backdrops (6.1 to ~1.1 ms: a visible hitch whenever
+  focus changed on the home and detail pages) and trims posters ~30%.
+- Whether an image is opaque now comes from the decoding thread
+  (premultiplying already visits every pixel); scanning on the render
+  thread cost 1.8 ms per backdrop.
+- Next: re-run `--bench-scroll`; if loading frames still exceed the CPU
+  budget, choose between rendering the UI at 1080p with artwork sized to
+  match, and documenting the overrun at native 4K.
+
+**D44: UI resolution setting; native by default.** With
+textures reused (D43), an artwork upload during scrolling still cost
+~2 ms on the HD 530 at native 4K (the driver copies synchronously while
+the GPU is busy), so frames that load new artwork exceed the 4 ms CPU
+budget, and GPU p99 sits at the 6 ms line (5.98 and 6.45 ms in two runs).
+Decided:
+- `[display] ui_resolution = "auto" | "native" | "1080p"` replaces
+  `ui_render_scale`. `auto` (default) draws the UI at 1080p and upscales
+  on outputs taller than 1080 lines, and natively otherwise. Video is
+  unaffected (mpv renders at the output's resolution).
+- Artwork is requested at the size the UI is drawn at, so at 1080p
+  uploads are a quarter of the 4K size.
+- Settings has a Display toggle (shown only above 1080p): "1080p,
+  upscaled (smoother)" / "full resolution (sharpest)". It applies at once
+  (surfaces rebuilt, textures re-requested at the new size) and is saved
+  in `~/.local/share/jellyroll/ui.json`, which wins over config.toml.
+- Results on the HTPC (HD 530, 3840x2160, `--bench-scroll 20`):
+
+  | UI resolution | CPU p50 / p99 | loading frames p99 | steady frames p99 | GPU p50 / p99 | artwork upload | missed vsyncs |
+  |---|---|---|---|---|---|---|
+  | 1080p upscaled | 2.7 / 4.8 ms | 4.8 ms | 2.5 ms | 2.9 / 3.4 ms | 0.47 ms | 0 |
+  | native 4K | 4.5 / 6.9 ms | 6.9 ms | 3.4 ms | 4.8 / 6.7 ms | 1.84 ms | 0 |
+
+  At 1080p the GPU budget passes with room and CPU is just over on frames
+  that load artwork during the (faster than key repeat) scripted scroll.
+- **Compared both on the TV: native looks better.** Native is the default (`auto` and `1080p`
+  stay available in Settings and config). Accepted deviation from spec 2
+  on this GPU at native 4K: CPU p99 ~7 ms on frames that load new artwork
+  and GPU p99 ~6.5 ms, with steady 60 fps, 0 missed vsyncs and 0
+  allocating frames; frames with nothing new to load are within budget.
+
 ## Dependency approvals
 
 | Crate | Status |

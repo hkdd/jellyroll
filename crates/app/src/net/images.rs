@@ -18,7 +18,9 @@ pub enum Finish {
 pub struct Decoded {
     pub w: u32,
     pub h: u32,
+    /// Premultiplied.
     pub rgba: Vec<u8>,
+    pub opaque: bool,
 }
 
 /// Decodes, center-crops to the target aspect, resizes to exactly `w`×`h`
@@ -40,15 +42,17 @@ pub fn decode(bytes: &[u8], w: u32, h: u32, finish: Finish) -> Result<Decoded, S
         .fit_into_destination(Some((0.5, 0.5)));
     fr::Resizer::new().resize(&src, &mut dst, &opts).map_err(|e| e.to_string())?;
     let mut rgba = dst.into_vec();
-    apply(&mut rgba, w, h, finish);
-    Ok(Decoded { w, h, rgba })
+    let opaque = apply(&mut rgba, w, h, finish);
+    Ok(Decoded { w, h, rgba, opaque })
 }
 
-fn apply(rgba: &mut [u8], w: u32, h: u32, finish: Finish) {
+/// Applies the finish and premultiplies; returns whether it's opaque.
+fn apply(rgba: &mut [u8], w: u32, h: u32, finish: Finish) -> bool {
     match finish {
         Finish::Card { radius } => posters::round_corners(rgba, w, h, radius),
         Finish::Backdrop { bg } => posters::apply_scrim(rgba, w, h, bg, 0.92, 0.95),
     }
+    posters::premultiply(rgba)
 }
 
 // ---- BlurHash ----------------------------------------------------------------
@@ -130,7 +134,7 @@ pub fn blurhash(hash: &str, w: u32, h: u32) -> Result<Decoded, String> {
             rgba[o + 3] = 255;
         }
     }
-    Ok(Decoded { w, h, rgba })
+    Ok(Decoded { w, h, rgba, opaque: true })
 }
 
 /// BlurHash placeholder size for a card of aspect `w`:`h`: the long side is

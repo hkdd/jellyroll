@@ -183,13 +183,14 @@ impl Scene {
                 let (w, h) = ((960.0 * scale) as u32, (540.0 * scale) as u32);
                 posters::backdrop(i, w, h, &mut self.pixels);
                 posters::apply_scrim(&mut self.pixels, w, h, BG_RGB, 0.92, 0.95);
-                self.backdrops[i] = r.create_image(w, h, &self.pixels);
+                self.backdrops[i] = r.create_image(w, h, &self.pixels, true);
             } else {
                 let c = i - BACKDROPS;
                 let (w, h) = ((CARD_W * scale).round() as u32, (CARD_H * scale).round() as u32);
                 posters::poster(c, w, h, &mut self.pixels);
                 posters::round_corners(&mut self.pixels, w, h, CARD_RADIUS * scale);
-                self.posters[c] = r.create_image(w, h, &self.pixels);
+                let opaque = posters::premultiply(&mut self.pixels);
+                self.posters[c] = r.create_image(w, h, &self.pixels, opaque);
             }
             self.pending += 1;
             any = true;

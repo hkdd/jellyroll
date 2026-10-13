@@ -14,7 +14,9 @@ use tokio::sync::{Notify, mpsc, watch};
 use tokio::task::JoinSet;
 
 use super::store::{self, ImageCache, MetaCache, State};
-use super::{Cmd, Event, FoundServer, ImageJob, ImageSource, NetConfig, Status, images};
+use super::{
+    Cmd, Event, FoundServer, ImageJob, ImageSource, NetConfig, PublicUser, Status, fetch, images,
+};
 use crate::home::model::{self, HomeData, Row, Shape};
 
 /// How often the home screen is refreshed while idle.
@@ -31,7 +33,7 @@ pub struct Out {
 }
 
 impl Out {
-    async fn send(&self, e: Event) {
+    pub(super) async fn send(&self, e: Event) {
         if self.tx.send(e).await.is_ok() {
             (self.wake)();
         }
@@ -54,6 +56,10 @@ enum Ctl {
     Connect(String),
     Search,
     ChangeServer,
+    Refresh,
+    SignOut,
+    ListUsers,
+    Password { username: String, password: String },
 }
 
 /// The server screen: wait until the user types an address and connects,
@@ -104,7 +110,9 @@ async fn choose_server(
 pub async fn run(cfg: NetConfig, out: Out, mut cmds: mpsc::Receiver<Cmd>) {
     let (ctl_tx, ctl_rx) = mpsc::channel(8);
     let (client_tx, client_rx) = watch::channel::<Option<Client>>(None);
+    let (signed_tx, signed_rx) = watch::channel::<fetch::Session>(None);
     let queue = Arc::new(ImageQueue::default());
+    let fetches = Arc::new(fetch::FetchQueue::default());
 
     let cap = cfg.image_cache_bytes;
     let images_dir = cfg.cache_dir.clone();
@@ -116,7 +124,8 @@ pub async fn run(cfg: NetConfig, out: Out, mut cmds: mpsc::Receiver<Cmd>) {
     .flatten();
 
     let images = tokio::spawn(image_worker(queue.clone(), client_rx, disk, out.clone()));
-    let session = tokio::spawn(session(cfg, out, ctl_rx, client_tx));
+    let fetcher = tokio::spawn(fetch::worker(fetches.clone(), signed_rx, out.clone()));
+    let session = tokio::spawn(session(cfg, out, ctl_rx, client_tx, signed_tx));
     while let Some(c) = cmds.recv().await {
         match c {
             Cmd::Retry => {
@@ -132,9 +141,23 @@ pub async fn run(cfg: NetConfig, out: Out, mut cmds: mpsc::Receiver<Cmd>) {
                 let _ = ctl_tx.try_send(Ctl::ChangeServer);
             }
             Cmd::WantImages(jobs) => queue.replace(jobs),
+            Cmd::Fetch { id, req } => fetches.push(id, req),
+            Cmd::Refresh => {
+                let _ = ctl_tx.try_send(Ctl::Refresh);
+            }
+            Cmd::SignOut => {
+                let _ = ctl_tx.try_send(Ctl::SignOut);
+            }
+            Cmd::ListUsers => {
+                let _ = ctl_tx.try_send(Ctl::ListUsers);
+            }
+            Cmd::PasswordSignIn { username, password } => {
+                let _ = ctl_tx.try_send(Ctl::Password { username, password });
+            }
         }
     }
     // The UI is gone.
+    fetcher.abort();
     images.abort();
     session.abort();
 }
@@ -182,6 +205,7 @@ async fn session(
     out: Out,
     mut ctl: mpsc::Receiver<Ctl>,
     client_tx: watch::Sender<Option<Client>>,
+    signed_tx: watch::Sender<fetch::Session>,
 ) {
     let state_path = cfg.data_dir.as_ref().map(|d| d.join("state.json"));
     let sp = state_path.clone();
@@ -334,7 +358,7 @@ async fn session(
                 let token = auth.access_token.clone().unwrap_or_default();
                 let user = auth.user.clone().unwrap_or_default();
                 let (id, name) = (user.id.unwrap_or_default(), user.name.unwrap_or_default());
-                tracing::info!(user = name, "signed in with Quick Connect");
+                tracing::info!(user = name, "signed in");
                 state.remember_user(&server_id, &id, &name, &token);
                 save_state(&state, &state_path).await;
                 client.set_token(Some(token));
@@ -342,6 +366,7 @@ async fn session(
             }
         };
         client_tx.send_replace(Some(client.clone()));
+        signed_tx.send_replace(Some((client.clone(), user_id.clone())));
 
         // ---- 5. home, refreshed until something breaks -------------------
         loop {
@@ -365,13 +390,34 @@ async fn session(
                     }
                     out.send(Event::Home { data, fresh: true }).await;
                     showing_home = true;
-                    wait_ctl(&mut ctl, Some(REFRESH_EVERY)).await;
+                    // Refresh periodically or on request (Ctl::Refresh);
+                    // leave for sign-out or a server change.
+                    match wait_ctl(&mut ctl, Some(REFRESH_EVERY)).await {
+                        Some(Ctl::ChangeServer) => {
+                            signed_tx.send_replace(None);
+                            ask = Some(None);
+                            continue 'outer;
+                        }
+                        Some(Ctl::SignOut) => {
+                            if let Err(e) = client.send_no_content(&ep::logout()).await {
+                                tracing::warn!("logout: {e}");
+                            }
+                            tracing::info!(user = user_name, "signed out");
+                            state.forget_token(&server_id, &user_id);
+                            save_state(&state, &state_path).await;
+                            client_tx.send_replace(None);
+                            signed_tx.send_replace(None);
+                            continue 'outer;
+                        }
+                        _ => {}
+                    }
                 }
                 Err(Error::Status(401)) => {
                     tracing::warn!("access token rejected; signing in again");
                     state.forget_token(&server_id, &user_id);
                     save_state(&state, &state_path).await;
                     client_tx.send_replace(None);
+                    signed_tx.send_replace(None);
                     continue 'outer;
                 }
                 Err(e) => {
@@ -455,8 +501,41 @@ async fn quick_connect(
         })
         .await;
         loop {
-            if let Some(Ctl::Retry) = wait!(Some(QUICK_CONNECT_POLL)) {
-                break; // new code
+            match wait!(Some(QUICK_CONNECT_POLL)) {
+                Some(Ctl::Retry) => break, // new code
+                Some(Ctl::ListUsers) => {
+                    let users = match client.send(&ep::public_users()).await {
+                        Ok(list) => list
+                            .into_iter()
+                            .filter_map(|u| {
+                                Some(PublicUser {
+                                    name: u.name?,
+                                    has_password: u.has_password.unwrap_or(true),
+                                })
+                            })
+                            .collect(),
+                        Err(e) => {
+                            tracing::warn!("public users: {e}");
+                            Vec::new()
+                        }
+                    };
+                    out.send(Event::Users(users)).await;
+                    continue;
+                }
+                Some(Ctl::Password { username, password }) => {
+                    match client.send(&ep::authenticate_by_name(&username, &password)).await {
+                        Ok(a) if a.access_token.as_deref().is_some_and(|t| !t.is_empty()) => {
+                            return QuickConnect::SignedIn(a);
+                        }
+                        Ok(_) | Err(Error::Status(401)) => {
+                            out.send(Event::SignInFailed("Wrong username or password.".into()))
+                                .await;
+                        }
+                        Err(e) => out.send(Event::SignInFailed(e.to_string())).await,
+                    }
+                    continue;
+                }
+                _ => {}
             }
             match client.send(&ep::quick_connect_state(&secret)).await {
                 Ok(s) if s.authenticated == Some(true) => {
@@ -662,7 +741,9 @@ async fn fetch_image(
         },
     };
     match result {
-        Ok(d) => out.send(Event::Image { key, w: d.w, h: d.h, rgba: d.rgba }).await,
+        Ok(d) => {
+            out.send(Event::Image { key, w: d.w, h: d.h, rgba: d.rgba, opaque: d.opaque }).await
+        }
         Err(e) => {
             tracing::debug!(key, "image failed: {e}");
             out.send(Event::ImageFailed { key }).await;

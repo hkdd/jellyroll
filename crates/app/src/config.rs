@@ -66,9 +66,37 @@ pub struct Display {
     pub safe_area: f32,
     /// Double instead of triple buffering on KMSDRM.
     pub double_buffer: bool,
-    /// Render the UI at this fraction of the output resolution and upscale
-    /// (0.5 - 1.0), for weak GPUs (spec 6.4).
-    pub ui_render_scale: f32,
+    /// Resolution the UI is drawn at (spec 6.4). Video always plays at the
+    /// output's full resolution. A choice made in Settings overrides this.
+    pub ui_resolution: UiResolution,
+}
+
+/// UI drawing resolution (D44).
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UiResolution {
+    /// 1080p, upscaled, on outputs taller than 1080 pixels.
+    Auto,
+    /// The output's own resolution: sharpest, the most work per frame.
+    /// The default: chosen after testing on the reference HTPC (D44).
+    #[default]
+    Native,
+    /// Drawn at 1080p and upscaled by the GPU.
+    #[serde(rename = "1080p")]
+    Hd1080,
+}
+
+impl UiResolution {
+    /// The fraction of an output `fb_height` pixels tall the UI is drawn at.
+    pub fn render_scale(self, fb_height: u32) -> f32 {
+        match self {
+            UiResolution::Native => 1.0,
+            UiResolution::Auto | UiResolution::Hd1080 if fb_height > 1080 => {
+                (1080.0 / fb_height as f32).max(0.5)
+            }
+            UiResolution::Auto | UiResolution::Hd1080 => 1.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -106,7 +134,7 @@ impl Default for Display {
         Self {
             safe_area: crate::scene::DEFAULT_SAFE_AREA,
             double_buffer: false,
-            ui_render_scale: 1.0,
+            ui_resolution: UiResolution::Native,
         }
     }
 }
@@ -246,10 +274,6 @@ fn validate(c: &mut Config, out: &mut Vec<String>) {
         c.display.safe_area = Display::default().safe_area;
     }
     clamp(&mut c.display.safe_area, 0.0, 0.1, "display.safe_area", out);
-    if c.display.ui_render_scale.is_nan() {
-        c.display.ui_render_scale = 1.0;
-    }
-    clamp(&mut c.display.ui_render_scale, 0.5, 1.0, "display.ui_render_scale", out);
     clamp(&mut c.cache.images_mb, 64, 1 << 20, "cache.images_mb", out);
     clamp(&mut c.cache.textures_mb, 64, 4096, "cache.textures_mb", out);
     let i = &mut c.input;

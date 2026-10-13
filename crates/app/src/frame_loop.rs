@@ -56,8 +56,22 @@ impl View {
         }
     }
 
+    fn load_work(&self) -> u64 {
+        match self {
+            View::Home(h) => h.load_work(),
+            View::Demo(_) => 0,
+        }
+    }
+
     fn wants_text(&self) -> bool {
         matches!(self, View::Home(h) if h.wants_text())
+    }
+
+    fn next_deadline(&self) -> Option<Instant> {
+        match self {
+            View::Home(h) => h.next_deadline(),
+            View::Demo(_) => None,
+        }
     }
 
     /// Per-iteration update; returns true if a redraw is needed.
@@ -111,6 +125,19 @@ fn make_header(fb: (u32, u32), hz: f32, header: &mut String) {
     let _ = write!(header, "M2 render benchmark · {}×{} @ {:.2} Hz · F3 HUD", fb.0, fb.1, hz);
 }
 
+/// Device facts for the Settings page.
+fn about_device<P: Platform>(p: &P, fb: (u32, u32), hz: f32) -> Vec<(String, String)> {
+    let i = p.info();
+    let (major, minor) = jellyroll_video::client_api_version();
+    vec![
+        ("Jellyroll".into(), env!("CARGO_PKG_VERSION").into()),
+        ("GPU".into(), i.gl_renderer.clone()),
+        ("OpenGL".into(), i.gl_version.clone()),
+        ("Display".into(), format!("{}×{} @ {:.2} Hz ({})", fb.0, fb.1, hz, i.video_driver)),
+        ("libmpv".into(), format!("client API {major}.{minor}")),
+    ]
+}
+
 /// On-screen notice for config problems (details are in the journal).
 pub fn config_notice(warnings: usize) -> String {
     match warnings {
@@ -161,8 +188,15 @@ pub fn run<P: Platform, R: Renderer>(
     let mut view = match net {
         Some(cfg) if !opts.demo && opts.play.is_none() => {
             let cap = config.config.cache.textures_mb << 20;
+            let ui = crate::home::UiSetting {
+                resolution: config.config.display.ui_resolution,
+                save_to: cfg.data_dir.as_deref().map(crate::ui_prefs::path),
+            };
             match NetHandle::start(cfg, p.waker()) {
-                Ok(h) => View::Home(Box::new(HomeApp::new(h, cap, fb, safe_area))),
+                Ok(h) => {
+                    let about = about_device(p, fb, refresh_hz);
+                    View::Home(Box::new(HomeApp::new(h, cap, fb, safe_area, about, ui)))
+                }
                 Err(e) => {
                     tracing::error!("cannot start the network thread: {e}");
                     View::Demo(Box::new(Scene::new(start)))
@@ -186,10 +220,16 @@ pub fn run<P: Platform, R: Renderer>(
     let mut overlay_shown = false;
 
     let bench_len = opts.bench.map(|b| match b {
-        Bench::Pacing(d) | Bench::Idle(d) | Bench::Play(d) => d,
+        Bench::Pacing(d) | Bench::Idle(d) | Bench::Play(d) | Bench::Scroll(d) => d,
     });
+    // --bench-scroll: drive the UI like a user; measure while scrolling.
+    let mut script = matches!(opts.bench, Some(Bench::Scroll(_)))
+        .then(|| crate::bench_scroll::Script::new(start));
     // Until steady state the loop must still wake up to notice it.
-    let mut bench_end = bench_len.map(|_| start + WARMUP);
+    let mut bench_end = match script {
+        Some(_) => Some(start + crate::bench_scroll::SETUP_TIMEOUT),
+        None => bench_len.map(|_| start + WARMUP),
+    };
     if let (Some(Bench::Pacing(_)), View::Demo(scene)) = (opts.bench, &mut view) {
         scene.bench = true;
     }
@@ -198,6 +238,10 @@ pub fn run<P: Platform, R: Renderer>(
 
     let mut dirty = true;
     let mut first_frame = true;
+    // Browsing the server: playback returns to the UI when it ends
+    // (with --play, the app exits instead).
+    let browsing = opts.play.is_none() && matches!(view, View::Home(_));
+    let mut stop_playback = false;
     let mut last_present: Option<Instant> = None;
     let mut alloc_warned = false;
 
@@ -208,9 +252,10 @@ pub fn run<P: Platform, R: Renderer>(
             earliest(repeat.next_deadline(), hud.next_deadline()),
             earliest(systemd.next_deadline(), bench_end),
         );
+        let deadline = earliest(deadline, script.as_ref().and_then(|s| s.next_deadline()));
         let (deadline, animating) = match &playback {
             Some(pb) => (earliest(deadline, pb.osd.next_deadline(now)), pb.playing()),
-            None => (deadline, view.is_animating(now)),
+            None => (earliest(deadline, view.next_deadline()), view.is_animating(now)),
         };
         let timeout = wait_timeout(dirty, animating, deadline, now);
         events.clear();
@@ -233,7 +278,11 @@ pub fn run<P: Platform, R: Renderer>(
             Some(pb) => pb.started,
             None => view.settled(),
         };
-        if !bench_reset_done && now >= start + WARMUP && loaded {
+        let ready = match &script {
+            Some(s) => s.measuring(),
+            None => now >= start + WARMUP && loaded,
+        };
+        if !bench_reset_done && ready {
             bench_reset_done = true;
             bench_end = bench_len.map(|d| now + d);
             stats.reset();
@@ -245,10 +294,26 @@ pub fn run<P: Platform, R: Renderer>(
             };
         }
         if let Some(end) = bench_end
+            && !bench_reset_done
+            && script.is_some()
+            && now >= end
+        {
+            println!("bench: scroll");
+            println!(
+                "FAIL: the library grid did not open within {:?}",
+                crate::bench_scroll::SETUP_TIMEOUT
+            );
+            println!("result: FAIL");
+            return Exit::BenchFailed;
+        }
+        if let Some(end) = bench_end
             && bench_reset_done
             && now >= end
         {
-            return finish_bench(opts, &stats, &base, p, r, playback.as_ref());
+            if let View::Home(h) = &view {
+                stats.upload_ns = h.upload_ns();
+            }
+            return finish_bench(opts, &stats, &base, p, r, playback.as_ref(), script.as_ref());
         }
 
         if let View::Home(h) = &mut view {
@@ -258,6 +323,7 @@ pub fn run<P: Platform, R: Renderer>(
         // ---- input + update (measured) --------------------------------
         let frame_start = Instant::now();
         let allocs_start = alloc_counter::allocations();
+        let work_start = view.load_work();
         for ev in &events {
             match *ev {
                 PlatformEvent::Quit => {
@@ -304,6 +370,7 @@ pub fn run<P: Platform, R: Renderer>(
                         repeat.press(button, a, now);
                         if let Some(pb) = playback.as_mut() {
                             match pb.on_action(a, now) {
+                                Outcome::Exit if browsing => stop_playback = true,
                                 Outcome::Exit => {
                                     systemd.stopping();
                                     return Exit::Quit;
@@ -332,13 +399,22 @@ pub fn run<P: Platform, R: Renderer>(
                 dirty |= redraw;
             }
             dirty |= pb.poll(now);
-            if let Some((reason, error)) = &pb.ended {
+            if let Some((reason, error)) = &pb.ended
+                && browsing
+            {
+                // Back to the page that started it.
+                match error {
+                    Some(e) => tracing::warn!("playback ended: {reason:?}: {e}"),
+                    None => tracing::info!("playback ended: {reason:?}"),
+                }
+                stop_playback = true;
+            } else if let Some((reason, error)) = &pb.ended {
                 systemd.stopping();
                 if bench_end.is_some() {
                     let why = error.as_deref().unwrap_or("no error");
                     if bench_reset_done {
                         println!("playback ended early: {reason:?} ({why})");
-                        return finish_bench(opts, &stats, &base, p, r, playback.as_ref());
+                        return finish_bench(opts, &stats, &base, p, r, playback.as_ref(), None);
                     }
                     // Never leave a benchmark run without output.
                     println!("bench: play {:?}", opts.play.as_deref().unwrap_or(""));
@@ -347,8 +423,7 @@ pub fn run<P: Platform, R: Renderer>(
                     return Exit::BenchFailed;
                 }
                 return if error.is_some() { Exit::Error } else { Exit::Quit };
-            }
-            if matches!(opts.bench, Some(Bench::Play(_))) && now >= bench_osd_next {
+            } else if matches!(opts.bench, Some(Bench::Play(_))) && now >= bench_osd_next {
                 bench_osd_next = now + BENCH_OSD_PERIOD;
                 pb.osd.toggle(now);
                 dirty = true;
@@ -362,11 +437,59 @@ pub fn run<P: Platform, R: Renderer>(
             if let Some(a) = repeat.tick(now) {
                 dirty |= view.on_action(a, now);
             }
+            if let (Some(s), View::Home(h)) = (script.as_mut(), &mut view) {
+                let (home, grid) = h.bench_state();
+                if let Some(a) = s.tick(now, home, grid) {
+                    dirty |= h.on_action(a, now);
+                }
+            }
             dirty |= view.update(now);
             p.set_text_input(view.wants_text());
+            if let View::Home(h) = &mut view
+                && let Some(scale) = h.take_render_scale()
+            {
+                r.set_render_scale(scale);
+                h.set_output(fb, safe_area, now);
+                dirty = true;
+            }
+            if let View::Home(h) = &mut view
+                && let Some(req) = h.take_play()
+            {
+                let popts = jellyroll_video::PlayerOptions {
+                    http_header: Some(format!("Authorization: {}", req.authorization)),
+                    start_secs: Some(req.start_secs),
+                    ..Default::default()
+                };
+                match Playback::start_with(p, &req.url, &req.title, popts, now) {
+                    Ok(pb) => {
+                        playback = Some(pb);
+                        overlay_shown = false;
+                        repeat.reset();
+                        dirty = true;
+                    }
+                    Err(e) => tracing::error!("playback: {e}"),
+                }
+            }
             if view.is_animating(now) {
                 dirty = true;
             }
+        }
+        // Starting to load something (requests, image wants) allocates;
+        // such a frame is not a steady-state frame (D40).
+        let load_allocs = if view.load_work() != work_start {
+            alloc_counter::allocations() - allocs_start
+        } else {
+            0
+        };
+        if std::mem::take(&mut stop_playback) {
+            playback = None;
+            // mpv changed GL state; Skia must not trust its cache.
+            r.reset_gl_state();
+            repeat.reset();
+            if let View::Home(h) = &mut view {
+                h.playback_finished(now);
+            }
+            dirty = true;
         }
         if !dirty {
             continue;
@@ -374,7 +497,8 @@ pub fn run<P: Platform, R: Renderer>(
 
         // ---- draw ------------------------------------------------------
         let timing = gpu_timer.as_mut().is_some_and(|t| t.begin(p.gl()));
-        let mut hud_allocs = 0;
+        let mut hud_allocs = load_allocs;
+        let mut loading = load_allocs > 0;
         if let Some(pb) = playback.as_mut() {
             // mpv needs default GL state; Skia must then forget its cache.
             p.gl().reset_to_defaults();
@@ -403,13 +527,29 @@ pub fn run<P: Platform, R: Renderer>(
                     scene.draw(r, now, safe_area, &header, notice);
                 }
                 View::Home(h) => {
-                    // Texture uploads allocate (once per image); keep them
-                    // out of the steady-state check like the HUD.
+                    // Texture uploads and shaping new text allocate (once
+                    // per image or string); keep them out of the
+                    // steady-state check like the HUD.
                     let a0 = alloc_counter::allocations();
                     let uploading = !h.settled();
+                    let misses = r.stats().text_cache_misses;
                     h.draw(r, now, notice);
-                    if uploading {
-                        hud_allocs += alloc_counter::allocations() - a0;
+                    let shaped = r.stats().text_cache_misses - misses;
+                    // Uploads and new text are loading work even when Rust
+                    // code didn't allocate (Skia copies pixels in C++).
+                    loading |= h.last_upload_ms > 0.0 || shaped > 0;
+                    if bench_reset_done {
+                        if h.last_upload_ms > 0.0 {
+                            stats.upload_ms.push(h.last_upload_ms);
+                        }
+                        if shaped > 0 {
+                            stats.new_text.push(shaped as f32);
+                        }
+                    }
+                    if uploading || r.stats().text_cache_misses != misses {
+                        let n = alloc_counter::allocations() - a0;
+                        loading |= n > 0;
+                        hud_allocs += n;
                     }
                 }
             }
@@ -455,7 +595,16 @@ pub fn run<P: Platform, R: Renderer>(
 
         let allocs = alloc_counter::allocations() - allocs_start - hud_allocs;
         stats.allocs_last_frame = allocs;
-        if allocs > 0 && bench_reset_done {
+        if bench_reset_done {
+            if loading {
+                stats.loading_cpu_ms.push(ms(cpu));
+            } else {
+                stats.steady_cpu_ms.push(ms(cpu));
+            }
+        }
+        if loading && bench_reset_done {
+            stats.loading_frames += 1;
+        } else if allocs > 0 && bench_reset_done {
             stats.allocating_frames += 1;
             if cfg!(debug_assertions) && !alloc_warned {
                 alloc_warned = true;
@@ -480,6 +629,7 @@ fn finish_bench<P: Platform, R: Renderer>(
     p: &P,
     r: &R,
     playback: Option<&Playback>,
+    script: Option<&crate::bench_scroll::Script>,
 ) -> Exit {
     let mut scratch = Box::new([0.0f32; crate::perf::HISTORY]);
     let info = p.info();
@@ -487,13 +637,20 @@ fn finish_bench<P: Platform, R: Renderer>(
     println!("video_driver: {}", info.video_driver);
     let (w, h) = p.framebuffer_size();
     println!("output: {w}x{h} @ {:.3} Hz", p.refresh_hz());
+    println!("ui render scale: {:.2}", r.stats().render_scale_pct as f32 / 100.0);
     let mut pass = true;
     match opts.bench {
-        Some(Bench::Pacing(d)) => {
+        Some(b @ (Bench::Pacing(d) | Bench::Scroll(d))) => {
             let cpu = stats.cpu_ms.percentiles(&mut scratch);
             let gpu = stats.gpu_ms.percentiles(&mut scratch);
             let present = stats.present_ms.percentiles(&mut scratch);
-            println!("bench: pacing {:.1}s", d.as_secs_f32());
+            if matches!(b, Bench::Scroll(_)) {
+                println!("bench: scroll {:.1}s", d.as_secs_f32());
+                println!("items: {}", crate::bench_scroll::ITEMS);
+                println!("presses: {}", script.map_or(0, |s| s.presses));
+            } else {
+                println!("bench: pacing {:.1}s", d.as_secs_f32());
+            }
             println!("frames: {}", stats.frames);
             println!("cpu_ms: p50 {:.3} p99 {:.3} max {:.3}", cpu.p50, cpu.p99, cpu.max);
             let rec = stats.record_ms.percentiles(&mut scratch);
@@ -511,6 +668,26 @@ fn finish_bench<P: Platform, R: Renderer>(
             );
             println!("missed_vsyncs: {}", stats.missed_vsyncs);
             println!("allocating_frames: {}", stats.allocating_frames);
+            println!(
+                "loading_frames: {} (not steady state; not counted above)",
+                stats.loading_frames
+            );
+            let mut pct = |ring: &crate::perf::Ring<{ crate::perf::HISTORY }>| {
+                let q = ring.percentiles(&mut scratch);
+                format!("p50 {:.3} p99 {:.3} max {:.3}", q.p50, q.p99, q.max)
+            };
+            println!("  cpu_ms, steady frames: {}", pct(&stats.steady_cpu_ms));
+            println!("  cpu_ms, loading frames: {}", pct(&stats.loading_cpu_ms));
+            println!("  upload_ms, frames that uploaded: {}", pct(&stats.upload_ms));
+            println!("  strings shaped, frames that shaped: {}", pct(&stats.new_text));
+            let [small, large] = stats.upload_ns;
+            if large > 0.0 {
+                println!(
+                    "  one upload (moving avg): placeholder {:.3} ms, artwork {:.3} ms",
+                    small / 1e6,
+                    large / 1e6
+                );
+            }
             let rs = r.stats();
             println!(
                 "render: textures {:.1} MB ({} images), text cache {} entries ({} hits / {} misses), shadows {}",
@@ -520,6 +697,20 @@ fn finish_bench<P: Platform, R: Renderer>(
                 rs.text_cache_hits,
                 rs.text_cache_misses,
                 rs.shadow_cache_entries
+            );
+            if rs.uploads > 0 {
+                let n = rs.uploads as f64 * 1000.0;
+                println!(
+                    "uploads: {} (per image, us: get texture {:.0}, write pixels {:.0})",
+                    rs.uploads,
+                    rs.upload_texture_ns as f64 / n,
+                    rs.upload_write_ns as f64 / n
+                );
+            }
+            println!(
+                "skia cache: {:.1} of {:.1} MB",
+                rs.gpu_cache_bytes as f64 / (1024.0 * 1024.0),
+                rs.gpu_cache_limit as f64 / (1024.0 * 1024.0)
             );
             let mut check = |ok: bool, what: &str| {
                 if !ok {
@@ -532,6 +723,7 @@ fn finish_bench<P: Platform, R: Renderer>(
             check(opts.no_vsync || stats.missed_vsyncs == 0, "missed vsyncs");
             check(stats.allocating_frames == 0, "steady-state frames allocated");
             check(stats.frames > 0, "no frames rendered");
+            check(script.is_none_or(|s| s.presses > 0), "never scrolled");
         }
         Some(Bench::Play(d)) => {
             let Some(pb) = playback else { return Exit::Error };

@@ -34,6 +34,9 @@ pub struct StatusView {
     /// Quick Connect code with spaced digits.
     code: Option<String>,
     hint: &'static str,
+    buttons: Vec<&'static str>,
+    button_focus: usize,
+    button_rects: Vec<Rect>,
     /// Wrapped detail lines, computed on first draw (needs the renderer).
     lines: Option<Vec<String>>,
 }
@@ -62,7 +65,7 @@ impl StatusView {
                 Some(
                     code.chars().flat_map(|c| [c, ' ']).collect::<String>().trim_end().to_string(),
                 ),
-                "Select: new code   ·   Back: use a different server",
+                "Back: use a different server",
             ),
             Status::Problem { title, detail } => (
                 title.clone(),
@@ -71,7 +74,44 @@ impl StatusView {
                 "Select: retry   ·   Back: choose another server",
             ),
         };
-        Self { status, title, detail, code, hint, lines: None }
+        let buttons = match &status {
+            Status::QuickConnect { .. } => {
+                vec![super::strings::NEW_CODE, super::strings::SIGN_IN_PASSWORD]
+            }
+            _ => Vec::new(),
+        };
+        Self {
+            status,
+            title,
+            detail,
+            code,
+            hint,
+            lines: None,
+            buttons,
+            button_focus: 0,
+            button_rects: Vec::new(),
+        }
+    }
+
+    /// Quick Connect's buttons: New code, Sign in with password.
+    pub fn buttons(&self) -> usize {
+        self.buttons.len()
+    }
+
+    pub fn button_focus(&self) -> usize {
+        self.button_focus
+    }
+
+    pub fn move_focus(&mut self, right: bool) -> bool {
+        let n = self.buttons.len();
+        let next = if right {
+            (self.button_focus + 1).min(n.saturating_sub(1))
+        } else {
+            self.button_focus.saturating_sub(1)
+        };
+        let changed = next != self.button_focus;
+        self.button_focus = next;
+        changed
     }
 
     pub fn can_change_server(&self) -> bool {
@@ -98,8 +138,11 @@ impl StatusView {
 
         // Vertically center the block.
         let code_h = if code.is_some() { 170.0 } else { 0.0 };
-        let block_h =
-            64.0 + code_h + lines.len() as f32 * 34.0 + if hint.is_empty() { 0.0 } else { 70.0 };
+        let block_h = 64.0
+            + code_h
+            + lines.len() as f32 * 34.0
+            + if hint.is_empty() { 0.0 } else { 70.0 }
+            + if self.buttons.is_empty() { 0.0 } else { 90.0 };
         let mut y = ((lh - block_h) / 2.0).max(sy + 60.0);
         let center = |r: &mut R, s: &str, style: &TextStyle, y: f32, c: Color| {
             let m = r.measure_text(s, style);
@@ -120,6 +163,26 @@ impl StatusView {
         for l in lines {
             center(r, l, &BODY, y, TEXT_DIM);
             y += 34.0;
+        }
+        if !self.buttons.is_empty() {
+            y += 30.0;
+            if self.button_rects.is_empty() {
+                let widths: Vec<f32> = self
+                    .buttons
+                    .iter()
+                    .map(|b| super::widgets::button_width(r, b).max(220.0))
+                    .collect();
+                let total = widths.iter().sum::<f32>() + 16.0 * (widths.len() - 1) as f32;
+                let mut x = ((lw - total) / 2.0).round();
+                for w in widths {
+                    self.button_rects.push(Rect::new(x, y, w, 56.0));
+                    x += w + 16.0;
+                }
+            }
+            for (i, (b, rect)) in self.buttons.iter().zip(&self.button_rects).enumerate() {
+                super::widgets::draw_button(r, *rect, b, i == self.button_focus, false);
+            }
+            y += 76.0;
         }
         if !hint.is_empty() {
             y += 30.0;

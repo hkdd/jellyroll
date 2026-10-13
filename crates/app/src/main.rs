@@ -4,6 +4,7 @@
 
 mod anim;
 mod args;
+mod bench_scroll;
 mod config;
 mod diagnostics;
 mod focus;
@@ -20,6 +21,7 @@ mod playback;
 mod posters;
 mod scene;
 mod systemd;
+mod ui_prefs;
 
 use std::process::ExitCode;
 use std::time::Instant;
@@ -45,7 +47,7 @@ fn main() -> ExitCode {
     }
     // Load config before logging (it sets the log level); report its
     // warnings once logging is up.
-    let loaded = match opts.config.clone().or_else(config::default_path) {
+    let mut loaded = match opts.config.clone().or_else(config::default_path) {
         Some(path) => config::load(&path),
         None => config::Loaded {
             config: config::Config::default(),
@@ -124,10 +126,18 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let skia_opts = jellyroll_render::skia::SkiaOptions {
-        render_scale: loaded.config.display.ui_render_scale,
-        ..Default::default()
-    };
+    // A resolution chosen in Settings wins over config.toml (benchmarks
+    // use the config alone).
+    if opts.bench.is_none()
+        && let Some(r) =
+            net::store::data_dir().and_then(|d| ui_prefs::load(&ui_prefs::path(&d)).ui_resolution)
+    {
+        loaded.config.display.ui_resolution = r;
+    }
+    let ui_res = loaded.config.display.ui_resolution;
+    let render_scale = ui_res.render_scale(platform.framebuffer_size().1);
+    tracing::info!(?ui_res, render_scale, "UI resolution");
+    let skia_opts = jellyroll_render::skia::SkiaOptions { render_scale, ..Default::default() };
     tracing::info!(ms = process_start.elapsed().as_millis() as u64, "platform ready");
     let mut renderer = match jellyroll_render::skia::SkiaRenderer::new(
         |name| platform.gl_proc_address(name),
@@ -140,15 +150,49 @@ fn main() -> ExitCode {
         }
     };
     tracing::info!(ms = process_start.elapsed().as_millis() as u64, "renderer ready");
+    if opts.bench_upload {
+        let info = platform.info();
+        println!("gl.renderer: {}", info.gl_renderer);
+        // Poster and placeholder sizes at 4K, then a 1080p backdrop.
+        for (w, h) in [(320, 480), (32, 48), (1920, 1080)] {
+            println!("{w}x{h} ({} KB), mean of 60:", w * h * 4 / 1024);
+            let s0 = jellyroll_render::Renderer::stats(&renderer);
+            for (name, op, flush) in renderer.bench_uploads(w, h, 60) {
+                println!("  {name}: call {op:.3} ms, flush {flush:.3} ms");
+            }
+            let s1 = jellyroll_render::Renderer::stats(&renderer);
+            let n = (s1.uploads - s0.uploads).max(1) as f64 * 1e6;
+            println!(
+                "  D (both) breakdown, ms: get texture {:.3}, write {:.3}",
+                (s1.upload_texture_ns - s0.upload_texture_ns) as f64 / n,
+                (s1.upload_write_ns - s0.upload_write_ns) as f64 / n
+            );
+        }
+        return ExitCode::SUCCESS;
+    }
     let c = &loaded.config;
-    let net = net::NetConfig {
-        server_url: c.server.url.clone(),
-        ca_file: (!c.server.ca_file.is_empty()).then(|| c.server.ca_file.clone().into()),
-        image_cache_bytes: c.cache.images_mb << 20,
-        data_dir: net::store::data_dir(),
-        cache_dir: net::store::cache_dir(),
+    let mut bench_dir = None;
+    let net = if let Some(args::Bench::Scroll(_)) = opts.bench {
+        match bench_scroll::setup() {
+            Ok((cfg, dir)) => {
+                bench_dir = Some(dir);
+                cfg
+            }
+            Err(e) => {
+                tracing::error!("{e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        net::NetConfig {
+            server_url: c.server.url.clone(),
+            ca_file: (!c.server.ca_file.is_empty()).then(|| c.server.ca_file.clone().into()),
+            image_cache_bytes: c.cache.images_mb << 20,
+            data_dir: net::store::data_dir(),
+            cache_dir: net::store::cache_dir(),
+        }
     };
-    match frame_loop::run(
+    let exit = frame_loop::run(
         &mut platform,
         &mut renderer,
         &opts,
@@ -156,7 +200,11 @@ fn main() -> ExitCode {
         Some(net),
         &notice,
         process_start,
-    ) {
+    );
+    if let Some(dir) = bench_dir {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    match exit {
         frame_loop::Exit::Quit | frame_loop::Exit::BenchPassed => ExitCode::SUCCESS,
         frame_loop::Exit::BenchFailed | frame_loop::Exit::Error => ExitCode::FAILURE,
     }

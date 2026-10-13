@@ -17,11 +17,23 @@ struct Tex {
 
 pub struct Textures {
     map: HashMap<u64, Tex>,
-    pending: VecDeque<(u64, u32, u32, Vec<u8>)>,
+    pending: VecDeque<(u64, u32, u32, Vec<u8>, bool)>,
     failed: HashSet<u64>,
     bytes: u64,
     cap: u64,
     frame: u64,
+    /// Measured upload time (moving average, ns) for small images
+    /// (placeholders) and large ones (artwork), to stop before an upload
+    /// that would overrun the frame's budget. Small uploads are mostly
+    /// fixed cost, so one per-byte rate would mispredict both.
+    upload_ns: [f64; 2],
+}
+
+/// Images below this many bytes count as small (BlurHash placeholders).
+const SMALL: u64 = 64 << 10;
+
+fn bucket(bytes: u64) -> usize {
+    usize::from(bytes >= SMALL)
 }
 
 impl Textures {
@@ -33,6 +45,7 @@ impl Textures {
             bytes: 0,
             cap: cap_bytes,
             frame: 0,
+            upload_ns: [0.0; 2],
         }
     }
 
@@ -58,9 +71,10 @@ impl Textures {
         self.map.contains_key(&key)
     }
 
-    pub fn queue(&mut self, key: u64, w: u32, h: u32, rgba: Vec<u8>) {
+    /// Queues premultiplied pixels for upload.
+    pub fn queue(&mut self, key: u64, w: u32, h: u32, rgba: Vec<u8>, opaque: bool) {
         self.failed.remove(&key);
-        self.pending.push_back((key, w, h, rgba));
+        self.pending.push_back((key, w, h, rgba, opaque));
     }
 
     pub fn fail(&mut self, key: u64) {
@@ -72,22 +86,48 @@ impl Textures {
         self.failed.clear();
     }
 
+    /// Measured upload time (small, large images), ns, for benchmarks.
+    pub fn upload_ns(&self) -> [f64; 2] {
+        self.upload_ns
+    }
+
     pub fn uploads_pending(&self) -> bool {
         !self.pending.is_empty()
     }
 
-    /// Uploads queued images until `budget` is spent (at least one per
-    /// call), then evicts down to the cap. Returns true if anything new is
-    /// ready to draw.
+    /// Releases every texture and forgets queued and failed images (e.g.
+    /// all artwork is now wanted at another size).
+    pub fn clear<R: Renderer>(&mut self, r: &mut R) {
+        for (_, t) in self.map.drain() {
+            r.release_image(t.id);
+        }
+        self.pending.clear();
+        self.failed.clear();
+        self.bytes = 0;
+    }
+
+    /// Uploads queued images while the next one is expected to fit in
+    /// `budget` (always at least one per call), then evicts down to the
+    /// cap. Returns true if anything new is ready to draw.
     pub fn pump<R: Renderer>(&mut self, r: &mut R, budget: Duration) -> bool {
         let start = Instant::now();
         let mut any = false;
-        while let Some((key, w, h, rgba)) = self.pending.pop_front() {
+        let budget_ns = budget.as_nanos() as f64;
+        let mut first = true;
+        while let Some(&(_, w, h, _, _)) = self.pending.front() {
+            let b = bucket(w as u64 * h as u64 * 4);
+            let elapsed = start.elapsed().as_nanos() as f64;
+            if !first && elapsed + self.upload_ns[b] > budget_ns {
+                break;
+            }
+            first = false;
+            let Some((key, w, h, rgba, opaque)) = self.pending.pop_front() else { break };
+            let t = Instant::now();
             if let Some(old) = self.map.remove(&key) {
                 r.release_image(old.id);
                 self.bytes -= old.bytes;
             }
-            match r.create_image(w, h, &rgba) {
+            match r.create_image(w, h, &rgba, opaque) {
                 Some(id) => {
                     let bytes = w as u64 * h as u64 * 4;
                     self.bytes += bytes;
@@ -98,9 +138,9 @@ impl Textures {
                     self.failed.insert(key);
                 }
             }
-            if start.elapsed() >= budget {
-                break;
-            }
+            let cost = t.elapsed().as_nanos() as f64;
+            let avg = &mut self.upload_ns[b];
+            *avg = if *avg == 0.0 { cost } else { *avg * 0.8 + cost * 0.2 };
         }
         if self.bytes > self.cap {
             self.evict(r);

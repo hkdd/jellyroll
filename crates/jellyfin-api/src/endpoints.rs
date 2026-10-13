@@ -11,13 +11,15 @@ use std::marker::PhantomData;
 
 use crate::auth::encode_component;
 use crate::dto::{
-    AuthenticationResult, BaseItemDto, BaseItemDtoQueryResult, PublicSystemInfo, QuickConnectResult,
+    AuthenticationResult, BaseItemDto, BaseItemDtoQueryResult, PublicSystemInfo,
+    QuickConnectResult, UserDto, UserItemDataDto,
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Method {
     Get,
     Post,
+    Delete,
 }
 
 #[derive(Debug)]
@@ -65,11 +67,22 @@ impl Query {
     /// The common row options: minimal fields, one image per type, user
     /// data (played/progress), no total count.
     fn row(self) -> Self {
+        self.images().param("enableTotalRecordCount", false)
+    }
+
+    /// Fields, images and user data, without the total-count switch.
+    fn images(self) -> Self {
         self.param("fields", ROW_FIELDS)
             .param("enableImageTypes", ROW_IMAGES)
             .param("imageTypeLimit", 1)
             .param("enableUserData", true)
-            .param("enableTotalRecordCount", false)
+    }
+
+    fn opt(self, key: &str, value: Option<impl std::fmt::Display>) -> Self {
+        match value {
+            Some(v) => self.param(key, v),
+            None => self,
+        }
     }
 }
 
@@ -151,6 +164,145 @@ pub fn favorites(user_id: &str, limit: u32) -> Request<BaseItemDtoQueryResult> {
     Request::new(Method::Get, q.0)
 }
 
+/// A library listing (grid page, search, alphabet index).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ItemsQuery {
+    pub parent_id: Option<String>,
+    /// Comma-separated `BaseItemKind`s, e.g. "Movie" or "Series".
+    pub include_types: Option<String>,
+    /// Comma-separated `ItemSortBy`s; default "SortName".
+    pub sort_by: Option<String>,
+    pub descending: bool,
+    pub unplayed: bool,
+    pub favorites: bool,
+    pub genre: Option<String>,
+    pub year: Option<i32>,
+    pub search: Option<String>,
+    /// Only items whose sort name sorts before this (alphabet jump: with
+    /// `limit` 0, the total count is the index of the first item at or
+    /// after it).
+    pub name_less_than: Option<String>,
+    pub start: u32,
+    pub limit: u32,
+}
+
+/// One page of items, with the total count.
+pub fn items(user_id: &str, q: &ItemsQuery) -> Request<BaseItemDtoQueryResult> {
+    let mut filters = Vec::new();
+    if q.unplayed {
+        filters.push("IsUnplayed");
+    }
+    if q.favorites {
+        filters.push("IsFavorite");
+    }
+    let path = Query::new("/Items")
+        .param("userId", user_id)
+        .opt("parentId", q.parent_id.as_deref())
+        .param("recursive", true)
+        .opt("includeItemTypes", q.include_types.as_deref())
+        .param("sortBy", q.sort_by.as_deref().unwrap_or("SortName"))
+        .param("sortOrder", if q.descending { "Descending" } else { "Ascending" })
+        .opt("filters", (!filters.is_empty()).then(|| filters.join(",")))
+        .opt("genres", q.genre.as_deref())
+        .opt("years", q.year)
+        .opt("searchTerm", q.search.as_deref())
+        .opt("nameLessThan", q.name_less_than.as_deref())
+        .param("startIndex", q.start)
+        .param("limit", q.limit)
+        .images()
+        .param("enableTotalRecordCount", true)
+        .0;
+    Request::new(Method::Get, path)
+}
+
+/// One item with all its details (cast, media streams, genres...).
+pub fn item(user_id: &str, item_id: &str) -> Request<BaseItemDto> {
+    let mut path = String::from("/Items/");
+    encode_component(&mut path, item_id);
+    Request::new(Method::Get, Query::new(&path).param("userId", user_id).0)
+}
+
+fn show_path(series_id: &str, what: &str) -> String {
+    let mut path = String::from("/Shows/");
+    encode_component(&mut path, series_id);
+    path.push('/');
+    path.push_str(what);
+    path
+}
+
+pub fn seasons(user_id: &str, series_id: &str) -> Request<BaseItemDtoQueryResult> {
+    let q = Query::new(&show_path(series_id, "Seasons")).param("userId", user_id).images();
+    Request::new(Method::Get, q.0)
+}
+
+pub fn episodes(
+    user_id: &str,
+    series_id: &str,
+    season_id: &str,
+) -> Request<BaseItemDtoQueryResult> {
+    let q = Query::new(&show_path(series_id, "Episodes"))
+        .param("userId", user_id)
+        .param("seasonId", season_id)
+        .images();
+    Request::new(Method::Get, q.0)
+}
+
+pub fn similar(user_id: &str, item_id: &str, limit: u32) -> Request<BaseItemDtoQueryResult> {
+    let mut path = String::from("/Items/");
+    encode_component(&mut path, item_id);
+    path.push_str("/Similar");
+    let q = Query::new(&path)
+        .param("userId", user_id)
+        .param("limit", limit)
+        .param("fields", ROW_FIELDS);
+    Request::new(Method::Get, q.0)
+}
+
+/// Genres present in a library, for the grid's filter.
+pub fn genres(user_id: &str, parent_id: &str) -> Request<BaseItemDtoQueryResult> {
+    let q = Query::new("/Genres")
+        .param("userId", user_id)
+        .param("parentId", parent_id)
+        .param("sortBy", "SortName")
+        .param("enableTotalRecordCount", false);
+    Request::new(Method::Get, q.0)
+}
+
+/// Users shown on the server's sign-in screen (for the user picker).
+pub fn public_users() -> Request<Vec<UserDto>> {
+    Request::new(Method::Get, "/Users/Public".into())
+}
+
+fn user_item(base: &str, user_id: &str, item_id: &str) -> String {
+    let mut path = String::from(base);
+    encode_component(&mut path, item_id);
+    Query::new(&path).param("userId", user_id).0
+}
+
+pub fn set_favorite(user_id: &str, item_id: &str, on: bool) -> Request<UserItemDataDto> {
+    let method = if on { Method::Post } else { Method::Delete };
+    Request::new(method, user_item("/UserFavoriteItems/", user_id, item_id))
+}
+
+pub fn set_played(user_id: &str, item_id: &str, on: bool) -> Request<UserItemDataDto> {
+    let method = if on { Method::Post } else { Method::Delete };
+    Request::new(method, user_item("/UserPlayedItems/", user_id, item_id))
+}
+
+/// Ends this device's session and revokes its token on the server.
+pub fn logout() -> Request<()> {
+    Request::new(Method::Post, "/Sessions/Logout".into())
+}
+
+/// Direct stream of a video's original file (direct play: no transcoding,
+/// D19). Authenticated by the `Authorization` header, not the URL.
+pub fn stream_path(item_id: &str, media_source_id: &str) -> String {
+    let mut path = String::from("/Videos/");
+    encode_component(&mut path, item_id);
+    path.push_str("/stream");
+    Query::new(&path).param("static", true).param("mediaSourceId", media_source_id).0
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ImageType {
     Primary,
@@ -214,6 +366,28 @@ mod tests {
         let r = authenticate_quick_connect("s3cr3t");
         assert_eq!(r.body.as_deref(), Some(r#"{"Secret":"s3cr3t"}"#));
         assert_eq!(quick_connect_state("a b").path, "/QuickConnect/Connect?secret=a%20b");
+    }
+
+    #[test]
+    fn library_queries() {
+        let q = ItemsQuery {
+            parent_id: Some("lib".into()),
+            include_types: Some("Movie".into()),
+            unplayed: true,
+            favorites: true,
+            genre: Some("Sci-Fi".into()),
+            start: 200,
+            limit: 100,
+            ..Default::default()
+        };
+        let p = items("u", &q).path;
+        assert!(p.starts_with("/Items?userId=u&parentId=lib&recursive=true&includeItemTypes=Movie&sortBy=SortName&sortOrder=Ascending&filters=IsUnplayed%2CIsFavorite&genres=Sci-Fi&startIndex=200&limit=100"), "{p}");
+        assert!(p.ends_with("enableTotalRecordCount=true"), "{p}");
+        let idx = ItemsQuery { name_less_than: Some("M".into()), ..Default::default() };
+        assert!(items("u", &idx).path.contains("nameLessThan=M&startIndex=0&limit=0"));
+        assert_eq!(set_favorite("u", "i", false).method, Method::Delete);
+        assert_eq!(set_played("u", "i", true).path, "/UserPlayedItems/i?userId=u");
+        assert_eq!(stream_path("i", "m"), "/Videos/i/stream?static=true&mediaSourceId=m");
     }
 
     #[test]

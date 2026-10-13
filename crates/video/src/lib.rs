@@ -43,6 +43,12 @@ pub struct PlayerOptions {
     /// VA-API display from, so without this hwdec silently falls back to
     /// software. Normally the node found by [`va::probe`].
     pub render_node: Option<std::path::PathBuf>,
+    /// Extra HTTP header for network streams, e.g. a Jellyfin
+    /// `Authorization: MediaBrowser Token="…"` (keeps the token out of the
+    /// URL and logs). Must not contain commas (mpv's list separator).
+    pub http_header: Option<String>,
+    /// Start position in seconds (resume).
+    pub start_secs: Option<f64>,
 }
 
 impl Default for PlayerOptions {
@@ -54,6 +60,8 @@ impl Default for PlayerOptions {
             cache_max_back_bytes: "50MiB".into(),
             log_level: "info".into(),
             render_node: None,
+            http_header: None,
+            start_secs: None,
         }
     }
 }
@@ -326,6 +334,15 @@ impl Player {
         ];
         for (k, v) in options {
             player.set_option(k, v)?;
+        }
+        if let Some(h) = &opts.http_header {
+            if h.contains(',') {
+                return Err("http_header must not contain commas".into());
+            }
+            player.set_option("http-header-fields", h)?;
+        }
+        if let Some(s) = opts.start_secs.filter(|s| *s > 0.0) {
+            player.set_option("start", &format!("{s:.3}"))?;
         }
         for k in BUILTINS_OFF {
             if let Err(e) = player.set_option(k, "no") {
