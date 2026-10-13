@@ -353,6 +353,22 @@ pub fn run<P: Platform, R: Renderer>(
                     hud.toggle(now);
                     dirty = true;
                 }
+                PlatformEvent::OutputConnected { connected: false } => {
+                    // TV off or cable out (spec 5.2): pause, keep running.
+                    tracing::warn!("display disconnected; pausing playback");
+                    if let Some(pb) = playback.as_mut()
+                        && !pb.player.state.paused
+                    {
+                        pb.player.toggle_pause();
+                    }
+                }
+                PlatformEvent::OutputConnected { connected: true } => {
+                    tracing::info!("display connected again; setting the output mode");
+                    if let Err(e) = p.reapply_mode() {
+                        tracing::warn!("re-modeset failed: {e}");
+                    }
+                    dirty = true;
+                }
                 PlatformEvent::CecStandby => {
                     // The TV is going to standby: pause playback (spec 5.4).
                     if let Some(pb) = playback.as_mut()

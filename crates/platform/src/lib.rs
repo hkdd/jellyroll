@@ -10,6 +10,7 @@
 pub mod alloc_counter;
 pub mod cec;
 pub mod gl;
+mod hotplug;
 pub mod pad;
 mod sdl;
 
@@ -205,6 +206,11 @@ pub enum PlatformEvent {
     },
     /// The TV asked all devices to go to standby (spec 5.4: pause playback).
     CecStandby,
+    /// The display was disconnected (TV off, cable out) or is back (spec
+    /// 5.2). Not sent in a desktop window.
+    OutputConnected {
+        connected: bool,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -252,6 +258,9 @@ pub trait Platform {
     /// or back to the desktop mode with None. Takes effect at the next
     /// swap. Fails in a desktop window.
     fn set_mode(&mut self, mode: Option<&ModeInfo>) -> Result<(), String>;
+    /// Sets the current mode again: a full modeset at the next swap, for a
+    /// display that came back (spec 5.2: re-modeset and continue).
+    fn reapply_mode(&mut self) -> Result<(), String>;
     fn display_modes(&self) -> Vec<ModeInfo>;
     /// Appends all pending events without blocking.
     fn poll_events(&mut self, out: &mut Vec<PlatformEvent>);
