@@ -22,6 +22,9 @@ pub struct Textures {
     bytes: u64,
     cap: u64,
     frame: u64,
+    /// Measured upload cost (moving average), to stop before an upload
+    /// that would overrun the frame's budget.
+    ns_per_byte: f64,
 }
 
 impl Textures {
@@ -33,6 +36,7 @@ impl Textures {
             bytes: 0,
             cap: cap_bytes,
             frame: 0,
+            ns_per_byte: 0.0,
         }
     }
 
@@ -76,13 +80,23 @@ impl Textures {
         !self.pending.is_empty()
     }
 
-    /// Uploads queued images until `budget` is spent (at least one per
-    /// call), then evicts down to the cap. Returns true if anything new is
-    /// ready to draw.
+    /// Uploads queued images while the next one is expected to fit in
+    /// `budget` (always at least one per call), then evicts down to the
+    /// cap. Returns true if anything new is ready to draw.
     pub fn pump<R: Renderer>(&mut self, r: &mut R, budget: Duration) -> bool {
         let start = Instant::now();
         let mut any = false;
-        while let Some((key, w, h, rgba)) = self.pending.pop_front() {
+        let budget_ns = budget.as_nanos() as f64;
+        let mut first = true;
+        while let Some(&(_, w, h, _)) = self.pending.front() {
+            let bytes = w as f64 * h as f64 * 4.0;
+            let elapsed = start.elapsed().as_nanos() as f64;
+            if !first && elapsed + bytes * self.ns_per_byte > budget_ns {
+                break;
+            }
+            first = false;
+            let Some((key, w, h, rgba)) = self.pending.pop_front() else { break };
+            let t = Instant::now();
             if let Some(old) = self.map.remove(&key) {
                 r.release_image(old.id);
                 self.bytes -= old.bytes;
@@ -98,9 +112,9 @@ impl Textures {
                     self.failed.insert(key);
                 }
             }
-            if start.elapsed() >= budget {
-                break;
-            }
+            let cost = t.elapsed().as_nanos() as f64 / bytes.max(1.0);
+            self.ns_per_byte =
+                if self.ns_per_byte == 0.0 { cost } else { self.ns_per_byte * 0.8 + cost * 0.2 };
         }
         if self.bytes > self.cap {
             self.evict(r);

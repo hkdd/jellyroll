@@ -521,6 +521,9 @@ pub fn run<P: Platform, R: Renderer>(
                     let misses = r.stats().text_cache_misses;
                     h.draw(r, now, notice);
                     let shaped = r.stats().text_cache_misses - misses;
+                    // Uploads and new text are loading work even when Rust
+                    // code didn't allocate (Skia copies pixels in C++).
+                    loading |= h.last_upload_ms > 0.0 || shaped > 0;
                     if bench_reset_done {
                         if h.last_upload_ms > 0.0 {
                             stats.upload_ms.push(h.last_upload_ms);

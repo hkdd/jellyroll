@@ -586,6 +586,15 @@ allocating frames, but CPU p99 8-11 ms and GPU p99 7.4-8.4 ms.
   scratch resources and slowing uploads (3 ms p50 per uploading frame,
   steady frames at 5.5 ms p50). Artwork is now unbudgeted; the app's LRU
   is its only cap, and Skia's budget covers its own resources.
+- That changed nothing on the HTPC. The real cause: image uploads. The
+  per-frame upload budget (2 ms) was checked only after each upload, so
+  frames overran it (3 ms p50 per uploading frame), and on top of ~2 ms
+  of other work at 4K that is over the 4 ms CPU budget. Uploads now stop
+  *before* one is expected to overrun (measured ns/byte, moving average),
+  and the budget is 1.5 ms. The benchmark also mislabeled uploading
+  frames as steady (Skia copies pixels in C++, which the Rust allocation
+  counter doesn't see); any frame that uploads or shapes new text is now
+  a loading frame.
 - The GPU p99 is the HD 530 at native 4K, as measured in M2 (see
   "M2 benchmark results", open question 2): above the 6 ms budget, still
   60 fps with no missed vsyncs.

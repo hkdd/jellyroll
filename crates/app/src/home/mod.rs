@@ -42,7 +42,9 @@ use view::HomeView;
 use widgets::{Viewport, Wants};
 
 /// Per-frame texture upload budget (spec 9).
-const UPLOAD_BUDGET: Duration = Duration::from_millis(2);
+/// Per-frame image upload time: the frame's other work at 4K is ~2 ms on
+/// the reference HTPC, and the CPU budget is 4 ms (spec 2).
+const UPLOAD_BUDGET: Duration = Duration::from_micros(1500);
 /// Network events handled per loop iteration (bounds the work per frame).
 const EVENTS_PER_FRAME: usize = 64;
 /// How often image requests are rebuilt while images keep arriving.
