@@ -53,7 +53,7 @@ The release binary grew from 4.6 MB to 13.9 MB (stripped), including 3.9 MB
 of fonts. The prebuilt Skia links dynamically against `libstdc++.so.6`,
 `libfreetype.so.6` and `libfontconfig.so.1` (plus their own deps: expat,
 zlib, bzip2, libpng, brotli). Building needs the development packages:
-Fedora `libstdc++-devel freetype-devel fontconfig-devel`. jellyroll loads
+Fedora `gcc-c++ freetype-devel fontconfig-devel` (`gcc-c++` rather than `libstdc++-devel` alone, so the libstdc++ dev files match the installed gcc version; a mismatch leaves `-lstdc++` unresolved). jellyroll loads
 fonts only from its own bundled bytes (`FontMgr::custom_empty`), so
 fontconfig is linked but never consulted. rust-skia also publishes an
 `ftembed` (embedded FreeType) variant, but only with `textlayout`, which

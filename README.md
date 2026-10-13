@@ -64,7 +64,7 @@ System packages (runtime, plus headers when using `build-sdl`):
 | SDL3 | `SDL3-devel` | build with `build-sdl` (24.04 has no SDL3) | `sdl3` |
 | Mesa / KMS | `mesa-libEGL-devel mesa-libgbm-devel libdrm-devel mesa-dri-drivers` | `libegl-dev libgbm-dev libdrm-dev libgl1-mesa-dri` | `mesa libdrm` |
 | input | `systemd-devel` (libudev) | `libudev-dev` | `systemd-libs` |
-| Skia (link) | `libstdc++-devel freetype-devel fontconfig-devel` | `libstdc++-dev libfreetype-dev libfontconfig-dev` | `gcc-libs freetype2 fontconfig` |
+| Skia (link) | `gcc-c++ freetype-devel fontconfig-devel` (gcc-c++ keeps libstdc++-devel on the same version as gcc) | `libstdc++-dev libfreetype-dev libfontconfig-dev` | `gcc-libs freetype2 fontconfig` |
 | build-sdl only | `cmake ninja-build` + X11/Wayland headers | see `.github/workflows/ci.yml` | `cmake ninja` |
 
 libmpv, PipeWire and libcec come in at M3/M4.

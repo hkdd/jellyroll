@@ -11,7 +11,7 @@ group, with the jellyroll service stopped if it is installed.
 1. **Build** (the first build downloads a prebuilt Skia from GitHub, and
    linking it needs three development packages):
    ```sh
-   sudo dnf install -y libstdc++-devel freetype-devel fontconfig-devel
+   sudo dnf install -y gcc-c++ freetype-devel fontconfig-devel
    cd ~/jellyroll && git pull && cargo build --release
    ```
    Check the binary is about 14 MB (`ls -l target/release/jellyroll`). If the
