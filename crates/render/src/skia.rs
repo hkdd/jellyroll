@@ -126,6 +126,104 @@ fn text_key(text: &str, style: &TextStyle) -> u64 {
 }
 
 impl SkiaRenderer {
+    /// `--bench-upload`: times ways of getting a `w`x`h` RGBA image onto the
+    /// GPU, `n` times each, to tell what an upload costs on this driver.
+    /// Returns (method, mean ms per call, mean ms of the flush after it).
+    pub fn bench_uploads(&mut self, w: u32, h: u32, n: usize) -> Vec<(&'static str, f64, f64)> {
+        let info = sk::ImageInfo::new(
+            (w as i32, h as i32),
+            sk::ColorType::RGBA8888,
+            sk::AlphaType::Premul,
+            None,
+        );
+        let row = w as usize * 4;
+        // Two different images, so no call can be skipped as a no-op.
+        let mut px: Vec<Vec<u8>> = (0..2u8)
+            .map(|k| {
+                (0..row * h as usize)
+                    .map(|i| if i % 4 == 3 { 255 } else { (i as u8).wrapping_mul(31) ^ k })
+                    .collect()
+            })
+            .collect();
+        let ms = |t: std::time::Instant| t.elapsed().as_secs_f64() * 1000.0;
+        let mut out = Vec::new();
+
+        // A: what the app does: a new texture per image.
+        let (mut op, mut fl) = (0.0, 0.0);
+        let mut keep = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = std::time::Instant::now();
+            let raster = sk::images::raster_from_data(&info, sk::Data::new_copy(&px[i % 2]), row);
+            let img = raster.and_then(|r| {
+                gpu::images::texture_from_image(
+                    &mut self.ctx,
+                    &r,
+                    gpu::Mipmapped::No,
+                    gpu::Budgeted::No,
+                )
+            });
+            op += ms(t);
+            let t = std::time::Instant::now();
+            self.ctx.flush_and_submit();
+            fl += ms(t);
+            keep.extend(img);
+        }
+        out.push(("A new texture per image (current)", op / n as f64, fl / n as f64));
+        drop(keep);
+        self.ctx.flush_and_submit();
+
+        // B: new pixels into one existing texture.
+        let (mut op, mut fl) = (0.0, 0.0);
+        if let Some(mut surf) = gpu::surfaces::render_target(
+            &mut self.ctx,
+            gpu::Budgeted::No,
+            &info,
+            None,
+            SurfaceOrigin::TopLeft,
+            None,
+            false,
+            None,
+        ) {
+            for i in 0..n {
+                let t = std::time::Instant::now();
+                if let Some(pm) = sk::Pixmap::new(&info, &mut px[i % 2], row) {
+                    surf.write_pixels_from_pixmap(&pm, (0, 0));
+                }
+                op += ms(t);
+                let t = std::time::Instant::now();
+                self.ctx.flush_and_submit();
+                fl += ms(t);
+            }
+            out.push(("B write into an existing texture", op / n as f64, fl / n as f64));
+        }
+
+        // C: allocation alone: a new empty texture, no pixels.
+        let (mut op, mut fl) = (0.0, 0.0);
+        let mut keep = Vec::with_capacity(n);
+        for _ in 0..n {
+            let t = std::time::Instant::now();
+            let surf = gpu::surfaces::render_target(
+                &mut self.ctx,
+                gpu::Budgeted::No,
+                &info,
+                None,
+                SurfaceOrigin::TopLeft,
+                None,
+                false,
+                None,
+            );
+            op += ms(t);
+            let t = std::time::Instant::now();
+            self.ctx.flush_and_submit();
+            fl += ms(t);
+            keep.extend(surf);
+        }
+        out.push(("C new empty texture, no pixels", op / n as f64, fl / n as f64));
+        drop(keep);
+        self.ctx.flush_and_submit();
+        out
+    }
+
     /// `load` resolves GL symbols (e.g. SDL_GL_GetProcAddress). The GL
     /// context must be current.
     pub fn new(load: impl Fn(&str) -> *const c_void, opts: SkiaOptions) -> Result<Self, String> {

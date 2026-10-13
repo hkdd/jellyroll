@@ -28,6 +28,7 @@ USAGE: jellyroll [OPTIONS]
   --bench-scroll SECS    Scroll a 10,000-item library grid (built-in mock server,
                          no account needed) for SECS, print frame stats, exit
                          non-zero if a budget is exceeded
+  --bench-upload         Time ways of uploading artwork to the GPU and exit
   --print-diagnostics    Print SDL/GL/display information and exit
   -h, --help             Show this help
 ";
@@ -46,6 +47,7 @@ pub struct Options {
     pub bench: Option<Bench>,
     pub play: Option<String>,
     pub print_diagnostics: bool,
+    pub bench_upload: bool,
     pub help: bool,
 }
 
@@ -97,6 +99,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             "--bench-scroll" => o.bench = Some(Bench::Scroll(secs(it.next(), &a)?)),
             "--play" => o.play = Some(it.next().ok_or("--play needs a file or URL")?),
             "--print-diagnostics" => o.print_diagnostics = true,
+            "--bench-upload" => o.bench_upload = true,
             "-h" | "--help" => o.help = true,
             other => return Err(format!("unknown argument '{other}' (see --help)")),
         }

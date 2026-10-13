@@ -141,6 +141,18 @@ fn main() -> ExitCode {
         }
     };
     tracing::info!(ms = process_start.elapsed().as_millis() as u64, "renderer ready");
+    if opts.bench_upload {
+        let info = platform.info();
+        println!("gl.renderer: {}", info.gl_renderer);
+        // Poster and placeholder sizes at 4K, then a 1080p backdrop.
+        for (w, h) in [(320, 480), (32, 48), (1920, 1080)] {
+            println!("{w}x{h} ({} KB), mean of 60:", w * h * 4 / 1024);
+            for (name, op, flush) in renderer.bench_uploads(w, h, 60) {
+                println!("  {name}: call {op:.3} ms, flush {flush:.3} ms");
+            }
+        }
+        return ExitCode::SUCCESS;
+    }
     let c = &loaded.config;
     let mut bench_dir = None;
     let net = if let Some(args::Bench::Scroll(_)) = opts.bench {
