@@ -226,7 +226,8 @@ impl DetailView {
 
     pub fn on_action(&mut self, a: InputAction, now: Instant, ctx: &mut Ctx) -> bool {
         if let Some(dir) = Dir::from_action(a) {
-            let Some(id) = self.graph.navigate(dir) else { return false };
+            let step = self.rows.step(dir, &self.vp);
+            let Some(id) = step.or_else(|| self.graph.navigate(dir)) else { return false };
             match widgets::card_of(id) {
                 Some(rc) => {
                     self.button_focus = None;

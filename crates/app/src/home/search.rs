@@ -147,7 +147,8 @@ impl SearchView {
 
     pub fn on_action(&mut self, a: InputAction, now: Instant, ctx: &mut Ctx) -> bool {
         if let Some(dir) = Dir::from_action(a) {
-            let Some(id) = self.graph.navigate(dir) else { return false };
+            let step = self.rows.step(dir, &self.vp);
+            let Some(id) = step.or_else(|| self.graph.navigate(dir)) else { return false };
             match widgets::card_of(id) {
                 Some(rc) => {
                     self.key_focus = None;
@@ -295,5 +296,46 @@ mod tests {
         v.key_focus = Some(0);
         v.on_action(InputAction::Select, t, &mut ctx);
         assert_eq!(v.text, "dunea");
+    }
+
+    #[test]
+    fn up_from_a_lower_row_goes_to_the_row_above() {
+        let t = Instant::now();
+        let vp = Viewport { lw: 1920.0, safe: 0.025, scale: 1.0 };
+        let mut v = SearchView::new(vp, t);
+        let mut next = 0;
+        let mut ctx = Ctx::new(&mut next);
+        let card = |id: &str| Card {
+            id: id.into(),
+            kind: Kind::Movie,
+            collection: None,
+            title: id.into(),
+            subtitle: String::new(),
+            meta: String::new(),
+            overview: String::new(),
+            image: None,
+            backdrop: None,
+            progress: None,
+        };
+        for c in "x".chars() {
+            v.on_action(InputAction::TextInput(c), t, &mut ctx);
+        }
+        v.update(t + DEBOUNCE, &mut ctx);
+        let ids: Vec<u64> = v.reqs.iter().flatten().copied().collect();
+        for (i, id) in ids.iter().enumerate() {
+            let cards = (0..5).map(|n| card(&format!("{i}-{n}"))).collect();
+            v.on_fetched(*id, &Fetched::Page { start: 0, total: 5, cards }, t);
+        }
+        assert_eq!(v.rows.rows.len(), 3);
+        v.on_action(InputAction::Submit, t, &mut ctx);
+        v.on_action(InputAction::Down, t, &mut ctx);
+        v.on_action(InputAction::Down, t, &mut ctx);
+        assert_eq!(v.rows.focus.0, 2);
+        v.on_action(InputAction::Up, t, &mut ctx);
+        assert_eq!((v.rows.focus.0, v.key_focus), (1, None), "row above, not the keys");
+        v.on_action(InputAction::Up, t, &mut ctx);
+        assert_eq!(v.rows.focus.0, 0);
+        v.on_action(InputAction::Up, t, &mut ctx);
+        assert!(v.key_focus.is_some(), "from the first row, up to the keyboard");
     }
 }

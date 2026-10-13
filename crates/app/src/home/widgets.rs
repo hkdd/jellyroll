@@ -13,7 +13,7 @@ use super::model::{Art, Card, Row, Shape};
 use super::textures::Textures;
 use super::theme::{ACCENT, BG, BG_RGB, TEXT, TEXT_DIM};
 use crate::anim::Tween;
-use crate::focus::NodeId;
+use crate::focus::{Dir, FocusGraph, NodeId};
 use crate::net::images::blurhash_size;
 use crate::net::store::fnv1a;
 use crate::net::{Finish, ImageJob, ImageSource};
@@ -468,6 +468,25 @@ impl RowList {
             }
         }
         out
+    }
+
+    /// Where a direction goes from the focused card when it must stay in
+    /// the rows: Up from a lower row is the row above. The rows above the
+    /// focused one are scrolled up under whatever sits over the rows (a
+    /// keyboard, buttons), so the whole-page graph could pick that instead.
+    pub fn step(&self, dir: Dir, vp: &Viewport) -> Option<NodeId> {
+        let (row, col) = self.focus;
+        if !self.active || dir != Dir::Up || row == 0 {
+            return None;
+        }
+        let mut g = FocusGraph::new();
+        let nodes = self
+            .nodes(vp)
+            .into_iter()
+            .filter(|(id, _)| card_of(*id).is_some_and(|(r, _)| r == row || r + 1 == row));
+        g.set_nodes(nodes);
+        g.focus(card_node(row, col));
+        g.navigate(dir)
     }
 
     /// Focus moved to a card.
