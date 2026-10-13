@@ -118,6 +118,15 @@ dirty frame against the `Renderer`; nothing is re-shaped or re-rasterized:
   (spec 6.5), so the backdrop costs one full-screen pass.
 - Images that are fully opaque are uploaded as `AlphaType::Opaque`, so Skia
   draws them without blending.
+- Text origins are snapped to whole device pixels. Skia reuses a blob's
+  cached glyph runs only for whole-pixel moves, so fractional motion
+  (scrolling, the bench sway) rebuilt every title every frame; snapping
+  halved recording time (profiled with perf).
+- Poster corners are cut into the texture at upload (spec 6.5), so cards
+  are plain image draws, which Skia batches, instead of one rounded-rect
+  image-shader draw each.
+- No clear when an opaque backdrop covers the screen; the crossfade draws
+  the outgoing backdrop at full opacity under the incoming one.
 - Rounded artwork is one draw (image shader on a rounded rect), not a
   clip plus image.
 - Cards outside the viewport are skipped (row virtualization).
@@ -143,8 +152,10 @@ still checks the scene's frames.
 | Machine | Output | CPU p50/p99 ms | GPU p50/p99 ms | Missed vsyncs | Result |
 |---|---|---|---|---|---|
 | CI container, Mesa llvmpipe (software) | 1280×720 | 8.7 / 14.3 | 0.1 / 25.1 | 0 | Not meaningful: software rasterizer runs GPU work on the CPU |
-| Reference HTPC (GPU _to fill in_), first M2 build | 3840×2160 @ 60 | 10.7 / 14.0 | 16.1 / 17.4 | 1465 of 2135 frames (locked at 30 fps) | **Fail** |
-| Reference HTPC, after the fill-rate fixes below | 3840×2160 @ 60 | _to record_ | _to record_ | _to record_ | _pending_ |
+| HTPC, Intel HD 530 (SKL GT2), first M2 build | 3840×2160 @ 60 | 10.7 / 14.0 | 16.1 / 17.4 | 1465 of 2135 (locked at 30 fps) | **Fail** |
+| HD 530, fill-rate fixes (`7fdb778`) | 3840×2160 @ 60 | 6.6 / 10.8 (record 4.7, submit 1.9) | 10.9 / 11.2 | 0 (steady 60 fps) | Fail (budgets) |
+| HD 530, same, `ui_render_scale = 0.75` | 3840×2160 @ 60 | 6.5 / 7.4 (record 4.7, submit 1.8) | 6.3 / 7.1 | 0 | Fail (budgets, marginal) |
+| HD 530, text snapping + baked corners + no clear | 3840×2160 @ 60 | _to record_ | _to record_ | _to record_ | _pending_ |
 
 First hardware run analysis: GPU-bound on fill rate. The scene blended
 roughly 31M pixels per 4K frame (backdrop, two near-full-screen scrim
@@ -157,6 +168,15 @@ rendering at 4K the frame time dropped about 20%. The CPU number is now
 split into `record` (building draw commands) and `submit` (Skia flush and
 GL submission); a high `submit` while GPU-bound is the driver making the CPU
 wait, not CPU work.
+
+Second hardware run: steady 60 fps at full 4K, but GPU 10.9 ms and
+recording 4.7 ms. A perf profile (same scene, this container) showed text
+blob regeneration as over half of recording, fixed by pixel snapping
+(above). The benchmark window now also starts only after the initial
+artwork uploads finish, so upload frames no longer show up as steady-state
+spikes. The HD 530 is a 2015 GT2 iGPU; if full-resolution 4K stays above
+the 6 ms GPU budget, `ui_render_scale = 0.75` is the intended setting for
+it (spec 6.4).
 
 ## Dependency approvals
 

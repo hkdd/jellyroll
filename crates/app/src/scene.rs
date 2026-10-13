@@ -134,6 +134,7 @@ impl Scene {
                 let c = i - BACKDROPS;
                 let (w, h) = ((CARD_W * scale).round() as u32, (CARD_H * scale).round() as u32);
                 posters::poster(c, w, h, &mut self.pixels);
+                posters::round_corners(&mut self.pixels, w, h, CARD_RADIUS * scale);
                 self.posters[c] = r.create_image(w, h, &self.pixels);
             }
             self.pending += 1;
@@ -213,19 +214,25 @@ impl Scene {
         let (lw, lh) = r.logical_size();
         let screen = Rect::new(0.0, 0.0, lw, lh);
         let (sx, sy) = (lw * safe_area, lh * safe_area);
-        r.clear(BG);
-
-        // Backdrop crossfade. The legibility scrims are baked into the
-        // backdrop textures, so this is one full-screen pass (two while
-        // fading).
+        // Backdrop crossfade: the outgoing backdrop at full opacity under the
+        // incoming one. Backdrops are opaque and cover the screen, so no
+        // clear is needed once one is loaded (saves a full-screen pass).
+        // The legibility scrims are baked into the textures.
         let fade = self.fade.value(now);
-        if fade < 1.0
-            && let Some(img) = self.backdrops[self.prev_backdrop]
-        {
-            r.image(img, screen, 0.0, 1.0 - fade);
-        }
-        if let Some(img) = self.backdrops[self.backdrop] {
-            r.image(img, screen, 0.0, fade);
+        let prev = if fade < 1.0 { self.backdrops[self.prev_backdrop] } else { None };
+        let cur = self.backdrops[self.backdrop];
+        match (prev, cur) {
+            (Some(p), Some(c)) => {
+                r.image(p, screen, 0.0, 1.0);
+                r.image(c, screen, 0.0, fade);
+            }
+            (None, Some(c)) if fade >= 1.0 => r.image(c, screen, 0.0, 1.0),
+            _ => {
+                r.clear(BG);
+                if let Some(c) = cur {
+                    r.image(c, screen, 0.0, fade);
+                }
+            }
         }
 
         r.text("Jellyroll", &TextStyle::new(44.0, Weight::Bold), Point::new(sx, sy), TEXT);
@@ -266,7 +273,8 @@ impl Scene {
                 );
                 r.shadow(card, CARD_RADIUS, 14.0, Color::rgba(0, 0, 0, 150));
                 match self.posters[i] {
-                    Some(img) => r.image(img, card, CARD_RADIUS, 1.0),
+                    // Corners are baked into the texture: a plain image draw.
+                    Some(img) => r.image(img, card, 0.0, 1.0),
                     None => r.fill_rrect(card, CARD_RADIUS, posters::placeholder(i)),
                 }
                 let focus = (s - 1.0) / FOCUS_SCALE;
@@ -280,7 +288,10 @@ impl Scene {
                 }
                 let title = TITLES[(i * 7 + row) % TITLES.len()];
                 let color = if i == self.focus { TEXT } else { TEXT_DIM };
-                r.text(title, &title_style, Point::new(base.x, base.bottom() + TITLE_GAP), color);
+                // The title slides down with the focused card's growth and
+                // border so they never overlap.
+                let ty = card.bottom().max(base.bottom()) + 3.0 * focus.max(0.0) + TITLE_GAP;
+                r.text(title, &title_style, Point::new(base.x, ty), color);
             }
         }
 

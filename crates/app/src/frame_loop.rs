@@ -18,7 +18,8 @@ use crate::perf::{FrameStats, is_missed_vsync, ms};
 use crate::scene::{Scene, UPLOAD_BUDGET};
 use crate::systemd::Systemd;
 
-/// Frames before steady state (allocation checks and benchmark windows).
+/// Minimum time before steady state (allocation checks and benchmark
+/// windows). Steady state also waits for initial artwork uploads to finish.
 const WARMUP: Duration = Duration::from_secs(1);
 /// Upper bound on a single wait so a lost wakeup cannot stall us forever.
 const MAX_WAIT: Duration = Duration::from_secs(10);
@@ -90,9 +91,11 @@ pub fn run<P: Platform, R: Renderer>(
     let mut header = String::new();
     make_header(fb, refresh_hz, &mut header);
 
-    let bench_end = opts.bench.map(|b| match b {
-        Bench::Pacing(d) | Bench::Idle(d) => start + WARMUP + d,
+    let bench_len = opts.bench.map(|b| match b {
+        Bench::Pacing(d) | Bench::Idle(d) => d,
     });
+    // Until steady state the loop must still wake up to notice it.
+    let mut bench_end = bench_len.map(|_| start + WARMUP);
     if let Some(Bench::Pacing(_)) = opts.bench {
         scene.bench = true;
     }
@@ -129,13 +132,15 @@ pub fn run<P: Platform, R: Renderer>(
             hud.refresh(now, &stats, &r.stats(), p.info(), refresh_hz, fb);
             dirty = true;
         }
-        if !bench_reset_done && now >= start + WARMUP {
+        if !bench_reset_done && now >= start + WARMUP && !scene.uploads_pending() {
             bench_reset_done = true;
+            bench_end = bench_len.map(|d| now + d);
             stats.reset();
             idle_cpu_at_warmup = crate::perf::process_cpu_time();
             frames_at_warmup = 0;
         }
         if let Some(end) = bench_end
+            && bench_reset_done
             && now >= end
         {
             return finish_bench(opts, &stats, idle_cpu_at_warmup, frames_at_warmup, p, r);

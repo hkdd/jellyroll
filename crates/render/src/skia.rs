@@ -446,7 +446,19 @@ impl Renderer for SkiaRenderer {
         let e = self.shaped(text, style);
         let (blob, metrics) = (e.blob.clone(), e.metrics);
         if let Some(blob) = blob {
-            self.canvas().draw_text_blob(&blob, (origin.x, origin.y), &paint(c));
+            // Snap the text origin to whole device pixels. Skia reuses a
+            // blob's cached glyph runs only when it moves by whole pixels;
+            // fractional motion (scrolling, sway) would rebuild every
+            // title every frame. Snapping also keeps moving text crisp.
+            let canvas = self.canvas();
+            let m = canvas.local_to_device_as_3x3();
+            let p = m.map_point((origin.x, origin.y));
+            let mut linear = m;
+            linear.set_translate((p.x.round(), p.y.round()));
+            canvas.save();
+            canvas.set_matrix(&sk::M44::from(linear));
+            canvas.draw_text_blob(&blob, (0.0, 0.0), &paint(c));
+            canvas.restore();
         }
         metrics
     }

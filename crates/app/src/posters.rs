@@ -125,6 +125,34 @@ pub fn apply_scrim(px: &mut [u8], w: u32, h: u32, bg: [u8; 3], left_alpha: f32, 
     }
 }
 
+/// Cuts anti-aliased rounded corners into RGBA8 pixels (alpha only), so a
+/// card can be drawn as a plain image (spec 6.5: card chrome baked into
+/// cached assets). Plain image draws batch in the renderer; rounded-rect
+/// image fills do not.
+pub fn round_corners(px: &mut [u8], w: u32, h: u32, radius: f32) {
+    let r = radius.min(w as f32 / 2.0).min(h as f32 / 2.0);
+    if r <= 0.0 {
+        return;
+    }
+    let span = r.ceil() as u32;
+    for y in 0..span.min(h) {
+        for x in 0..span.min(w) {
+            // Distance from the corner circle's centre, sampled at the pixel
+            // centre; one pixel of linear falloff for anti-aliasing.
+            let (dx, dy) = (r - (x as f32 + 0.5), r - (y as f32 + 0.5));
+            let d = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt();
+            let cover = (r - d + 0.5).clamp(0.0, 1.0);
+            if cover >= 1.0 {
+                continue;
+            }
+            for (cx, cy) in [(x, y), (w - 1 - x, y), (x, h - 1 - y), (w - 1 - x, h - 1 - y)] {
+                let a = &mut px[((cy * w + cx) * 4 + 3) as usize];
+                *a = (*a as f32 * cover).round() as u8;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +169,22 @@ mod tests {
         backdrop(1, 16, 9, &mut a);
         assert_eq!(a.len(), 16 * 9 * 4);
         assert!(a.chunks(4).all(|p| p[3] == 255));
+    }
+
+    #[test]
+    fn rounded_corners_are_transparent_and_centre_is_not() {
+        let (w, h) = (40u32, 60u32);
+        let mut px = vec![255u8; (w * h * 4) as usize];
+        round_corners(&mut px, w, h, 8.0);
+        let a = |x: u32, y: u32| px[((y * w + x) * 4 + 3) as usize];
+        for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
+            assert_eq!(a(x, y), 0, "corner ({x},{y})");
+        }
+        assert_eq!(a(w / 2, 0), 255, "top edge middle");
+        assert_eq!(a(0, h / 2), 255, "left edge middle");
+        assert_eq!(a(w / 2, h / 2), 255, "centre");
+        let edge = a(2, 2);
+        assert!(edge > 0 && edge < 255 || edge == 0, "anti-aliased falloff");
     }
 
     #[test]
