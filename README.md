@@ -16,7 +16,7 @@ and verified versions.
 | **M1** Skeleton: SDL3 KMSDRM, GL context, vsync loop, dirty redraw, perf HUD, systemd unit, dev mode | **Done.** Ran on the HTPC: boots to the test screen on a text console, input works, idle CPU near zero. Pacing numbers not yet recorded |
 | **M2** Renderer trait + Skia: rects, rounded rects, gradients, text (incl. CJK), images, animation clock | **Done.** On the HTPC (Intel HD 530, 4K): steady 60 fps, 0 missed vsyncs; Skia kept. The spec's p99 budgets are not met on this GPU at native 4K (GPU ~8 ms, CPU ~3.3 ms p50); see `docs/DECISIONS.md` |
 | **M3** libmpv playback: hwdec, GL handoff with the overlay, audio | **Done.** On the HTPC: 4K H.264 and HEVC 8-bit via VA-API at ~11-12% CPU with 0 dropped frames; HEVC 10-bit (unsupported on this GPU) is flagged, never silently degraded. See `docs/DECISIONS.md` |
-| **M4** Input: keyboard, gamepad, HDMI-CEC; spatial focus graph; key repeat | **Built**, awaiting hardware validation ([`docs/M4-HARDWARE-CHECKLIST.md`](docs/M4-HARDWARE-CHECKLIST.md)). Gamepad tested end to end with an SDL virtual pad; CEC protocol handling unit-tested |
+| **M4** Input: keyboard, gamepad, HDMI-CEC; spatial focus graph; key repeat | **Done.** Keyboard verified on the HTPC; gamepad tested end to end with an SDL virtual pad. CEC is built and unit-tested, but the HTPC's DisplayPort-to-HDMI adapter doesn't carry CEC, so the TV remote waits for an adapter that does (`docs/DECISIONS.md` D29) |
 | M5 to M10 | Not started |
 
 The app currently shows the M2 render benchmark: a home-screen-like layout

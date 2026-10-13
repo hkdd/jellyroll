@@ -348,6 +348,21 @@ separate Play and Pause keys, but the M4 action set has only `PlayPause`,
 so pressing Play while playing pauses. M7 (player UX) adds explicit play
 and pause actions.
 
+**D29: M4 accepted with HDMI-CEC unverified on hardware.** Decided (2026-10-13): the HTPC's DisplayPort-to-HDMI link does not carry
+CEC (below), so CEC control waits for hardware: a Pulse-Eight USB-CEC
+adapter (inline, keeps the current video path) or a DP-to-HDMI adapter the
+kernel's CEC guide lists as working. jellyroll now warns in the log when
+it has a physical address but can't claim a logical one after 10 s, which
+is what a dead CEC line looks like.
+
+### M4 results on the HTPC (2026-10-13)
+
+| Source | Result |
+|---|---|
+| Keyboard (console, KMSDRM) | **Pass.** Spatial moves, hold-to-repeat, Select (card title, nav pill) and Esc with `--allow-exit`. Row focus memory tried and removed (D27) |
+| Gamepad | Not tested on hardware (no pad on the HTPC). The SDL path passes end to end with an SDL virtual gamepad in CI |
+| HDMI-CEC | **Hardware can't do it.** `/dev/cec0` comes from i915 DP CEC tunneling on DP-1 (physical address 1.0.0.0, the TV's input 1), and jellyroll opens it. But the adapter never wins a logical address and `cec-ctl -S` shows an empty topology: nothing answers on the line, not even the TV (LG OLED G3, SIMPLINK on). The DP-to-HDMI adapter reports CEC tunneling but doesn't carry the CEC wire, a failure the kernel's CEC admin guide describes as common |
+
 ## Dependency approvals
 
 | Crate | Status |

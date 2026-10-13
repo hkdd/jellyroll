@@ -438,6 +438,10 @@ fn addresses(f: &File) -> (Option<u8>, Option<u16>) {
     (la_ok.then_some(la.log_addr[0]), (pa != CEC_PHYS_ADDR_INVALID).then_some(pa))
 }
 
+/// How long to wait for a logical address before warning that the CEC
+/// line seems dead.
+const SILENT_WARN_AFTER: Duration = Duration::from_secs(10);
+
 fn run(
     file: File,
     caps: u32,
@@ -450,6 +454,7 @@ fn run(
     let mut h = Handler::default();
     let mut announced = false;
     let mut out = Vec::new();
+    let mut silent_warn_at = Some(Instant::now() + SILENT_WARN_AFTER);
     while !stop.load(Ordering::Relaxed) {
         // Announce once both addresses are known (the TV may supply the
         // physical address only after it is switched on).
@@ -467,6 +472,22 @@ fn run(
             h.active = true;
             transmit(&file, &h.active_source());
             announced = true;
+            silent_warn_at = None;
+        }
+        // Connected (physical address known) but no logical address: the
+        // kernel's address polls get no valid response, i.e. the CEC wire
+        // is not connected end to end. Typical with DisplayPort-to-HDMI
+        // adapters that report CEC tunneling but don't wire the CEC pin.
+        if silent_warn_at.is_some_and(|t| Instant::now() >= t) {
+            silent_warn_at = None;
+            if let (None, Some(pa)) = addresses(&file) {
+                tracing::warn!(
+                    physical = %fmt_physical_address(pa),
+                    "HDMI-CEC: could not claim an address; nothing answers on the CEC \
+                     line. Check that CEC is on in the TV's settings; a DisplayPort-to-HDMI \
+                     adapter may not carry CEC (see README)"
+                );
+            }
         }
 
         let mut pfd = PollFd { fd: file.as_raw_fd(), events: POLLIN | POLLPRI, revents: 0 };
@@ -514,7 +535,7 @@ mod tests {
 
     #[test]
     fn abi_sizes_match_linux_cec_h() {
-        // Values printed from linux/cec.h with gcc (docs/DECISIONS.md D25).
+        // Values printed from linux/cec.h with gcc (docs/DECISIONS.md D26).
         assert_eq!(size_of::<CecMsg>(), 0x38);
         assert_eq!(size_of::<CecLogAddrs>(), 0x5c);
         assert_eq!(size_of::<CecCaps>(), 0x4c);
