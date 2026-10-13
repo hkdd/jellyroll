@@ -473,6 +473,35 @@ a dead end. Now the first screen is "Connect to your Jellyfin server":
 - The config file's `[server] url` still wins when set, for unattended
   installs.
 
+**D38: Startup order.** Measured on the HTPC with the M5 build: first
+frame at 843 ms (budget 500). Breakdown: ~235 ms opening all 18
+`/dev/input` devices for the access check (opening can wake a device
+from USB autosuspend), 181–194 ms SDL KMSDRM video init, ~100 ms GL
+context, 234 ms gamepad subsystem, 0–13 ms CEC setup. Fixes: the access
+check stops at the first readable device (14 ms), and gamepads and CEC
+start right after the first frame (`Platform::start_input_devices`;
+pads already connected arrive as hotplug events). Result in the M5
+results below.
+
+### M5 results on the HTPC (2026-10-13)
+
+Server: Jellyfin **12.2.0** on a public domain (HTTPS with a
+public certificate, system roots, no extra config).
+
+| Check | Result |
+|---|---|
+| Server screen → address typed on the keyboard → Quick Connect (code entered at `/web/#/quickconnect`) | **Pass** |
+| Real home screen: rows, artwork, backdrops, navigation | **Pass.** |
+| Stale-while-revalidate: second start shows the cached home, no sign-in | **Pass.** Cached home ready at 345 ms, before the first frame |
+| First frame (budget < 500 ms) | **393 ms** (was 843: input check 14 ms, SDL video 194 ms, GL 105 ms) |
+| Start to interactive home, cached (budget < 1.5 s) | **≈ 0.4 s** |
+| Start to home, fresh fetch on first run (budget < 2.5 s) | Not timed precisely; "a second or two" including Quick Connect approval |
+
+Note: the jellyfin-web Quick Connect page is in the user menu (avatar,
+top right), not in the profile or settings pages, and only appears while
+Quick Connect is enabled. The sign-in screen now points to the direct
+URL.
+
 **D36: TLS and the mock server.**
 - reqwest 0.13's `rustls` feature: aws-lc-rs crypto, and system trust via
   rustls-platform-verifier. `[server] ca_file` adds a PEM CA or a

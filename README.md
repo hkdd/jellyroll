@@ -17,7 +17,7 @@ and verified versions.
 | **M2** Renderer trait + Skia: rects, rounded rects, gradients, text (incl. CJK), images, animation clock | **Done.** On the HTPC (Intel HD 530, 4K): steady 60 fps, 0 missed vsyncs; Skia kept. The spec's p99 budgets are not met on this GPU at native 4K (GPU ~8 ms, CPU ~3.3 ms p50); see `docs/DECISIONS.md` |
 | **M3** libmpv playback: hwdec, GL handoff with the overlay, audio | **Done.** On the HTPC: 4K H.264 and HEVC 8-bit via VA-API at ~11-12% CPU with 0 dropped frames; HEVC 10-bit (unsupported on this GPU) is flagged, never silently degraded. See `docs/DECISIONS.md` |
 | **M4** Input: keyboard, gamepad, HDMI-CEC; spatial focus graph; key repeat | **Done.** Keyboard verified on the HTPC; gamepad tested end to end with an SDL virtual pad. CEC is built and unit-tested, but the HTPC's DisplayPort-to-HDMI adapter doesn't carry CEC, so the TV remote waits for an adapter that does (`docs/DECISIONS.md` D29) |
-| **M5** Jellyfin client: discovery, Quick Connect, auth, home data, images with caching; mock server | **Built**, awaiting a run against your server ([`docs/M5-HARDWARE-CHECKLIST.md`](docs/M5-HARDWARE-CHECKLIST.md)). Tested end to end against the mock server |
+| **M5** Jellyfin client: discovery, Quick Connect, auth, home data, images with caching; mock server | **Done.** On the HTPC against a Jellyfin 12.2 server: real home screen, cached start in ~0.4 s, first frame 393 ms. See `docs/DECISIONS.md` |
 | M6 to M10 | Not started |
 
 The app connects to your Jellyfin server and shows its home screen: My
@@ -210,9 +210,10 @@ devices and their addresses. Settings: `cec`, `cec_wake_tv` and
    press Back on a connection-problem or sign-in screen to choose another.
    (`[server] url` in the config, if set, always wins.) Servers 10.10.0
    and newer are supported.
-2. **Sign in:** a 6-digit Quick Connect code appears on the TV. In the
-   Jellyfin app on a phone or computer, open your profile, choose **Quick
-   Connect** and enter the code. Quick Connect must be turned on in the
+2. **Sign in:** a 6-digit Quick Connect code appears on the TV. In
+   Jellyfin's web app on a phone or computer, open the menu under your
+   profile picture (top right) and choose **Quick Connect** (or go to
+   `https://YOUR-SERVER/web/#/quickconnect`), then enter the code. Quick Connect must be turned on in the
    server's Dashboard (General). Username/password sign-in arrives with
    the on-screen keyboard in M6.
 3. **Remembered:** the access token (never your password) is kept in

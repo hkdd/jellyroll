@@ -448,7 +448,12 @@ async fn quick_connect(
             wait!(None);
             continue;
         };
-        out.status(Status::QuickConnect { server: server.into(), code }).await;
+        out.status(Status::QuickConnect {
+            server: server.into(),
+            url: client.base_url().into(),
+            code,
+        })
+        .await;
         loop {
             if let Some(Ctl::Retry) = wait!(Some(QUICK_CONNECT_POLL)) {
                 break; // new code

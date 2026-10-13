@@ -69,6 +69,8 @@ pub enum Status {
     /// Signing in with Quick Connect: show `code`.
     QuickConnect {
         server: String,
+        /// Server base URL, to show where the code is entered.
+        url: String,
         code: String,
     },
     /// Something needs the user: a title, an explanation, and whether

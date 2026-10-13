@@ -50,11 +50,15 @@ impl StatusView {
             Status::Connecting { server } => {
                 (format!("Connecting to {server}…"), String::new(), None, "")
             }
-            Status::QuickConnect { server, code } => (
+            Status::QuickConnect { server, url, code } => (
                 format!("Sign in to {server}"),
-                "On a phone or computer that is signed in to Jellyfin, open your profile, \
-                 choose Quick Connect, and enter this code."
-                    .to_string(),
+                // jellyfin-web: user menu (profile picture, top right) →
+                // Quick Connect, route #/quickconnect.
+                format!(
+                    "In Jellyfin on a phone or computer, open the menu under your profile \
+                     picture (top right) and choose Quick Connect, or go to \
+                     {url}/web/#/quickconnect, then enter this code."
+                ),
                 Some(
                     code.chars().flat_map(|c| [c, ' ']).collect::<String>().trim_end().to_string(),
                 ),

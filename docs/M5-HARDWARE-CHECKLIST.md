@@ -27,8 +27,9 @@ copy them from the desktop with `cat FILE | tee >(wl-copy)`.
      (arrow down to it, Enter) to see whether discovery finds it.
    - A wrong address comes back to this screen with the reason.
    - Then a 6-digit code.
-   - In the Jellyfin app on your phone or computer: profile → Quick
-     Connect → enter the code. Within ~3 s the TV shows your home screen.
+   - In Jellyfin's web app: the menu under your profile picture (top
+     right) → Quick Connect, or `https://SERVER/web/#/quickconnect` → enter
+     the code. Within ~3 s the TV shows your home screen.
    - Check: your libraries (My Media), Continue Watching with progress
      bars, Next Up, Latest per library, Favorites. Posters fade in from
      blurred placeholders; the focused item's backdrop fills the top.
