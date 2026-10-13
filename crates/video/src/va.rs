@@ -138,7 +138,9 @@ pub fn probe() -> Result<DecodeCaps, String> {
 }
 
 fn probe_node(node: &std::path::Path) -> Result<DecodeCaps, String> {
-    let file = std::fs::File::open(node).map_err(|e| e.to_string())?;
+    // Read-write, as for decoding (see PlayerOptions::render_node).
+    let file =
+        std::fs::OpenOptions::new().read(true).write(true).open(node).map_err(|e| e.to_string())?;
     // SAFETY: `file` is an open DRM render node and outlives the display
     // (terminated below before it is closed).
     let dpy = unsafe { vaGetDisplayDRM(file.as_raw_fd()) };

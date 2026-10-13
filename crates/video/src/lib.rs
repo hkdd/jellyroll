@@ -266,7 +266,11 @@ impl Player {
         });
         let loader = Box::new(ProcLoader(Box::new(load)));
         let render_node = match &opts.render_node {
-            Some(path) => match std::fs::File::open(path) {
+            // Read-write: VA-API allocates surfaces and decode contexts
+            // through this fd (a read-only fd can query but not allocate:
+            // "Failed to create decode context: 2 (resource allocation
+            // failed)" on the HTPC).
+            Some(path) => match std::fs::OpenOptions::new().read(true).write(true).open(path) {
                 Ok(f) => Some(f),
                 Err(e) => {
                     tracing::warn!("cannot open {} for VA-API interop: {e}", path.display());
