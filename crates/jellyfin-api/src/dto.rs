@@ -161,6 +161,10 @@ pub struct BaseItemDto {
     pub has_subtitles: Option<bool>,
     #[serde(rename = "Container", skip_serializing_if = "Option::is_none")]
     pub container: Option<String>,
+    #[serde(rename = "Chapters", skip_serializing_if = "Option::is_none")]
+    pub chapters: Option<Vec<ChapterInfo>>,
+    #[serde(rename = "Trickplay", skip_serializing_if = "Option::is_none")]
+    pub trickplay: Option<HashMap<String, Option<HashMap<String, TrickplayInfoDto>>>>,
 }
 
 /// This is used by the api to get information about a Person within a BaseItem.
@@ -215,6 +219,117 @@ pub struct MediaStream {
     pub is_external: Option<bool>,
     #[serde(rename = "Index", skip_serializing_if = "Option::is_none")]
     pub index: Option<i32>,
+    #[serde(rename = "IsForced", skip_serializing_if = "Option::is_none")]
+    pub is_forced: Option<bool>,
+    #[serde(rename = "IsHearingImpaired", skip_serializing_if = "Option::is_none")]
+    pub is_hearing_impaired: Option<bool>,
+    #[serde(rename = "DeliveryMethod", skip_serializing_if = "Option::is_none")]
+    pub delivery_method: Option<SubtitleDeliveryMethod>,
+    #[serde(rename = "DeliveryUrl", skip_serializing_if = "Option::is_none")]
+    pub delivery_url: Option<String>,
+    #[serde(rename = "IsTextSubtitleStream", skip_serializing_if = "Option::is_none")]
+    pub is_text_subtitle_stream: Option<bool>,
+    #[serde(rename = "SupportsExternalStream", skip_serializing_if = "Option::is_none")]
+    pub supports_external_stream: Option<bool>,
+}
+
+/// Class ChapterInfo.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChapterInfo {
+    #[serde(rename = "StartPositionTicks", skip_serializing_if = "Option::is_none")]
+    pub start_position_ticks: Option<i64>,
+    #[serde(rename = "Name", skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// The trickplay api model.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrickplayInfoDto {
+    #[serde(rename = "Width", skip_serializing_if = "Option::is_none")]
+    pub width: Option<i32>,
+    #[serde(rename = "Height", skip_serializing_if = "Option::is_none")]
+    pub height: Option<i32>,
+    #[serde(rename = "TileWidth", skip_serializing_if = "Option::is_none")]
+    pub tile_width: Option<i32>,
+    #[serde(rename = "TileHeight", skip_serializing_if = "Option::is_none")]
+    pub tile_height: Option<i32>,
+    #[serde(rename = "ThumbnailCount", skip_serializing_if = "Option::is_none")]
+    pub thumbnail_count: Option<i32>,
+    #[serde(rename = "Interval", skip_serializing_if = "Option::is_none")]
+    pub interval: Option<i32>,
+    #[serde(rename = "Bandwidth", skip_serializing_if = "Option::is_none")]
+    pub bandwidth: Option<i32>,
+}
+
+/// Class PlaybackInfoResponse.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlaybackInfoResponse {
+    #[serde(rename = "MediaSources", skip_serializing_if = "Option::is_none")]
+    pub media_sources: Option<Vec<MediaSourceInfo>>,
+    #[serde(rename = "PlaySessionId", skip_serializing_if = "Option::is_none")]
+    pub play_session_id: Option<String>,
+    #[serde(rename = "ErrorCode", skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<PlaybackErrorCode>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MediaSourceInfo {
+    #[serde(rename = "Id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(rename = "Protocol", skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<MediaProtocol>,
+    #[serde(rename = "Container", skip_serializing_if = "Option::is_none")]
+    pub container: Option<String>,
+    #[serde(rename = "Size", skip_serializing_if = "Option::is_none")]
+    pub size: Option<i64>,
+    #[serde(rename = "Bitrate", skip_serializing_if = "Option::is_none")]
+    pub bitrate: Option<i32>,
+    #[serde(rename = "RunTimeTicks", skip_serializing_if = "Option::is_none")]
+    pub run_time_ticks: Option<i64>,
+    #[serde(rename = "SupportsDirectPlay", skip_serializing_if = "Option::is_none")]
+    pub supports_direct_play: Option<bool>,
+    #[serde(rename = "SupportsDirectStream", skip_serializing_if = "Option::is_none")]
+    pub supports_direct_stream: Option<bool>,
+    #[serde(rename = "SupportsTranscoding", skip_serializing_if = "Option::is_none")]
+    pub supports_transcoding: Option<bool>,
+    #[serde(rename = "TranscodingUrl", skip_serializing_if = "Option::is_none")]
+    pub transcoding_url: Option<String>,
+    #[serde(rename = "MediaStreams", skip_serializing_if = "Option::is_none")]
+    pub media_streams: Option<Vec<MediaStream>>,
+    #[serde(rename = "DefaultAudioStreamIndex", skip_serializing_if = "Option::is_none")]
+    pub default_audio_stream_index: Option<i32>,
+    #[serde(rename = "DefaultSubtitleStreamIndex", skip_serializing_if = "Option::is_none")]
+    pub default_subtitle_stream_index: Option<i32>,
+}
+
+/// Api model for MediaSegment's.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MediaSegmentDto {
+    #[serde(rename = "Id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(rename = "ItemId", skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<String>,
+    #[serde(rename = "Type", skip_serializing_if = "Option::is_none")]
+    pub r#type: Option<MediaSegmentType>,
+    #[serde(rename = "StartTicks", skip_serializing_if = "Option::is_none")]
+    pub start_ticks: Option<i64>,
+    #[serde(rename = "EndTicks", skip_serializing_if = "Option::is_none")]
+    pub end_ticks: Option<i64>,
+}
+
+/// Query result container.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MediaSegmentDtoQueryResult {
+    #[serde(rename = "Items", skip_serializing_if = "Option::is_none")]
+    pub items: Option<Vec<MediaSegmentDto>>,
+    #[serde(rename = "TotalRecordCount", skip_serializing_if = "Option::is_none")]
+    pub total_record_count: Option<i32>,
 }
 
 /// Gets or sets the blurhashes for the image tags.
@@ -383,6 +498,49 @@ pub enum CollectionType {
     Unrecognized,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MediaProtocol {
+    #[serde(rename = "File")]
+    File,
+    #[serde(rename = "Http")]
+    Http,
+    #[serde(rename = "Rtmp")]
+    Rtmp,
+    #[serde(rename = "Rtsp")]
+    Rtsp,
+    #[serde(rename = "Udp")]
+    Udp,
+    #[serde(rename = "Rtp")]
+    Rtp,
+    #[serde(rename = "Ftp")]
+    Ftp,
+    /// A value this build doesn't know (newer server).
+    #[default]
+    #[serde(other)]
+    Unrecognized,
+}
+
+/// Defines the types of content an individual Jellyfin.Database.Implementations.Entities.MediaSegment represents.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MediaSegmentType {
+    #[serde(rename = "Unknown")]
+    Unknown,
+    #[serde(rename = "Commercial")]
+    Commercial,
+    #[serde(rename = "Preview")]
+    Preview,
+    #[serde(rename = "Recap")]
+    Recap,
+    #[serde(rename = "Outro")]
+    Outro,
+    #[serde(rename = "Intro")]
+    Intro,
+    /// A value this build doesn't know (newer server).
+    #[default]
+    #[serde(other)]
+    Unrecognized,
+}
+
 /// Enum MediaStreamType.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MediaStreamType {
@@ -478,6 +636,40 @@ pub enum PersonKind {
     Translator,
     #[serde(rename = "Narrator")]
     Narrator,
+    /// A value this build doesn't know (newer server).
+    #[default]
+    #[serde(other)]
+    Unrecognized,
+}
+
+/// The playback error code.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PlaybackErrorCode {
+    #[serde(rename = "NotAllowed")]
+    NotAllowed,
+    #[serde(rename = "NoCompatibleStream")]
+    NoCompatibleStream,
+    #[serde(rename = "RateLimitExceeded")]
+    RateLimitExceeded,
+    /// A value this build doesn't know (newer server).
+    #[default]
+    #[serde(other)]
+    Unrecognized,
+}
+
+/// Delivery method to use during playback of a specific subtitle format.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SubtitleDeliveryMethod {
+    #[serde(rename = "Encode")]
+    Encode,
+    #[serde(rename = "Embed")]
+    Embed,
+    #[serde(rename = "External")]
+    External,
+    #[serde(rename = "Hls")]
+    Hls,
+    #[serde(rename = "Drop")]
+    Drop,
     /// A value this build doesn't know (newer server).
     #[default]
     #[serde(other)]

@@ -32,11 +32,11 @@ pub struct Request<T> {
 }
 
 impl<T> Request<T> {
-    fn new(method: Method, path: String) -> Self {
+    pub(crate) fn new(method: Method, path: String) -> Self {
         Self { method, path, body: None, _response: PhantomData }
     }
 
-    fn json(mut self, body: serde_json::Value) -> Self {
+    pub(crate) fn json(mut self, body: serde_json::Value) -> Self {
         self.body = Some(body.to_string());
         self
     }
@@ -243,6 +243,21 @@ pub fn episodes(
     let q = Query::new(&show_path(series_id, "Episodes"))
         .param("userId", user_id)
         .param("seasonId", season_id)
+        .images();
+    Request::new(Method::Get, q.0)
+}
+
+/// The episode `start_item_id` and the one after it in series order
+/// (across seasons): what plays next.
+pub fn episodes_from(
+    user_id: &str,
+    series_id: &str,
+    start_item_id: &str,
+) -> Request<BaseItemDtoQueryResult> {
+    let q = Query::new(&show_path(series_id, "Episodes"))
+        .param("userId", user_id)
+        .param("startItemId", start_item_id)
+        .param("limit", 2)
         .images();
     Request::new(Method::Get, q.0)
 }

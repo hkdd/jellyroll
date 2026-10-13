@@ -10,6 +10,7 @@ pub mod discovery;
 #[rustfmt::skip]
 pub mod dto;
 pub mod endpoints;
+pub mod playback;
 
 pub use auth::ClientInfo;
 pub use client::{Client, Error, TlsOptions, normalize_server_url};
