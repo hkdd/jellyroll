@@ -72,6 +72,7 @@ struct Library {
     series: Vec<Item>,
     episodes: Vec<Item>,
     albums: Vec<Item>,
+    people: Vec<Item>,
 }
 
 const MOVIE_TITLES: [&str; 12] = [
@@ -89,6 +90,14 @@ const MOVIE_TITLES: [&str; 12] = [
     "Everything Everywhere All at Once",
 ];
 const SHOW_TITLES: [&str; 6] = ["Severance", "Andor", "Shōgun", "The Bear", "Dark", "Slow Horses"];
+const GENRES: [&str; 6] =
+    ["Drama", "Science Fiction", "Comedy", "Thriller", "Animation", "Documentary"];
+const PEOPLE: [(&str, &str); 4] = [
+    ("Amy Adams", "Louise Banks"),
+    ("Jeremy Renner", "Ian Donnelly"),
+    ("Forest Whitaker", "Colonel Weber"),
+    ("Denis Villeneuve", "Director"),
+];
 
 fn id(kind: u8, n: usize) -> String {
     format!("{kind:02x}{n:030x}")
@@ -168,6 +177,9 @@ impl Library {
                         "CommunityRating": 6.0 + (n % 30) as f64 / 10.0,
                         "RunTimeTicks": (85 + (n % 60) as i64) * 600_000_000,
                         "Overview": format!("Synthetic movie number {n} from the mock server."),
+                        "SortName": name.to_lowercase(),
+                        "Genres": [GENRES[n % GENRES.len()], GENRES[(n + 3) % GENRES.len()]],
+                        "DateCreated": format!("2024-01-01T00:00:{:02}Z", n % 60),
                         "PrimaryImageAspectRatio": 0.6667,
                         "ImageTags": tags, "ImageBlurHashes": hashes, "BackdropImageTags": [format!("b{n}")],
                         "UserData": { "Played": false, "PlaybackPositionTicks": 0, "PlayCount": 0, "IsFavorite": n % 7 == 0 },
@@ -228,10 +240,20 @@ impl Library {
                 }
             })
             .collect();
-        Self { views, movies, series, episodes, albums }
+        let people = PEOPLE
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _))| Item {
+                json: json!({ "Id": id(0x60, i), "Name": name, "Type": "Person" }),
+            })
+            .collect();
+        Self { views, movies, series, episodes, albums, people }
     }
 
     fn find(&self, id: &str) -> Option<&Item> {
+        if let Some(i) = self.people.iter().find(|i| i.json["Id"] == id) {
+            return Some(i);
+        }
         self.movies
             .iter()
             .chain(&self.series)
@@ -255,6 +277,36 @@ fn with_progress(item: &Item, pct: f64) -> Value {
     v["UserData"]["PlayedPercentage"] = json!(pct);
     v["UserData"]["PlaybackPositionTicks"] =
         json!(((v["RunTimeTicks"].as_i64().unwrap_or(0)) as f64 * pct / 100.0) as i64);
+    v
+}
+
+fn sort_name(j: &Value) -> String {
+    j["SortName"].as_str().or(j["Name"].as_str()).unwrap_or("").to_lowercase()
+}
+
+/// An item as `/Items/{id}` returns it: with cast and media streams.
+fn detail(item: &Value) -> Value {
+    let mut v = item.clone();
+    let n = item["Id"].as_str().map_or(0, |s| s.bytes().map(|b| b as usize).sum::<usize>());
+    let people: Vec<Value> = PEOPLE
+        .iter()
+        .enumerate()
+        .map(|(i, (name, role))| json!({ "Id": id(0x60, i), "Name": name, "Role": role, "Type": "Actor", "PrimaryImageTag": format!("p{i}") }))
+        .collect();
+    v["People"] = json!(people);
+    v["Taglines"] = json!(["Synthetic, but convincing."]);
+    v["MediaStreams"] = if n.is_multiple_of(2) {
+        json!([
+            { "Type": "Video", "Codec": "hevc", "BitDepth": 10, "Width": 3840, "Height": 2160, "VideoRangeType": "HDR10", "Index": 0 },
+            { "Type": "Audio", "Codec": "truehd", "Channels": 8, "IsDefault": true, "AudioSpatialFormat": "DolbyAtmos", "Index": 1 },
+            { "Type": "Subtitle", "Codec": "subrip", "Index": 2 }
+        ])
+    } else {
+        json!([
+            { "Type": "Video", "Codec": "h264", "BitDepth": 8, "Width": 1920, "Height": 1080, "VideoRangeType": "SDR", "Index": 0 },
+            { "Type": "Audio", "Codec": "eac3", "Channels": 6, "IsDefault": true, "Index": 1 }
+        ])
+    };
     v
 }
 
@@ -425,21 +477,116 @@ impl Server {
                     src.iter().rev().take(limit(16)).map(|i| i.json.clone()).collect(),
                 ))
             }
-            ("GET", "/Items") => {
-                let fav = req.query.get("isfavorite").is_some_and(|v| v == "true");
-                let v: Vec<Value> = lib
-                    .movies
-                    .iter()
-                    .chain(&lib.series)
-                    .filter(|i| !fav || i.json["UserData"]["IsFavorite"] == true)
-                    .take(limit(100))
-                    .map(|i| i.json.clone())
-                    .collect();
-                Response::json(query_result(v))
-            }
+            ("GET", "/Items") => self.items(req),
             ("GET", p) if p.starts_with("/Items/") && p.contains("/Images/") => self.image(req),
+            ("GET", p) if p.starts_with("/Items/") && p.ends_with("/Similar") => Response::json(
+                query_result(lib.movies.iter().take(12).map(|i| i.json.clone()).collect()),
+            ),
+            ("GET", p) if p.starts_with("/Items/") => {
+                let id = &p["/Items/".len()..];
+                match lib.find(id) {
+                    Some(i) => Response::json(detail(&i.json)),
+                    None => Response::status(404),
+                }
+            }
+            ("GET", p) if p.starts_with("/Shows/") && p.ends_with("/Seasons") => {
+                let series = p.trim_start_matches("/Shows/").trim_end_matches("/Seasons");
+                let seasons: Vec<Value> = (1..=2)
+                    .map(|n| json!({ "Id": format!("{series}s{n}"), "Name": format!("Season {n}"), "Type": "Season",
+                                     "SeriesId": series, "IndexNumber": n, "ImageTags": {} }))
+                    .collect();
+                Response::json(query_result(seasons))
+            }
+            ("GET", p) if p.starts_with("/Shows/") && p.ends_with("/Episodes") => {
+                let series = p.trim_start_matches("/Shows/").trim_end_matches("/Episodes");
+                let season1 = req.query.get("seasonid").is_some_and(|s| s.ends_with("s1"));
+                let eps: Vec<Value> = lib
+                    .episodes
+                    .iter()
+                    .filter(|e| season1 && e.json["SeriesId"] == series)
+                    .map(|e| e.json.clone())
+                    .collect();
+                Response::json(query_result(eps))
+            }
+            ("GET", "/Genres") => {
+                let g: Vec<Value> = GENRES.iter().map(|g| json!({ "Name": g, "Id": g })).collect();
+                Response::json(query_result(g))
+            }
+            ("GET", "/Users/Public") => {
+                Response::json(json!([{ "Name": "demo", "Id": USER_ID, "HasPassword": false }]))
+            }
+            ("POST" | "DELETE", p)
+                if p.starts_with("/UserFavoriteItems/") || p.starts_with("/UserPlayedItems/") =>
+            {
+                let on = req.method == "POST";
+                let fav = p.starts_with("/UserFavoriteItems/");
+                Response::json(
+                    json!({ "IsFavorite": fav && on, "Played": !fav && on, "PlaybackPositionTicks": 0, "PlayCount": 0, "Key": "", "ItemId": "" }),
+                )
+            }
+            ("POST", "/Sessions/Logout") => Response::status(204),
             _ => Response::status(404),
         }
+    }
+
+    /// `/Items`: library listings, search, favorites, alphabet index.
+    fn items(&self, req: &Request) -> Response {
+        let lib = &self.lib;
+        let q = |k: &str| req.query.get(k).map(String::as_str);
+        let src: Vec<&Item> = match q("parentid") {
+            Some(p) if p == lib.views[0]["Id"] => lib.movies.iter().collect(),
+            Some(p) if p == lib.views[1]["Id"] => lib.series.iter().collect(),
+            Some(p) if p == lib.views[2]["Id"] => lib.albums.iter().collect(),
+            Some(_) => Vec::new(),
+            None => lib.movies.iter().chain(&lib.series).chain(&lib.episodes).collect(),
+        };
+        let types: Vec<&str> =
+            q("includeitemtypes").map(|t| t.split(',').collect()).unwrap_or_default();
+        let filters = q("filters").unwrap_or("");
+        let fav = filters.contains("IsFavorite") || q("isfavorite") == Some("true");
+        let unplayed = filters.contains("IsUnplayed");
+        let term = q("searchterm").map(str::to_lowercase);
+        let genre = q("genres");
+        let before = q("namelessthan").map(str::to_lowercase);
+        let mut v: Vec<&Value> = src
+            .iter()
+            .map(|i| &i.json)
+            .filter(|j| types.is_empty() || types.iter().any(|t| j["Type"] == *t))
+            .filter(|j| !fav || j["UserData"]["IsFavorite"] == true)
+            .filter(|j| !unplayed || j["UserData"]["Played"] != true)
+            .filter(|j| {
+                term.as_ref()
+                    .is_none_or(|t| j["Name"].as_str().unwrap_or("").to_lowercase().contains(t))
+            })
+            .filter(|j| {
+                genre.is_none_or(|g| {
+                    j["Genres"].as_array().is_some_and(|a| a.iter().any(|x| x == g))
+                })
+            })
+            .filter(|j| before.as_ref().is_none_or(|b| sort_name(j).as_str() < b.as_str()))
+            .collect();
+        let key = q("sortby").unwrap_or("SortName").split(',').next().unwrap_or("SortName");
+        match key {
+            "DateCreated" => {
+                v.sort_by(|a, b| a["DateCreated"].as_str().cmp(&b["DateCreated"].as_str()))
+            }
+            "ProductionYear" => v.sort_by_key(|j| j["ProductionYear"].as_i64()),
+            "CommunityRating" => v.sort_by(|a, b| {
+                a["CommunityRating"]
+                    .as_f64()
+                    .unwrap_or(0.0)
+                    .total_cmp(&b["CommunityRating"].as_f64().unwrap_or(0.0))
+            }),
+            _ => v.sort_by_key(|j| sort_name(j)),
+        }
+        if q("sortorder") == Some("Descending") {
+            v.reverse();
+        }
+        let total = v.len();
+        let start: usize = q("startindex").and_then(|s| s.parse().ok()).unwrap_or(0);
+        let limit: usize = q("limit").and_then(|s| s.parse().ok()).unwrap_or(100);
+        let page: Vec<Value> = v.into_iter().skip(start).take(limit).cloned().collect();
+        Response::json(json!({ "Items": page, "TotalRecordCount": total, "StartIndex": start }))
     }
 
     fn qc(&self, authenticated: bool) -> Value {

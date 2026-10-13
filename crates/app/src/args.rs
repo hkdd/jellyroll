@@ -25,6 +25,9 @@ USAGE: jellyroll [OPTIONS]
                          non-zero if any budget is exceeded (implies --demo)
   --bench-idle SECS      Sit on the static demo scene for SECS, verify no redraws
                          and < 1% CPU, exit non-zero otherwise (implies --demo)
+  --bench-scroll SECS    Scroll a 10,000-item library grid (built-in mock server,
+                         no account needed) for SECS, print frame stats, exit
+                         non-zero if a budget is exceeded
   --print-diagnostics    Print SDL/GL/display information and exit
   -h, --help             Show this help
 ";
@@ -51,6 +54,7 @@ pub enum Bench {
     Pacing(Duration),
     Idle(Duration),
     Play(Duration),
+    Scroll(Duration),
 }
 
 fn secs(v: Option<String>, flag: &str) -> Result<Duration, String> {
@@ -90,6 +94,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             "--bench-pacing" => o.bench = Some(Bench::Pacing(secs(it.next(), &a)?)),
             "--bench-idle" => o.bench = Some(Bench::Idle(secs(it.next(), &a)?)),
             "--bench-play" => o.bench = Some(Bench::Play(secs(it.next(), &a)?)),
+            "--bench-scroll" => o.bench = Some(Bench::Scroll(secs(it.next(), &a)?)),
             "--play" => o.play = Some(it.next().ok_or("--play needs a file or URL")?),
             "--print-diagnostics" => o.print_diagnostics = true,
             "-h" | "--help" => o.help = true,
@@ -106,8 +111,13 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
     }
     match (o.bench, &o.play) {
         (Some(Bench::Play(_)), None) => return Err("--bench-play needs --play URL".into()),
-        (Some(Bench::Pacing(_) | Bench::Idle(_)), Some(_)) => {
-            return Err("--bench-pacing/--bench-idle cannot be combined with --play".into());
+        (Some(Bench::Pacing(_) | Bench::Idle(_) | Bench::Scroll(_)), Some(_)) => {
+            return Err(
+                "--bench-pacing/--bench-idle/--bench-scroll cannot be combined with --play".into(),
+            );
+        }
+        (Some(Bench::Scroll(_)), None) if o.demo => {
+            return Err("--bench-scroll scrolls the library grid, not the --demo scene".into());
         }
         _ => {}
     }
@@ -151,6 +161,11 @@ mod tests {
         assert!(p(&["--bench-idle"]).is_err());
         assert!(p(&["--bench-idle", "-1"]).is_err());
         assert!(p(&["--bench-idle", "x"]).is_err());
+        let o = p(&["--bench-scroll", "10"]).unwrap();
+        assert_eq!(o.bench, Some(Bench::Scroll(Duration::from_secs(10))));
+        assert!(!o.demo, "scrolls the library, not the demo scene");
+        assert!(p(&["--bench-scroll", "10", "--demo"]).is_err());
+        assert!(p(&["--bench-scroll", "10", "--play", "x"]).is_err());
     }
 
     #[test]

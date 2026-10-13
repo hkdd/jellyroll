@@ -81,6 +81,9 @@ pub struct FrameStats {
     pub allocs_last_frame: u64,
     /// Frames (after warm-up) that allocated at all.
     pub allocating_frames: u64,
+    /// Frames that loaded something new (requests, uploads, new text);
+    /// their allocations are not counted above (D40).
+    pub loading_frames: u64,
 }
 
 impl FrameStats {

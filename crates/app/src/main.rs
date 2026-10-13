@@ -4,6 +4,7 @@
 
 mod anim;
 mod args;
+mod bench_scroll;
 mod config;
 mod diagnostics;
 mod focus;
@@ -141,14 +142,28 @@ fn main() -> ExitCode {
     };
     tracing::info!(ms = process_start.elapsed().as_millis() as u64, "renderer ready");
     let c = &loaded.config;
-    let net = net::NetConfig {
-        server_url: c.server.url.clone(),
-        ca_file: (!c.server.ca_file.is_empty()).then(|| c.server.ca_file.clone().into()),
-        image_cache_bytes: c.cache.images_mb << 20,
-        data_dir: net::store::data_dir(),
-        cache_dir: net::store::cache_dir(),
+    let mut bench_dir = None;
+    let net = if let Some(args::Bench::Scroll(_)) = opts.bench {
+        match bench_scroll::setup() {
+            Ok((cfg, dir)) => {
+                bench_dir = Some(dir);
+                cfg
+            }
+            Err(e) => {
+                tracing::error!("{e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        net::NetConfig {
+            server_url: c.server.url.clone(),
+            ca_file: (!c.server.ca_file.is_empty()).then(|| c.server.ca_file.clone().into()),
+            image_cache_bytes: c.cache.images_mb << 20,
+            data_dir: net::store::data_dir(),
+            cache_dir: net::store::cache_dir(),
+        }
     };
-    match frame_loop::run(
+    let exit = frame_loop::run(
         &mut platform,
         &mut renderer,
         &opts,
@@ -156,7 +171,11 @@ fn main() -> ExitCode {
         Some(net),
         &notice,
         process_start,
-    ) {
+    );
+    if let Some(dir) = bench_dir {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    match exit {
         frame_loop::Exit::Quit | frame_loop::Exit::BenchPassed => ExitCode::SUCCESS,
         frame_loop::Exit::BenchFailed | frame_loop::Exit::Error => ExitCode::FAILURE,
     }

@@ -176,6 +176,14 @@ impl SearchView {
                 }
                 changed
             }
+            // Enter: to the results if there are any (typing on a
+            // keyboard, the results are many presses below the keys).
+            InputAction::Submit if !self.rows.is_empty() && self.due.is_none() => {
+                self.key_focus = None;
+                self.rows.take_focus((0, 0), &self.vp, now);
+                self.rebuild_graph();
+                true
+            }
             InputAction::Submit => {
                 self.search(ctx);
                 true
@@ -280,6 +288,9 @@ mod tests {
         };
         v.on_fetched(ids[0], &Fetched::Page { start: 0, total: 1, cards: vec![card] }, t);
         assert_eq!(v.rows.rows.len(), 1);
+        // Enter jumps to the results.
+        v.on_action(InputAction::Submit, t, &mut ctx);
+        assert!(v.rows.active && v.key_focus.is_none());
         // The on-screen keyboard types too.
         v.key_focus = Some(0);
         v.on_action(InputAction::Select, t, &mut ctx);

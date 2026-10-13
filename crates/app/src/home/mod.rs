@@ -45,6 +45,8 @@ use widgets::{Viewport, Wants};
 const UPLOAD_BUDGET: Duration = Duration::from_millis(2);
 /// Network events handled per loop iteration (bounds the work per frame).
 const EVENTS_PER_FRAME: usize = 64;
+/// How often image requests are rebuilt while images keep arriving.
+const WANTS_AFTER_UPLOAD: Duration = Duration::from_millis(100);
 
 /// What is on screen.
 enum Screen {
@@ -93,6 +95,13 @@ pub struct HomeApp {
     play: Option<PlayRequest>,
     /// The Quick Connect screen the password form came from.
     qc: Option<Status>,
+    /// Counts loading work started (requests sent, image wants rebuilt);
+    /// frames doing it are not steady-state frames (D40).
+    load_work: u64,
+    /// Images arrived since the image requests were last rebuilt; rebuilt
+    /// at most every `WANTS_AFTER_UPLOAD` (input rebuilds them at once).
+    uploaded: bool,
+    wants_at: Instant,
 }
 
 impl HomeApp {
@@ -124,6 +133,9 @@ impl HomeApp {
             play_req: None,
             play: None,
             qc: None,
+            load_work: 0,
+            uploaded: false,
+            wants_at: Instant::now(),
         };
         a.set_output(fb, safe_area, Instant::now());
         a
@@ -163,6 +175,7 @@ impl HomeApp {
         let out = f(self, &mut ctx);
         let Ctx { cmds, open, .. } = ctx;
         self.next_id = next;
+        self.load_work += (!cmds.is_empty()) as u64;
         self.send_all(cmds);
         if let Some(o) = open {
             self.open(o, now);
@@ -401,6 +414,18 @@ impl HomeApp {
                 _ => false,
             },
             Screen::Browse => {
+                match a {
+                    InputAction::Home if !self.stack.is_empty() => {
+                        self.stack.clear();
+                        self.wants_dirty = true;
+                        return true;
+                    }
+                    InputAction::Search if !matches!(self.stack.last(), Some(Page::Search(_))) => {
+                        self.open(Open::Search, now);
+                        return true;
+                    }
+                    _ => {}
+                }
                 let used = self.with_ctx(now, |me, ctx| match me.stack.last_mut() {
                     Some(Page::Library(v)) => v.on_action(a, now, ctx),
                     Some(Page::Detail(v)) => v.on_action(a, now, ctx),
@@ -436,8 +461,15 @@ impl HomeApp {
             Some(Page::Search(v)) => v.update(now, ctx),
             _ => false,
         });
+        if self.uploaded && now >= self.wants_at {
+            self.uploaded = false;
+            self.wants_dirty = true;
+        }
         if self.wants_dirty {
             self.wants_dirty = false;
+            self.uploaded = false;
+            self.wants_at = now + WANTS_AFTER_UPLOAD;
+            self.load_work += 1;
             let mut w = Wants::new(&self.textures, self.vp);
             match self.stack.last() {
                 Some(Page::Library(v)) => v.wants(&mut w),
@@ -478,12 +510,26 @@ impl HomeApp {
     /// When the loop must wake even without input (debounced search).
     pub fn next_deadline(&self) -> Option<Instant> {
         match self.stack.last() {
+            _ if self.uploaded => Some(self.wants_at),
             Some(Page::Search(v)) if matches!(self.screen, Screen::Browse) => v.next_deadline(),
             _ => None,
         }
     }
 
     /// True once there is nothing left to upload (for benchmarks/startup).
+    /// For `--bench-scroll`: (the home screen is showing, a library grid
+    /// is open with its first page loaded).
+    pub fn bench_state(&self) -> (bool, bool) {
+        let browse = matches!(self.screen, Screen::Browse) && self.home.is_some();
+        let grid = matches!(self.stack.last(), Some(Page::Library(l)) if l.loaded());
+        (browse && self.stack.is_empty(), browse && grid)
+    }
+
+    /// Loading work started so far (see `load_work`).
+    pub fn load_work(&self) -> u64 {
+        self.load_work
+    }
+
     pub fn settled(&self) -> bool {
         !self.textures.uploads_pending()
     }
@@ -492,7 +538,7 @@ impl HomeApp {
         self.textures.begin_frame();
         if self.textures.uploads_pending() && self.textures.pump(r, UPLOAD_BUDGET) {
             // Newly loaded (or evicted) images change what to request.
-            self.wants_dirty = true;
+            self.uploaded = true;
         }
         let safe = self.vp.safe;
         let (sx, sy) = (self.vp.sx(), self.vp.sy());

@@ -515,6 +515,66 @@ URL.
   Quick Connect, home rows, a poster and a placeholder decoded, then a
   restart that shows the cached home first with no sign-in.
 
+**D39: M6 browsing architecture.**
+- A page stack over the home screen: Library, Detail, Search and
+  Settings. Back pops a page; Home clears the stack; `/` (or the remote's
+  Search button) opens Search from anywhere. The home screen gains a nav
+  bar: Home, each library, Search, Settings.
+- Pages never block on the network. They ask through a `Ctx` that
+  collects commands; a fetch worker on the network thread (4 at a time)
+  answers each with `Event::Fetched { id, .. }`, and a page ignores answers
+  for requests it no longer cares about.
+- Library grid: 100-item pages, requested around the visible rows only,
+  so a 10,000-item library costs the same as a small one. Only rows near
+  the viewport are drawn. Sort (name, date added, year, rating), unwatched,
+  favorites and genre filters run on the server; the A-Z column (name sort)
+  asks the server how many items sort before a letter and jumps there.
+- Detail pages for movies, series, seasons and episodes: Play or Resume /
+  From the start, watched and favorite toggles, seasons, episodes, cast,
+  similar items. Video and audio badges come from the media streams;
+  a codec this GPU can't decode turns its badge red and says so (D19:
+  never a silent fallback).
+- Play from the detail page streams the file as-is (`static=true`, the
+  server never transcodes) through mpv with the token as an HTTP header,
+  from the resume point. Progress reporting, next episode and track
+  choice are M7.
+- Search: 300 ms debounce, separate rows for movies, shows and episodes.
+  A keyboard types directly; Enter jumps to the results. The on-screen
+  keyboard is there for a remote or gamepad.
+- Settings: account (sign out, change server) and "About this device"
+  (versions, GPU, display, hardware decode support).
+- Password sign-in (spec 8 fallback): from the Quick Connect screen,
+  username and password with the server's public users to pick from. The
+  password is sent once and never stored.
+- User-visible strings live in `home/strings.rs` (spec 10.4); a test
+  checks that every character exists in the bundled fonts.
+
+**D40: What a steady-state frame is.** M6 added two things to the
+allocation check (D5):
+- **The counter is per thread.** It used to count every thread, so image
+  decoding and JSON parsing on the network thread showed up as render
+  frame allocations (tens of thousands per frame while scrolling). The
+  render thread is the one the check is about.
+- **Loading frames are reported, not failed.** A frame that starts
+  loading something (sends requests, rebuilds the image wants list),
+  uploads a texture or shapes a string for the first time must allocate.
+  Those frames are counted as `loading_frames` and their allocations are
+  excluded. Every other frame, including scrolling over content that is
+  already there, must allocate nothing.
+- Image wants are rebuilt at most every 100 ms while images keep arriving
+  (immediately on input), instead of after every upload.
+
+**D41: `--bench-scroll SECS` (spec 13, M6 exit criterion).** Starts the
+mock server in-process with 10,000 movies and a throwaway signed-in state
+(nothing of the user's is touched, no network needed), opens Movies from
+the nav bar like a user, waits for the grid, then presses Down every 50 ms
+(faster than key repeat) for SECS while pages and artwork load. It prints
+the same numbers as `--bench-pacing` plus presses and loading frames, and
+fails on the spec 2 budgets (CPU p99 < 4 ms, GPU p99 < 6 ms, no missed
+vsyncs, no allocating steady-state frames). Under Xvfb with llvmpipe
+(software GL) it reports 0 allocating frames; CPU/GPU numbers there are
+meaningless, so the hardware checklist runs it on the HTPC.
+
 ## Dependency approvals
 
 | Crate | Status |

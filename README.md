@@ -18,7 +18,8 @@ and verified versions.
 | **M3** libmpv playback: hwdec, GL handoff with the overlay, audio | **Done.** On the HTPC: 4K H.264 and HEVC 8-bit via VA-API at ~11-12% CPU with 0 dropped frames; HEVC 10-bit (unsupported on this GPU) is flagged, never silently degraded. See `docs/DECISIONS.md` |
 | **M4** Input: keyboard, gamepad, HDMI-CEC; spatial focus graph; key repeat | **Done.** Keyboard verified on the HTPC; gamepad tested end to end with an SDL virtual pad. CEC is built and unit-tested, but the HTPC's DisplayPort-to-HDMI adapter doesn't carry CEC, so the TV remote waits for an adapter that does (`docs/DECISIONS.md` D29) |
 | **M5** Jellyfin client: discovery, Quick Connect, auth, home data, images with caching; mock server | **Done.** On the HTPC against a Jellyfin 12.2 server: real home screen, cached start in ~0.4 s, first frame 393 ms. See `docs/DECISIONS.md` |
-| M6 to M10 | Not started |
+| **M6** Browsing: libraries (10k-item grids), detail pages, search, settings, password sign-in; play from the server | **Built**, awaiting the HTPC checklist (`docs/M6-HARDWARE-CHECKLIST.md`) |
+| M7 to M10 | Not started |
 
 The app connects to your Jellyfin server and shows its home screen: My
 Media, Continue Watching, Next Up, the latest additions to each library and
@@ -26,9 +27,11 @@ Favorites, with the focused item's backdrop and details on top. Sign-in
 uses Quick Connect: the TV shows a code, and you approve it from the
 Jellyfin app on your phone or computer. After the first run the home
 screen appears instantly from the cache and refreshes in the background.
-Select does nothing yet beyond showing the title; detail pages, libraries
-and search come in M6, playback from the server in M7. `--demo` still shows
-the synthetic M2 render benchmark.
+From the nav bar at the top you can open each library as a grid (sort,
+filters, A-Z jump), Search, and Settings. Selecting an item opens its
+detail page, where Play streams the file directly (never transcoded)
+from the resume point. Progress reporting and the full player come in M7.
+`--demo` still shows the synthetic M2 render benchmark.
 
 ## Layout
 
@@ -147,6 +150,7 @@ devices are readable. The service user gets the group from `install.sh`.
 | `--demo` | Synthetic render benchmark scene instead of the Jellyfin home screen |
 | `--bench-pacing SECS` | Continuous animation. Prints CPU/GPU/present p50/p99, missed vsyncs and allocating frames, and exits 1 if a spec §2 budget is exceeded |
 | `--bench-idle SECS` | Static screen. Fails if anything redraws or CPU ≥ 1% |
+| `--bench-scroll SECS` | Scroll a 10,000-item library grid (built-in mock server, no account needed) and check the same budgets as `--bench-pacing` |
 | `--print-diagnostics` | SDL/GL/driver/display modes, DRI/CEC/input devices, mpv version, and which codecs the GPU decodes in hardware |
 | `--play FILE_OR_URL` | Play a video (M3 harness). Space pause, ←/→ seek 10 s, ↑/↓ 60 s, `i` decoder diagnostics, Esc stop |
 | `--bench-play SECS` | With `--play`: measure dropped frames, missed vsyncs and CPU, toggling the overlay every 2 s |
@@ -214,8 +218,8 @@ devices and their addresses. Settings: `cec`, `cec_wake_tv` and
    Jellyfin's web app on a phone or computer, open the menu under your
    profile picture (top right) and choose **Quick Connect** (or go to
    `https://YOUR-SERVER/web/#/quickconnect`), then enter the code. Quick Connect must be turned on in the
-   server's Dashboard (General). Username/password sign-in arrives with
-   the on-screen keyboard in M6.
+   server's Dashboard (General). Or choose **Sign in with password** on that
+   screen.
 3. **Remembered:** the access token (never your password) is kept in
    `~/.local/share/jellyroll/state.json` (readable only by you). Caches
    live in `~/.cache/jellyroll/` and can be deleted at any time.

@@ -252,6 +252,11 @@ impl LibraryView {
         LETTERS.find(c).unwrap_or(0)
     }
 
+    /// The first page has arrived (for `--bench-scroll`).
+    pub fn loaded(&self) -> bool {
+        self.total.is_some()
+    }
+
     pub fn on_action(&mut self, a: InputAction, now: Instant, ctx: &mut Ctx) -> bool {
         if let Some(p) = &mut self.picker {
             match a {
