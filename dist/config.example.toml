@@ -1,0 +1,32 @@
+# Jellyroll configuration: ~/.config/jellyroll/config.toml
+#
+# Every key is optional; anything left out uses the default shown here.
+# Unknown keys and out-of-range values are reported (journalctl -u jellyroll
+# and on screen) and ignored. Command-line flags override this file.
+# The app only reads this file; it never rewrites it.
+
+[log]
+# RUST_LOG syntax: "info", "debug", or "target=level,...".
+# The RUST_LOG environment variable takes precedence.
+level = "info"
+
+[display]
+# Fraction of each screen edge kept clear for TV overscan (0.0 - 0.1).
+safe_area = 0.025
+# Double instead of triple buffering. Lower latency, higher risk of missed
+# frames; see docs/DECISIONS.md (D10).
+double_buffer = false
+
+[input]
+# Key repeat for held buttons (keyboard, gamepad and remote alike).
+repeat_delay_ms = 350
+repeat_interval_ms = 80
+# After holding this long, repeats speed up to repeat_fast_interval_ms.
+repeat_accelerate_after_ms = 1500
+repeat_fast_interval_ms = 40
+
+[debug]
+# Show the perf HUD at startup (F3 toggles).
+hud = false
+# Let Esc/Back on the top level quit (always on with --dev).
+allow_exit = false

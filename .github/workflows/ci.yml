@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System dependencies (SDL3 is built from source via the build-sdl feature)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build pkg-config \
+            libdrm-dev libgbm-dev libegl-dev libgles-dev libgl-dev libudev-dev \
+            libwayland-dev libxkbcommon-dev wayland-protocols libdecor-0-dev \
+            libx11-dev libxext-dev libxcursor-dev libxi-dev libxrandr-dev libxss-dev \
+            libxfixes-dev libxtst-dev libxinerama-dev \
+            libdbus-1-dev libasound2-dev libpipewire-0.3-dev libibus-1.0-dev \
+            xvfb libgl1-mesa-dri libegl-mesa0
+
+      - name: Toolchain
+        run: rustup toolchain install stable --profile minimal -c clippy,rustfmt && rustup default stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: fmt
+        run: cargo fmt --check
+
+      - name: clippy
+        run: cargo clippy --features build-sdl --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test --features build-sdl
+
+      - name: release build
+        run: cargo build --release --features build-sdl
+
+      - name: binary size (< 40 MB, spec 2)
+        run: |
+          size=$(stat -c %s target/release/jellyroll)
+          echo "jellyroll: $size bytes"
+          test "$size" -lt $((40 * 1024 * 1024))
+
+      # Smoke test on Mesa llvmpipe: the idle budget (no redraws, < 1% CPU) is
+      # meaningful in software; frame-time budgets are not, so the pacing
+      # bench only runs on real hardware.
+      - name: idle bench (Xvfb)
+        run: xvfb-run -a -s "-screen 0 1920x1080x24" target/release/jellyroll --dev --bench-idle 3
+
+      - name: startup bench (Xvfb)
+        run: xvfb-run -a -s "-screen 0 1920x1080x24" env BIN=target/release/jellyroll scripts/bench-startup.sh 5 --dev
