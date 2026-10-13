@@ -727,6 +727,9 @@ skipped. Fixes from the run:
   queries would include mpv's work, but on llvmpipe they read near zero,
   so the measured method stays as in the M6 benchmarks.
 
+Verified on the HTPC: season select, row wrap, and 0 `INVALID_OPERATION`
+lines in a playback log. M7 is accepted.
+
 ## Dependency approvals
 
 | Crate | Status |
