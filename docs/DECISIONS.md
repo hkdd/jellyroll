@@ -8,7 +8,7 @@
 | 2 | Skia vs a custom GL renderer | **Decided: Skia.** On the HTPC (Intel HD 530, 4K) the scene holds 60 fps with 0 missed vsyncs; recording takes ~1.1 ms. The remaining cost is driver submission (~2 ms) and 4K fill (~8 ms GPU), which a custom renderer would not remove. The spec's p99 budgets (CPU < 4 ms, GPU < 6 ms) are not met on this 2015 GT2 iGPU at native 4K; recorded as a hardware limit, revisit if M3 overlays need the headroom. See "M2 benchmark results". |
 | 3 | redb vs SQLite | **Decided: redb** (D30). Both are under 1 ms for everything the cache does; redb is pure Rust and a key-value store fits the data. |
 | 4 | HDR on DRM/KMS | Open (M9). |
-| 5 | Minimum Jellyfin server version | **10.10.0** (D31), the same floor as the official Jellyfin SDK. Written against API 12.2.0 (the SDK's current spec). Media Segments/Trickplay availability is checked again in M7. |
+| 5 | Minimum Jellyfin server version | **10.10.0** (D31), the same floor as the official Jellyfin SDK. Written against API 12.2.0 (the SDK's current spec); tested against a **12.2** server. Media Segments/Trickplay availability is checked again in M7. |
 | 6 | Retained tree vs immediate mode | **Leaning immediate-style** (D15): the scene is rebuilt on each dirty frame, with everything expensive cached by the renderer. Revisit with the M6 10k-item scroll benchmark. |
 | 7 | NVIDIA | Open. M1 code is vendor-neutral, but only Mesa has been exercised. |
 | 8 | Video decode on the reference hardware | **Constraint found.** The HTPC's Intel HD 530 (Skylake) decodes HEVC 8-bit and H.264 in hardware, but not HEVC 10-bit, VP9 or AV1 (intel/media-driver README codec table, SKL column, checked 2026-10-13). M3's exit test (4K HEVC 10-bit) cannot use hardware decode here. Confirmed on the HTPC with `vainfo` (iHD 26.1.5 from RPM Fusion): decode for MPEG-2, H.264 Main/High, VC-1, VP8, HEVC Main; no HEVC Main10, VP9 or AV1. CPU decode is not viable either (i3-6100T: 2 cores / 4 threads, 35 W). Fedora's own `libva-intel-media-driver` reports no H.264/HEVC at all (patent-restricted build); the full driver is RPM Fusion nonfree `intel-media-driver`. **Decided (D19):** direct play whatever the hardware decodes; say clearly when it can't; no silent software decode and no automatic transcoding. Unsupported content on this HTPC is the trigger for a hardware upgrade. |
@@ -452,9 +452,26 @@ file holds several servers and users; the picker UI comes with M6.
   backoff (2 s up to 60 s). With no cache, a full-screen explanation with
   Select to retry (spec 8: never a blank screen).
 - Server choice: `[server] url` in the config, else the last server used,
-  else LAN discovery (UDP 7359, 3 s).
+  else the **server screen** (D37). Discovery is never automatic.
 - `--demo` keeps the synthetic M2 scene; `--bench-pacing`/`--bench-idle`
   imply it, so render benchmarks and CI never depend on a server.
+
+**D37: Choosing a server is a screen, discovery is a button.** Decided after the first HTPC run (2026-10-13): automatic discovery failed on
+the network and the fallback (edit a config file that didn't exist yet) was
+a dead end. Now the first screen is "Connect to your Jellyfin server":
+- **Typing:** an address field. A physical keyboard types directly (SDL
+  text input, so layout and Shift apply, and shortcut keys like `c`/`i`
+  are suspended while typing; Enter connects). The remote or a gamepad
+  uses an on-screen keyboard: digits, letters, `. - : /`, Delete, Clear,
+  `:8096` and `https://`.
+- **Searching:** "Search my network" runs LAN discovery on demand and
+  lists what answers; picking one connects.
+- **Errors:** an address that fails returns to this screen with the
+  reason, keeping the text. A remembered server that's down shows a
+  problem screen where Select retries and Back goes to this screen; Back
+  from the Quick Connect code does the same.
+- The config file's `[server] url` still wins when set, for unattended
+  installs.
 
 **D36: TLS and the mock server.**
 - reqwest 0.13's `rustls` feature: aws-lc-rs crypto, and system trust via

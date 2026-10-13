@@ -202,10 +202,14 @@ devices and their addresses. Settings: `cec`, `cec_wake_tv` and
 
 ### Connecting to Jellyfin
 
-1. **Server:** jellyroll uses `[server] url` from the config if set, else
-   the last server you signed in to, else the first server that answers
-   on the local network (UDP 7359). Servers 10.10.0 and newer are
-   supported.
+1. **Server:** the first time, jellyroll asks for your server's address:
+   type it with a keyboard, or use the on-screen keyboard with the remote
+   or a gamepad (`http://` and port 8096 are added if you leave them out).
+   **Search my network** lists servers that answer on the local network
+   instead. After that it reconnects to the same server automatically;
+   press Back on a connection-problem or sign-in screen to choose another.
+   (`[server] url` in the config, if set, always wins.) Servers 10.10.0
+   and newer are supported.
 2. **Sign in:** a 6-digit Quick Connect code appears on the TV. In the
    Jellyfin app on a phone or computer, open your profile, choose **Quick
    Connect** and enter the code. Quick Connect must be turned on in the

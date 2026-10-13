@@ -18,12 +18,15 @@ copy them from the desktop with `cat FILE | tee >(wl-copy)`.
    ```
    jellyroll needs 10.10.0 or newer. **Quick Connect must be on:** Dashboard
    → General → Quick Connect.
-3. **First run: discovery and sign-in.** Leave `[server] url` empty to
-   test LAN discovery (or set it if your server is on another subnet):
+3. **First run: choose the server and sign in.** No config file needed.
    ```sh
    ./target/release/jellyroll --hud --allow-exit 2> ~/jellyroll-m5-first.log
    ```
-   - "Looking for Jellyfin servers…", then a 6-digit code.
+   - "Connect to your Jellyfin server": type the address on the keyboard
+     (e.g. `192.168.1.10`) and press Enter. Also try **Search my network**
+     (arrow down to it, Enter) to see whether discovery finds it.
+   - A wrong address comes back to this screen with the reason.
+   - Then a 6-digit code.
    - In the Jellyfin app on your phone or computer: profile → Quick
      Connect → enter the code. Within ~3 s the TV shows your home screen.
    - Check: your libraries (My Media), Continue Watching with progress

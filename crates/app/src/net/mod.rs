@@ -21,6 +21,13 @@ pub use images::Finish;
 pub enum Cmd {
     /// Retry after a problem (Select on an error screen).
     Retry,
+    /// Connect to this address (typed or picked on the server screen).
+    Connect(String),
+    /// Look for servers on the LAN.
+    Search,
+    /// Leave the current server's problem/sign-in screen for the server
+    /// screen.
+    ChangeServer,
     /// Replace the queue of wanted images, most important first. Images
     /// already in flight finish; queued ones not in the new list are
     /// dropped (spec 4: cancel work for rows scrolled away).
@@ -47,7 +54,15 @@ pub enum ImageSource {
 /// What the UI should show while there is no home screen.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Status {
-    Searching,
+    /// Choose a server: type an address or search the LAN. `address`
+    /// prefills the field when the screen opens; later updates (search
+    /// results, errors) keep whatever the user typed.
+    ServerEntry {
+        address: String,
+        error: Option<String>,
+        found: Vec<FoundServer>,
+        searching: bool,
+    },
     Connecting {
         server: String,
     },
@@ -62,6 +77,12 @@ pub enum Status {
         title: String,
         detail: String,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FoundServer {
+    pub name: String,
+    pub address: String,
 }
 
 /// Events for the UI.
@@ -88,8 +109,8 @@ pub enum Event {
 
 #[derive(Clone, Debug, Default)]
 pub struct NetConfig {
-    /// Server address from the config file; empty = last used, then LAN
-    /// discovery.
+    /// Server address from the config file; empty = the last server used,
+    /// else ask the user (server screen).
     pub server_url: String,
     /// Extra CA / self-signed certificate (PEM file).
     pub ca_file: Option<PathBuf>,
@@ -273,6 +294,52 @@ mod tests {
         }
         assert!(!homes[0].1 && homes[1].1, "cached first, then fresh");
         assert_eq!(homes[0].0, data, "cache holds what was shown");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// No server configured or remembered: the server screen comes first;
+    /// a bad address returns to it with an error; a good one signs in;
+    /// Back from Quick Connect returns to it.
+    #[test]
+    fn server_screen_flow() {
+        let url =
+            jellyroll_mock_server::spawn(MockConfig { approve_after: 1000, ..Default::default() });
+        let dir = std::env::temp_dir().join(format!("jellyroll-entry-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cfg = NetConfig {
+            server_url: String::new(),
+            ca_file: None,
+            image_cache_bytes: 1 << 20,
+            data_dir: Some(dir.join("data")),
+            cache_dir: Some(dir.join("cache")),
+        };
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut h = NetHandle::start(cfg, Arc::new(|| {})).unwrap();
+        let entry = |h: &mut NetHandle| loop {
+            match next(h, deadline) {
+                Event::Status(Status::ServerEntry { error, .. }) => return error,
+                Event::Status(Status::Problem { title, detail }) => panic!("{title}: {detail}"),
+                _ => {}
+            }
+        };
+        assert_eq!(entry(&mut h), None, "server screen first, no automatic search");
+
+        // Nothing listens on port 1: back to the server screen, with why.
+        assert!(h.send(Cmd::Connect("127.0.0.1:1".into())));
+        let err = entry(&mut h).expect("an error for the bad address");
+        assert!(err.contains("Couldn't connect to http://127.0.0.1:1"), "{err}");
+
+        assert!(h.send(Cmd::Connect(url)));
+        loop {
+            match next(&mut h, deadline) {
+                Event::Status(Status::QuickConnect { .. }) => break,
+                Event::Status(Status::Problem { title, detail }) => panic!("{title}: {detail}"),
+                _ => {}
+            }
+        }
+        assert!(h.send(Cmd::ChangeServer));
+        assert_eq!(entry(&mut h), None, "Back from sign-in returns to the server screen");
+        h.stop();
         let _ = std::fs::remove_dir_all(dir);
     }
 }

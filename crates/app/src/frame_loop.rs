@@ -56,6 +56,10 @@ impl View {
         }
     }
 
+    fn wants_text(&self) -> bool {
+        matches!(self, View::Home(h) if h.wants_text())
+    }
+
     /// Per-iteration update; returns true if a redraw is needed.
     fn update(&mut self, now: Instant) -> bool {
         match self {
@@ -289,8 +293,13 @@ pub fn run<P: Platform, R: Renderer>(
                 }
                 PlatformEvent::Exposed => dirty = true,
                 PlatformEvent::Wake => {}
-                ref other => match input::from_event(other) {
+                ref other => match input::from_event(other, view.wants_text()) {
                     Some(Input::Release(b)) => repeat.release(b),
+                    Some(Input::Typed(c)) => {
+                        if playback.is_none() {
+                            dirty |= view.on_action(InputAction::TextInput(c), now);
+                        }
+                    }
                     Some(Input::Press { button, action: Some(a) }) => {
                         repeat.press(button, a, now);
                         if let Some(pb) = playback.as_mut() {
@@ -303,11 +312,14 @@ pub fn run<P: Platform, R: Renderer>(
                             }
                             continue;
                         }
-                        if a == InputAction::Back && opts.allow_exit {
+                        // The screen gets Back first (e.g. leave a problem
+                        // screen); unused Back at the top level quits.
+                        let used = view.on_action(a, now);
+                        if !used && a == InputAction::Back && opts.allow_exit {
                             systemd.stopping();
                             return Exit::Quit;
                         }
-                        dirty |= view.on_action(a, now);
+                        dirty |= used;
                     }
                     Some(Input::Press { action: None, .. }) | None => {}
                 },
@@ -351,6 +363,7 @@ pub fn run<P: Platform, R: Renderer>(
                 dirty |= view.on_action(a, now);
             }
             dirty |= view.update(now);
+            p.set_text_input(view.wants_text());
             if view.is_animating(now) {
                 dirty = true;
             }

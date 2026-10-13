@@ -46,9 +46,7 @@ const MAX_W: f32 = 1100.0;
 impl StatusView {
     pub fn new(status: Status) -> Self {
         let (title, detail, code, hint) = match &status {
-            Status::Searching => {
-                ("Looking for Jellyfin servers…".to_string(), String::new(), None, "")
-            }
+            Status::ServerEntry { .. } => (String::new(), String::new(), None, ""),
             Status::Connecting { server } => {
                 (format!("Connecting to {server}…"), String::new(), None, "")
             }
@@ -60,13 +58,20 @@ impl StatusView {
                 Some(
                     code.chars().flat_map(|c| [c, ' ']).collect::<String>().trim_end().to_string(),
                 ),
-                "Press Select for a new code",
+                "Select: new code   ·   Back: use a different server",
             ),
-            Status::Problem { title, detail } => {
-                (title.clone(), detail.clone(), None, "Press Select to retry")
-            }
+            Status::Problem { title, detail } => (
+                title.clone(),
+                detail.clone(),
+                None,
+                "Select: retry   ·   Back: choose another server",
+            ),
         };
         Self { status, title, detail, code, hint, lines: None }
+    }
+
+    pub fn can_change_server(&self) -> bool {
+        matches!(self.status, Status::Problem { .. } | Status::QuickConnect { .. })
     }
 
     pub fn retryable(&self) -> bool {

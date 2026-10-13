@@ -184,6 +184,11 @@ pub enum PlatformEvent {
     /// Another thread asked the render loop to wake up (see
     /// [`Platform::waker`]), e.g. mpv has events or a new video frame.
     Wake,
+    /// A typed character, with the keyboard layout and Shift applied. Only
+    /// sent while text input is on ([`Platform::set_text_input`]).
+    Text {
+        ch: char,
+    },
     PadDown {
         button: PadButton,
     },
@@ -251,4 +256,8 @@ pub trait Platform {
     /// [`PlatformEvent::Wake`]. Cheap to call from any thread, including
     /// C callbacks; it only queues an event.
     fn waker(&self) -> std::sync::Arc<dyn Fn() + Send + Sync>;
+
+    /// Turns typed-character events ([`PlatformEvent::Text`]) on or off,
+    /// for text fields.
+    fn set_text_input(&mut self, on: bool);
 }

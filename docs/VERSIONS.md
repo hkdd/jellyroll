@@ -81,7 +81,7 @@ Crate versions checked with `cargo info` against crates.io on 2026-10-13
 
 | Item | Version | Notes |
 |---|---|---|
-| Jellyfin API (target) | **12.2.0**, OpenAPI 3.0.4 | `openapi.json` from jellyfin/jellyfin-sdk-typescript @ `7685bb8e2c3aeda89ca831c2228923affd022fbb` (2026-10-06), sha256 `bc8c668b…ab80`; that SDK's `MINIMUM_VERSION` is 10.10.0 (D31) |
+| Jellyfin API (target) | **12.2.0**, OpenAPI 3.0.4; tested against a 12.2 server | `openapi.json` from jellyfin/jellyfin-sdk-typescript @ `7685bb8e2c3aeda89ca831c2228923affd022fbb` (2026-10-06), sha256 `bc8c668b…ab80`; that SDK's `MINIMUM_VERSION` is 10.10.0 (D31) |
 | `tokio` | 1.53.2 | `rt`, `time`, `sync`, `macros` (app); current-thread runtime on the `net` thread |
 | `reqwest` | 0.13.5 | `default-features = false`, `rustls` (aws-lc-rs + rustls-platform-verifier). 0.13 made rustls the default TLS and renamed the feature from `rustls-tls` |
 | `serde_json` | 1.0.154 | |
@@ -104,5 +104,4 @@ fonttools 4.66.1. All are SIL OFL 1.1 (`assets/fonts/OFL.txt`).
 
 | Item | Milestone |
 |---|---|
-| The target Jellyfin server version | M5 (asked) |
 | `zbus` | M8 |

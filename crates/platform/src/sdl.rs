@@ -379,6 +379,12 @@ impl SdlPlatform {
             },
             None => ev,
         };
+        if let Event::TextInput { text, .. } = &ev {
+            out.extend(
+                text.chars().filter(|c| !c.is_control()).map(|ch| PlatformEvent::Text { ch }),
+            );
+            return;
+        }
         if let Some(e) = convert(ev, &self.window, self.wake_type) {
             out.push(e);
         }
@@ -485,6 +491,13 @@ impl Platform for SdlPlatform {
 
     fn swap(&mut self) {
         self.window.gl_swap_window();
+    }
+
+    fn set_text_input(&mut self, on: bool) {
+        let ti = self.video.text_input();
+        if on != ti.is_active(&self.window) {
+            if on { ti.start(&self.window) } else { ti.stop(&self.window) }
+        }
     }
 
     fn waker(&self) -> std::sync::Arc<dyn Fn() + Send + Sync> {

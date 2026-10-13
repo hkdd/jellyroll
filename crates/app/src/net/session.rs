@@ -14,7 +14,7 @@ use tokio::sync::{Notify, mpsc, watch};
 use tokio::task::JoinSet;
 
 use super::store::{self, ImageCache, MetaCache, State};
-use super::{Cmd, Event, ImageJob, ImageSource, NetConfig, Status, images};
+use super::{Cmd, Event, FoundServer, ImageJob, ImageSource, NetConfig, Status, images};
 use crate::home::model::{self, HomeData, Row, Shape};
 
 /// How often the home screen is refreshed while idle.
@@ -51,6 +51,54 @@ impl Out {
 #[derive(Debug)]
 enum Ctl {
     Retry,
+    Connect(String),
+    Search,
+    ChangeServer,
+}
+
+/// The server screen: wait until the user types an address and connects,
+/// or picks one found by a LAN search (spec 8: discovery plus manual entry).
+async fn choose_server(
+    out: &Out,
+    ctl: &mut mpsc::Receiver<Ctl>,
+    address: &str,
+    error: Option<String>,
+) -> String {
+    let entry = |error: Option<String>, found: &[FoundServer], searching: bool| {
+        Status::ServerEntry { address: address.into(), error, found: found.to_vec(), searching }
+    };
+    let mut found: Vec<FoundServer> = Vec::new();
+    out.status(entry(error, &found, false)).await;
+    loop {
+        match ctl.recv().await {
+            Some(Ctl::Connect(a)) if jellyfin_api::normalize_server_url(&a).is_some() => return a,
+            Some(Ctl::Connect(_)) => {
+                let e =
+                    "Enter the server's address, like 192.168.1.10 or jellyfin.local".to_string();
+                out.status(entry(Some(e), &found, false)).await;
+            }
+            Some(Ctl::Search) => {
+                out.status(entry(None, &found, true)).await;
+                found = match blocking(|| discovery::discover(DISCOVERY_WAIT)).await {
+                    Some(Ok(list)) => list
+                        .into_iter()
+                        .map(|s| FoundServer { name: s.name, address: s.address })
+                        .collect(),
+                    Some(Err(e)) => {
+                        tracing::warn!("discovery: {e}");
+                        Vec::new()
+                    }
+                    None => Vec::new(),
+                };
+                let e = found.is_empty().then(|| {
+                    "No servers answered on this network. Enter the address instead.".to_string()
+                });
+                out.status(entry(e, &found, false)).await;
+            }
+            Some(_) => {}
+            None => std::future::pending::<()>().await,
+        }
+    }
 }
 
 pub async fn run(cfg: NetConfig, out: Out, mut cmds: mpsc::Receiver<Cmd>) {
@@ -73,6 +121,15 @@ pub async fn run(cfg: NetConfig, out: Out, mut cmds: mpsc::Receiver<Cmd>) {
         match c {
             Cmd::Retry => {
                 let _ = ctl_tx.try_send(Ctl::Retry);
+            }
+            Cmd::Connect(a) => {
+                let _ = ctl_tx.try_send(Ctl::Connect(a));
+            }
+            Cmd::Search => {
+                let _ = ctl_tx.try_send(Ctl::Search);
+            }
+            Cmd::ChangeServer => {
+                let _ = ctl_tx.try_send(Ctl::ChangeServer);
             }
             Cmd::WantImages(jobs) => queue.replace(jobs),
         }
@@ -156,37 +213,31 @@ async fn session(
     }
     let mut backoff = Backoff(0);
 
+    // Some(error): show the server screen next (with an optional error).
+    let mut ask: Option<Option<String>> = None;
+    let mut last_address = String::new();
+
     'outer: loop {
         // ---- 1. which server --------------------------------------------
-        let url = if !cfg.server_url.trim().is_empty() {
-            cfg.server_url.clone()
-        } else if let Some((s, _)) = state.last() {
-            s.url.clone()
+        // The config file wins, then the last server used; otherwise (or
+        // when the user asked to change server) the server screen.
+        let configured = cfg.server_url.trim();
+        let (url, typed) = if ask.is_none() && !configured.is_empty() {
+            (configured.to_string(), false)
+        } else if ask.is_none()
+            && let Some((s, _)) = state.last()
+        {
+            (s.url.clone(), false)
         } else {
-            out.status(Status::Searching).await;
-            let found = blocking(|| discovery::discover(DISCOVERY_WAIT)).await;
-            match found {
-                Some(Ok(list)) if !list.is_empty() => list[0].address.clone(),
-                other => {
-                    if let Some(Err(e)) = other {
-                        tracing::warn!("discovery: {e}");
-                    }
-                    out.problem(
-                        "No Jellyfin server found",
-                        "No server answered on this network. Check that it is running, or set its \
-                         address in ~/.config/jellyroll/config.toml:  [server]  url = \"http://IP:8096\".",
-                    )
-                    .await;
-                    wait_ctl(&mut ctl, None).await;
-                    continue;
-                }
-            }
+            let error = ask.take().flatten();
+            (choose_server(&out, &mut ctl, &last_address, error).await, true)
         };
+        ask = None;
+        last_address = url.clone();
         let mut client = match Client::new(&url, info.clone(), &tls) {
             Ok(c) => c,
             Err(e) => {
-                out.problem("Can't use the server address", e.to_string()).await;
-                wait_ctl(&mut ctl, None).await;
+                ask = Some(Some(e.to_string()));
                 continue;
             }
         };
@@ -218,6 +269,13 @@ async fn session(
             Ok(s) => s,
             Err(e) => {
                 let detail = format!("{}: {e}", client.base_url());
+                if typed && !showing_home {
+                    // A new address that doesn't work: back to the server
+                    // screen with what went wrong, the text still there.
+                    tracing::warn!("{detail}");
+                    ask = Some(Some(format!("Couldn't connect to {}: {e}", client.base_url())));
+                    continue;
+                }
                 if showing_home {
                     tracing::warn!("offline: {detail}");
                     out.send(Event::Offline).await;
@@ -228,7 +286,9 @@ async fn session(
                     )
                     .await;
                 }
-                wait_ctl(&mut ctl, Some(backoff.next())).await;
+                if let Some(Ctl::ChangeServer) = wait_ctl(&mut ctl, Some(backoff.next())).await {
+                    ask = Some(None);
+                }
                 continue;
             }
         };
@@ -245,7 +305,9 @@ async fn session(
                 ),
             )
             .await;
-            wait_ctl(&mut ctl, None).await;
+            if let Some(Ctl::ChangeServer) = wait_ctl(&mut ctl, None).await {
+                ask = Some(None);
+            }
             continue;
         }
         let server_id =
@@ -261,8 +323,13 @@ async fn session(
             }
             None => {
                 client_tx.send_replace(None);
-                let Some(auth) = quick_connect(&client, &server_name, &out, &mut ctl).await else {
-                    continue 'outer;
+                let auth = match quick_connect(&client, &server_name, &out, &mut ctl).await {
+                    QuickConnect::SignedIn(a) => a,
+                    QuickConnect::Restart => continue 'outer,
+                    QuickConnect::ChangeServer => {
+                        ask = Some(None);
+                        continue 'outer;
+                    }
                 };
                 let token = auth.access_token.clone().unwrap_or_default();
                 let user = auth.user.clone().unwrap_or_default();
@@ -322,15 +389,31 @@ async fn session(
     }
 }
 
+enum QuickConnect {
+    SignedIn(AuthenticationResult),
+    /// Start over (the server went away).
+    Restart,
+    /// The user wants a different server.
+    ChangeServer,
+}
+
 /// Quick Connect (spec 8): show a code, the user approves it from another
-/// signed-in device, then trade the secret for a token. None means "start
-/// over" (the server went away or the user asked to retry).
+/// signed-in device, then trade the secret for a token.
 async fn quick_connect(
     client: &Client,
     server: &str,
     out: &Out,
     ctl: &mut mpsc::Receiver<Ctl>,
-) -> Option<AuthenticationResult> {
+) -> QuickConnect {
+    // Waits for input; Back (ChangeServer) always wins.
+    macro_rules! wait {
+        ($t:expr) => {
+            match wait_ctl(ctl, $t).await {
+                Some(Ctl::ChangeServer) => return QuickConnect::ChangeServer,
+                other => other,
+            }
+        };
+    }
     loop {
         match client.send(&ep::quick_connect_enabled()).await {
             Ok(true) => {}
@@ -339,42 +422,42 @@ async fn quick_connect(
                     "Quick Connect is turned off",
                     format!(
                         "Sign-in on this TV uses Quick Connect. Turn it on in {server}'s Dashboard \
-                         (General, then Quick Connect), then press Select."
+                         (General, then Quick Connect)."
                     ),
                 )
                 .await;
-                wait_ctl(ctl, None).await;
+                wait!(None);
                 continue;
             }
             Err(e) => {
                 out.problem("Can't reach the server", e.to_string()).await;
-                wait_ctl(ctl, Some(Duration::from_secs(5))).await;
-                return None;
+                wait!(Some(Duration::from_secs(5)));
+                return QuickConnect::Restart;
             }
         }
         let r = match client.send(&ep::quick_connect_initiate()).await {
             Ok(r) => r,
             Err(e) => {
                 out.problem("Quick Connect failed", e.to_string()).await;
-                wait_ctl(ctl, None).await;
-                return None;
+                wait!(None);
+                return QuickConnect::Restart;
             }
         };
         let (Some(code), Some(secret)) = (r.code, r.secret) else {
             out.problem("Quick Connect failed", "The server's answer had no code.").await;
-            wait_ctl(ctl, None).await;
+            wait!(None);
             continue;
         };
         out.status(Status::QuickConnect { server: server.into(), code }).await;
         loop {
-            if let Some(Ctl::Retry) = wait_ctl(ctl, Some(QUICK_CONNECT_POLL)).await {
+            if let Some(Ctl::Retry) = wait!(Some(QUICK_CONNECT_POLL)) {
                 break; // new code
             }
             match client.send(&ep::quick_connect_state(&secret)).await {
                 Ok(s) if s.authenticated == Some(true) => {
                     match client.send(&ep::authenticate_quick_connect(&secret)).await {
                         Ok(a) if a.access_token.as_deref().is_some_and(|t| !t.is_empty()) => {
-                            return Some(a);
+                            return QuickConnect::SignedIn(a);
                         }
                         Ok(_) => {
                             out.problem("Sign-in failed", "The server returned no access token.")
@@ -382,7 +465,7 @@ async fn quick_connect(
                         }
                         Err(e) => out.problem("Sign-in failed", e.to_string()).await,
                     }
-                    wait_ctl(ctl, None).await;
+                    wait!(None);
                     break;
                 }
                 Ok(_) => {}
