@@ -174,8 +174,7 @@ async fn session(
                     out.problem(
                         "No Jellyfin server found",
                         "No server answered on this network. Check that it is running, or set its \
-                         address in ~/.config/jellyroll/config.toml:  [server]  url = \"http://IP:8096\". \
-                         Press Select to search again.",
+                         address in ~/.config/jellyroll/config.toml:  [server]  url = \"http://IP:8096\".",
                     )
                     .await;
                     wait_ctl(&mut ctl, None).await;
@@ -225,7 +224,7 @@ async fn session(
                 } else {
                     out.problem(
                         "Can't reach the server",
-                        format!("{detail}. Retrying; press Select to retry now."),
+                        format!("{detail}. Retrying automatically."),
                     )
                     .await;
                 }
