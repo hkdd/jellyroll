@@ -68,6 +68,19 @@ scripts/dev-cage.sh --hud
 target/release/jellyroll
 ```
 
+On a text console, SDL reads the keyboard, remote and gamepads straight from
+`/dev/input/event*`. Those devices belong to root and the `input` group, and
+logging in on a console does not grant access to them. To run jellyroll by
+hand, add your account to that group once, then log out and back in:
+
+```sh
+sudo usermod -aG input "$USER"
+```
+
+Without access, jellyroll exits with this advice instead of showing a screen
+that ignores the keyboard. `--print-diagnostics` reports how many input
+devices are readable. The service user gets the group from `install.sh`.
+
 | Flag | |
 |---|---|
 | `--config PATH` | Config file (default `~/.config/jellyroll/config.toml`) |

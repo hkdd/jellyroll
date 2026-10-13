@@ -7,6 +7,7 @@ results into this file or a PR.
 
 1. **Build and install**
    ```sh
+   sudo usermod -aG input "$USER"   # for running by hand; log out and back in
    cargo build --release            # system SDL3 (Fedora: dnf install SDL3-devel)
    # or: cargo build --release --features build-sdl
    sudo scripts/install.sh --dry-run   # review first

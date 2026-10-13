@@ -10,6 +10,7 @@ mod draw;
 mod frame_loop;
 mod hud;
 mod input;
+mod input_access;
 mod logging;
 mod perf;
 mod scene;
@@ -65,6 +66,31 @@ fn main() -> ExitCode {
     }
 
     tracing::info!(version = env!("CARGO_PKG_VERSION"), dev = opts.dev, "starting");
+
+    // On KMSDRM, SDL reads input straight from /dev/input. Without access the
+    // screen works but nothing responds, so say so instead of hanging there.
+    // In --dev the compositor delivers input, so the check does not apply.
+    let mut notice = frame_loop::config_notice(loaded.warnings.len());
+    let access = input_access::scan(std::path::Path::new("/dev/input"));
+    if !opts.dev && access.blocked() {
+        let msg = format!(
+            "cannot read any of the {} input devices in /dev/input, so keyboard, \
+             remote and gamepad will not work: {}",
+            access.devices,
+            input_access::REMEDY
+        );
+        if std::env::var_os("NOTIFY_SOCKET").is_none() {
+            // Started by hand: refuse rather than take over the screen with
+            // no way to control (or quit) the app.
+            tracing::error!("{msg}");
+            eprintln!("jellyroll: {msg}");
+            return ExitCode::FAILURE;
+        }
+        // Under systemd: keep running and show the problem on screen.
+        tracing::error!("{msg}");
+        notice = "NO INPUT ACCESS: ADD THE SERVICE USER TO THE INPUT GROUP".into();
+    }
+
     let mut platform = match SdlPlatform::new(&sdl_opts) {
         Ok(p) => p,
         Err(e) => {
@@ -74,7 +100,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match frame_loop::run(&mut platform, &opts, &loaded, process_start) {
+    match frame_loop::run(&mut platform, &opts, &loaded, &notice, process_start) {
         frame_loop::Exit::Quit | frame_loop::Exit::BenchPassed => ExitCode::SUCCESS,
         frame_loop::Exit::BenchFailed => ExitCode::FAILURE,
     }

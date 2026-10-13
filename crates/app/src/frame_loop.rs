@@ -43,7 +43,7 @@ fn make_header(fb: (u32, u32), hz: f32, header: &mut String) {
 }
 
 /// On-screen notice for config problems (details are in the journal).
-fn config_notice(warnings: usize) -> String {
+pub fn config_notice(warnings: usize) -> String {
     match warnings {
         0 => String::new(),
         1 => "CONFIG: 1 WARNING, SEE JOURNALCTL -U JELLYROLL".into(),
@@ -71,6 +71,7 @@ pub fn run<P: Platform>(
     p: &mut P,
     opts: &Options,
     config: &crate::config::Loaded,
+    notice: &str,
     process_start: Instant,
 ) -> Exit {
     let start = Instant::now();
@@ -79,7 +80,6 @@ pub fn run<P: Platform>(
     let mut hud = Hud::new(opts.hud, start);
     let mut repeat = KeyRepeat::new(config.config.input.repeat());
     let safe_area = config.config.display.safe_area;
-    let notice = config_notice(config.warnings.len());
     let mut stats = FrameStats::default();
     let mut batch = RectBatch::with_capacity(4096);
     let mut events: Vec<PlatformEvent> = Vec::with_capacity(64);
@@ -198,7 +198,7 @@ pub fn run<P: Platform>(
         gl.viewport(0, 0, fb.0 as i32, fb.1 as i32);
         let timing = gpu_timer.as_mut().is_some_and(|t| t.begin(gl));
         batch.clear();
-        scene.draw(&mut batch, fb, &layout, now, &header, &notice);
+        scene.draw(&mut batch, fb, &layout, now, &header, notice);
         hud.draw(&mut batch, &stats, layout.safe_x + layout.safe_w, layout.safe_y, layout.scale);
         batch.flush(gl, fb.1 as i32);
         if timing && let Some(t) = gpu_timer.as_mut() {

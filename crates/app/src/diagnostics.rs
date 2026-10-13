@@ -27,6 +27,11 @@ pub fn print(opts: &SdlOptions) -> ExitCode {
     println!("kernel: {}", read_trim("/proc/sys/kernel/osrelease").unwrap_or_default());
     println!("dri_devices: {}", list_dir("/dev/dri", "").join(", "));
     println!("cec_devices: {}", list_dir("/dev", "cec").join(", "));
+    let input = crate::input_access::scan(std::path::Path::new("/dev/input"));
+    println!("input_devices: {} readable of {}", input.readable, input.devices);
+    if input.blocked() {
+        println!("input_warning: no access; {}", crate::input_access::REMEDY);
+    }
     for var in [
         "XDG_SESSION_TYPE",
         "XDG_SEAT",
