@@ -84,12 +84,13 @@ impl Playback {
         self.player.poll_events(&mut self.events);
         for i in 0..self.events.len() {
             match self.events[i].clone() {
-                PlayerEvent::FileLoaded | PlayerEvent::VideoReconfig => {
-                    self.report_decoder();
-                    redraw = true;
-                }
+                PlayerEvent::FileLoaded | PlayerEvent::VideoReconfig => redraw = true,
                 PlayerEvent::PlaybackRestart => {
+                    // The first frame has been decoded, so mpv has settled on a
+                    // decoder (hwdec-current arrives before this event; at
+                    // FileLoaded it is not known yet).
                     self.started = true;
+                    self.report_decoder();
                     redraw = true;
                 }
                 PlayerEvent::EndFile { reason, error } => {

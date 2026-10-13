@@ -249,6 +249,29 @@ swap. Paused, the loop idles and redraws only on input or when the OSD
 appears/disappears. The GL error flag is cleared during the reset so mpv
 isn't blamed for earlier errors.
 
+### M3 results on the HTPC (Intel HD 530, 3840×2160 @ 60, 2026-10-13)
+
+`--bench-play 15` on 20 s synthetic 4K 23.976 fps clips
+(`scripts/make-test-clips.sh`), OSD toggled every 2 s during each run:
+
+| Clip | Decoder | CPU, process | CPU, render thread | Dropped / late |
+|---|---|---|---|---|
+| H.264 | vaapi | 10.8% | 5.3% | 0 / 0 |
+| HEVC 8-bit | vaapi | 12.2% | 5.7% | 0 / 0 |
+| HEVC 10-bit | software (flagged: badge + warning) | 196.7% | 21.7% | 0 / 0 |
+
+For comparison, software decode before the render-node fixes: H.264 94%,
+HEVC 8-bit 151% of a core. M3's exit criteria are met for every codec this
+GPU decodes; HEVC 10-bit behaves as D19 requires.
+
+Two bugs found on the way: mpv had no VA-API display on the bare console
+(fixed by passing the render node, D22), and the render node was opened
+read-only, which is enough for the capability query but not for allocating
+decode surfaces ("Failed to create decode context: 2 (resource allocation
+failed)"). Known noise: mpv logs `after creating texture: OpenGL error
+INVALID_OPERATION` twice at video start on this driver; playback is
+unaffected.
+
 ## Dependency approvals
 
 | Crate | Status |
