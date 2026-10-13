@@ -65,6 +65,25 @@ pub const SIGN_IN: &str = "Sign in";
 pub const SIGNING_IN: &str = "Signing in…";
 pub const USERS_ON_SERVER: &str = "Users on this server";
 
+pub const PLAYER_HINT: &str =
+    "Left/Right: seek    Down: audio & subtitles    Info: details    Back: stop";
+pub const PAUSED: &str = "Paused";
+pub const BUFFERING: &str = "Buffering…";
+pub const AUDIO: &str = "Audio";
+pub const SUBTITLES: &str = "Subtitles";
+pub const SUBTITLES_OFF: &str = "Off";
+pub const SKIP_INTRO: &str = "Skip intro";
+pub const SKIP_RECAP: &str = "Skip recap";
+pub const SKIP_PREVIEW: &str = "Skip preview";
+pub const SKIP_COMMERCIAL: &str = "Skip ad";
+pub const SKIP_CREDITS: &str = "Skip credits";
+pub const UP_NEXT: &str = "Up next";
+pub const PLAY_NOW_HINT: &str = "Select: play now    Back: cancel";
+pub const PLAYING_IN: &str = "Playing in %s";
+pub const STARTING: &str = "Starting…";
+pub const SOFTWARE_DECODE: &str =
+    "Software decoding: this device has no hardware decoder for this video";
+
 /// `%s` substitution, in order.
 pub fn fill(template: &str, args: &[&str]) -> String {
     let mut out = String::with_capacity(template.len() + 32);
@@ -136,6 +155,22 @@ pub const ALL: &[&str] = &[
     SIGN_IN,
     SIGNING_IN,
     USERS_ON_SERVER,
+    PLAYER_HINT,
+    PAUSED,
+    BUFFERING,
+    AUDIO,
+    SUBTITLES,
+    SUBTITLES_OFF,
+    SKIP_INTRO,
+    SKIP_RECAP,
+    SKIP_PREVIEW,
+    SKIP_COMMERCIAL,
+    SKIP_CREDITS,
+    UP_NEXT,
+    PLAY_NOW_HINT,
+    PLAYING_IN,
+    STARTING,
+    SOFTWARE_DECODE,
 ];
 
 #[cfg(test)]

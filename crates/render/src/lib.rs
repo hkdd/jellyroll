@@ -176,6 +176,9 @@ pub trait Renderer {
     /// texture; never a per-frame blur.
     fn shadow(&mut self, r: Rect, radius: f32, blur: f32, c: Color);
     fn image(&mut self, img: ImageId, dst: Rect, radius: f32, opacity: f32);
+    /// Draws the `src` part of an image (in image pixels) into `dst`, e.g.
+    /// one tile of a trickplay sheet.
+    fn image_region(&mut self, img: ImageId, src: Rect, dst: Rect);
     /// Draws text with its top-left at `origin`. Shaping is cached by
     /// (text, style); static labels are never re-shaped.
     fn text(&mut self, text: &str, style: &TextStyle, origin: Point, c: Color) -> TextMetrics;

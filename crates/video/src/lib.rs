@@ -49,6 +49,11 @@ pub struct PlayerOptions {
     pub http_header: Option<String>,
     /// Start position in seconds (resume).
     pub start_secs: Option<f64>,
+    /// Initial audio and subtitle tracks (mpv `aid`/`sid`: a 1-based id,
+    /// `no`, or `auto`). The app picks them from server metadata (spec 7.1:
+    /// `sub-auto=no`).
+    pub audio_track: Option<String>,
+    pub sub_track: Option<String>,
 }
 
 impl Default for PlayerOptions {
@@ -62,6 +67,8 @@ impl Default for PlayerOptions {
             render_node: None,
             http_header: None,
             start_secs: None,
+            audio_track: None,
+            sub_track: None,
         }
     }
 }
@@ -100,6 +107,9 @@ pub struct PlaybackState {
     pub audio_codec: String,
     pub file_loaded: bool,
     pub drops: FrameDrops,
+    /// Waiting for the network (`paused-for-cache`) or seeking.
+    pub buffering: bool,
+    pub seeking: bool,
 }
 
 impl PlaybackState {
@@ -166,8 +176,10 @@ const OBS_DROP_VO: u64 = 10;
 const OBS_DROP_DECODER: u64 = 11;
 const OBS_DELAYED: u64 = 12;
 const OBS_MISTIMED: u64 = 13;
+const OBS_BUFFERING: u64 = 14;
+const OBS_SEEKING: u64 = 15;
 
-const OBSERVED: [(u64, &str, c_int); 13] = [
+const OBSERVED: [(u64, &str, c_int); 15] = [
     (OBS_TIME_POS, "time-pos", MPV_FORMAT_DOUBLE),
     (OBS_DURATION, "duration", MPV_FORMAT_DOUBLE),
     (OBS_PAUSE, "pause", MPV_FORMAT_FLAG),
@@ -181,6 +193,8 @@ const OBSERVED: [(u64, &str, c_int); 13] = [
     (OBS_DROP_DECODER, "decoder-frame-drop-count", MPV_FORMAT_INT64),
     (OBS_DELAYED, "vo-delayed-frame-count", MPV_FORMAT_INT64),
     (OBS_MISTIMED, "mistimed-frame-count", MPV_FORMAT_INT64),
+    (OBS_BUFFERING, "paused-for-cache", MPV_FORMAT_FLAG),
+    (OBS_SEEKING, "seeking", MPV_FORMAT_FLAG),
 ];
 
 /// mpv's built-in scripts and UI features, disabled explicitly
@@ -309,7 +323,7 @@ impl Player {
 
         // Spec 7.1: configured through the API only; no config files,
         // scripts, OSC or default key bindings. The app draws its own OSD.
-        let options: [(&str, &str); 19] = [
+        let options: [(&str, &str); 23] = [
             ("config", "no"),
             ("load-scripts", "no"),
             ("osc", "no"),
@@ -331,6 +345,12 @@ impl Player {
             // A missing audio device (TV or receiver off, HDMI unplugged)
             // must not stop video (spec 12).
             ("audio-fallback-to-null", "yes"),
+            // Subtitles legible from the couch (spec 7.1): larger text,
+            // a solid outline, sized to the video, not the window.
+            ("sub-font-size", "46"),
+            ("sub-border-size", "3"),
+            ("sub-scale-with-window", "no"),
+            ("sub-use-margins", "yes"),
         ];
         for (k, v) in options {
             player.set_option(k, v)?;
@@ -340,6 +360,12 @@ impl Player {
                 return Err("http_header must not contain commas".into());
             }
             player.set_option("http-header-fields", h)?;
+        }
+        if let Some(a) = &opts.audio_track {
+            player.set_option("aid", a)?;
+        }
+        if let Some(s) = &opts.sub_track {
+            player.set_option("sid", s)?;
         }
         if let Some(s) = opts.start_secs.filter(|s| *s > 0.0) {
             player.set_option("start", &format!("{s:.3}"))?;
@@ -458,6 +484,29 @@ impl Player {
         let _ = self.command(&["seek", &s, "relative"]);
     }
 
+    /// Seeks to `secs` from the start (to the nearest keyframe: fast).
+    pub fn seek_absolute(&mut self, secs: f64) {
+        let s = format!("{:.3}", secs.max(0.0));
+        let _ = self.command(&["seek", &s, "absolute"]);
+    }
+
+    /// Selects audio track `id` (mpv's 1-based audio id).
+    pub fn set_audio(&mut self, id: i64) {
+        let _ = self.command(&["set", "aid", &id.to_string()]);
+    }
+
+    /// Selects subtitle track `id` (mpv's 1-based subtitle id), or none.
+    pub fn set_subtitle(&mut self, id: Option<i64>) {
+        let v = id.map_or("no".to_string(), |i| i.to_string());
+        let _ = self.command(&["set", "sid", &v]);
+    }
+
+    /// Adds an external subtitle file (URL) and selects it. mpv gives it the
+    /// next subtitle id after the ones already known.
+    pub fn add_subtitle(&mut self, url: &str, title: &str, lang: &str) {
+        let _ = self.command(&["sub-add", url, "select", title, lang]);
+    }
+
     pub fn stop(&mut self) {
         let _ = self.command(&["stop"]);
     }
@@ -557,6 +606,8 @@ impl Player {
                             OBS_DROP_DECODER => st.drops.decoder = i64v(),
                             OBS_DELAYED => st.drops.delayed = i64v(),
                             OBS_MISTIMED => st.drops.mistimed = i64v(),
+                            OBS_BUFFERING => st.buffering = *(p.data as *const c_int) != 0,
+                            OBS_SEEKING => st.seeking = *(p.data as *const c_int) != 0,
                             _ => {}
                         }
                     }

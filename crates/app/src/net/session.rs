@@ -113,6 +113,9 @@ pub async fn run(cfg: NetConfig, out: Out, mut cmds: mpsc::Receiver<Cmd>) {
     let (signed_tx, signed_rx) = watch::channel::<fetch::Session>(None);
     let queue = Arc::new(ImageQueue::default());
     let fetches = Arc::new(fetch::FetchQueue::default());
+    let reports = Arc::new(super::reports::ReportQueue::open(
+        cfg.data_dir.as_deref().map(super::reports::path),
+    ));
 
     let cap = cfg.image_cache_bytes;
     let images_dir = cfg.cache_dir.clone();
@@ -124,7 +127,8 @@ pub async fn run(cfg: NetConfig, out: Out, mut cmds: mpsc::Receiver<Cmd>) {
     .flatten();
 
     let images = tokio::spawn(image_worker(queue.clone(), client_rx, disk, out.clone()));
-    let fetcher = tokio::spawn(fetch::worker(fetches.clone(), signed_rx, out.clone()));
+    let fetcher = tokio::spawn(fetch::worker(fetches.clone(), signed_rx.clone(), out.clone()));
+    let reporter = tokio::spawn(super::reports::worker(reports.clone(), signed_rx));
     let session = tokio::spawn(session(cfg, out, ctl_rx, client_tx, signed_tx));
     while let Some(c) = cmds.recv().await {
         match c {
@@ -142,6 +146,7 @@ pub async fn run(cfg: NetConfig, out: Out, mut cmds: mpsc::Receiver<Cmd>) {
             }
             Cmd::WantImages(jobs) => queue.replace(jobs),
             Cmd::Fetch { id, req } => fetches.push(id, req),
+            Cmd::Report(r) => reports.push(*r),
             Cmd::Refresh => {
                 let _ = ctl_tx.try_send(Ctl::Refresh);
             }
@@ -156,7 +161,8 @@ pub async fn run(cfg: NetConfig, out: Out, mut cmds: mpsc::Receiver<Cmd>) {
             }
         }
     }
-    // The UI is gone.
+    // The UI is gone. Unsent reports are on disk for next time.
+    reporter.abort();
     fetcher.abort();
     images.abort();
     session.abort();

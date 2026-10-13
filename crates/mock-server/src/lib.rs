@@ -742,7 +742,11 @@ impl Server {
             && kind != "Start"
             && let Ok(mut p) = self.positions.lock()
         {
-            p.insert(item.to_string(), t);
+            // Like the server: past 90% the item is watched and the resume
+            // point is cleared.
+            let rt = self.lib.find(item).and_then(|i| i.json["RunTimeTicks"].as_i64()).unwrap_or(0);
+            let watched = rt > 0 && t * 10 >= rt * 9;
+            p.insert(item.to_string(), if watched { 0 } else { t });
         }
         if let Ok(mut r) = self.reports.lock() {
             r.push(

@@ -10,6 +10,8 @@ mod library;
 pub mod model;
 mod osk;
 mod pages;
+pub mod player;
+pub mod playinfo;
 mod search;
 mod server_entry;
 mod settings;
@@ -24,7 +26,7 @@ mod widgets;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use jellyroll_render::{Point, Renderer, TextStyle, Weight};
+use jellyroll_render::{Color, Point, Rect, Renderer, TextStyle, Weight};
 use jellyroll_video::va::DecodeCaps;
 
 use crate::config::UiResolution;
@@ -42,10 +44,11 @@ use textures::Textures;
 use view::HomeView;
 use widgets::{Viewport, Wants};
 
-/// Per-frame texture upload budget (spec 9).
-/// Per-frame image upload time: the frame's other work at 4K is ~2 ms on
-/// the reference HTPC, and the CPU budget is 4 ms (spec 2).
+/// Per-frame image upload time (spec 9): the frame's other work at 4K is
+/// ~2 ms on the reference HTPC, and the CPU budget is 4 ms (spec 2).
 const UPLOAD_BUDGET: Duration = Duration::from_micros(1500);
+/// How long a toast stays up.
+const TOAST_FOR: Duration = Duration::from_secs(6);
 /// Network events handled per loop iteration (bounds the work per frame).
 const EVENTS_PER_FRAME: usize = 64;
 /// How often image requests are rebuilt while images keep arriving.
@@ -75,6 +78,9 @@ pub struct PlayRequest {
     pub authorization: String,
     pub start_secs: f64,
     pub title: String,
+    /// Initial mpv `aid`/`sid` (from the server's default tracks).
+    pub audio_track: Option<String>,
+    pub sub_track: Option<String>,
 }
 
 pub struct HomeApp {
@@ -93,8 +99,14 @@ pub struct HomeApp {
     caps: Arc<OnceLock<Option<DecodeCaps>>>,
     /// Device facts for Settings (versions, GPU, display).
     about: Vec<(String, String)>,
-    /// Stream fetch in flight: (request id, start, title).
-    play_req: Option<(u64, i64, String)>,
+    /// Play fetch in flight (request id).
+    play_req: Option<u64>,
+    /// The player while something plays (M7).
+    player: Option<player::PlayerUi>,
+    /// Trickplay sheets last requested (texture keys).
+    player_wants: Vec<u64>,
+    /// A short message over the page (e.g. why something won't play).
+    toast: Option<(String, Instant)>,
     play: Option<PlayRequest>,
     /// The Quick Connect screen the password form came from.
     qc: Option<Status>,
@@ -149,6 +161,9 @@ impl HomeApp {
             caps,
             about,
             play_req: None,
+            player: None,
+            player_wants: Vec::new(),
+            toast: None,
             play: None,
             qc: None,
             load_work: 0,
@@ -212,10 +227,9 @@ impl HomeApp {
     fn open(&mut self, o: Open, now: Instant) {
         let vp = self.vp;
         let page = match o {
-            Open::Play { id, media_source, start_ticks, title } => {
-                let req =
-                    self.with_ctx(now, |_, ctx| ctx.fetch(Fetch::Stream { id, media_source }));
-                self.play_req = Some((req, start_ticks, title));
+            Open::Play { id, start_ticks, .. } => {
+                let req = self.with_ctx(now, |_, ctx| ctx.fetch(Fetch::Play { id, start_ticks }));
+                self.play_req = Some(req);
                 return;
             }
             Open::Library { id, title, collection } => self.with_ctx(now, |_, ctx| {
@@ -373,19 +387,26 @@ impl HomeApp {
     }
 
     fn fetched(&mut self, id: u64, result: Fetched, now: Instant) -> bool {
-        if let Some((req, start_ticks, title)) = self.play_req.take() {
-            if req == id {
-                if let Fetched::Stream { url, authorization } = result {
-                    self.play = Some(PlayRequest {
-                        url,
-                        authorization,
-                        start_secs: start_ticks as f64 / 1e7,
-                        title,
-                    });
+        if self.play_req == Some(id) {
+            self.play_req = None;
+            match result {
+                Fetched::Play(p) => {
+                    let (ui, req) = player::PlayerUi::new(*p, now);
+                    self.player = Some(ui);
+                    self.play = Some(req);
                 }
-                return true;
+                Fetched::Failed(e) => {
+                    tracing::warn!("can't play: {e}");
+                    self.toast = Some((e, now + TOAST_FOR));
+                }
+                _ => {}
             }
-            self.play_req = Some((req, start_ticks, title));
+            return true;
+        }
+        if let Some(pl) = &mut self.player
+            && pl.on_fetched(id, &result)
+        {
+            return true;
         }
         let mut used = false;
         self.with_ctx(now, |me, ctx| {
@@ -406,8 +427,94 @@ impl HomeApp {
         self.play.take()
     }
 
+    /// Something is playing through the player UI.
+    pub fn has_player(&self) -> bool {
+        self.player.is_some()
+    }
+
+    /// Input during playback.
+    pub fn player_action(
+        &mut self,
+        a: InputAction,
+        pb: &mut crate::playback::Playback,
+        now: Instant,
+    ) -> player::Outcome {
+        let out = self.with_ctx(now, |me, ctx| match me.player.as_mut() {
+            Some(pl) => pl.on_action(a, pb, now, ctx),
+            None => player::Outcome::Stop,
+        });
+        self.update_player_wants();
+        out
+    }
+
+    /// Per-frame playback work (reports, countdowns, the end). On `Next`,
+    /// `take_play` has the next episode's request.
+    pub fn player_tick(
+        &mut self,
+        pb: &mut crate::playback::Playback,
+        now: Instant,
+    ) -> player::Tick {
+        let t = self.with_ctx(now, |me, ctx| match me.player.as_mut() {
+            Some(pl) => pl.tick(pb, now, ctx),
+            None => player::Tick::Finished,
+        });
+        if let player::Tick::Next(n) = &t {
+            let (ui, req) = player::PlayerUi::new((**n).clone(), now);
+            tracing::info!(title = %req.title, "playing the next episode");
+            self.player = Some(ui);
+            self.play = Some(req);
+        }
+        self.update_player_wants();
+        t
+    }
+
+    fn update_player_wants(&mut self) {
+        let Some(pl) = &self.player else { return };
+        let jobs = pl.wants();
+        let keys: Vec<u64> =
+            jobs.iter().filter(|j| !self.textures.known(j.key)).map(|j| j.key).collect();
+        if keys != self.player_wants {
+            let jobs = jobs.into_iter().filter(|j| keys.contains(&j.key)).collect();
+            if self.net.send(Cmd::WantImages(jobs)) {
+                self.player_wants = keys;
+            }
+        }
+    }
+
+    pub fn player_overlay_visible(
+        &self,
+        now: Instant,
+        st: &jellyroll_video::PlaybackState,
+    ) -> bool {
+        self.player.as_ref().is_some_and(|p| p.overlay_visible(now, st))
+            || self.textures.uploads_pending()
+    }
+
+    pub fn player_deadline(&self, now: Instant) -> Option<Instant> {
+        self.player.as_ref().and_then(|p| p.next_deadline(now))
+    }
+
+    /// Draws the player's overlay (and uploads any trickplay sheets).
+    pub fn draw_player<R: Renderer>(
+        &mut self,
+        r: &mut R,
+        st: &jellyroll_video::PlaybackState,
+        now: Instant,
+        safe_area: f32,
+    ) {
+        if self.textures.uploads_pending() {
+            self.textures.pump(r, UPLOAD_BUDGET);
+        }
+        self.textures.begin_frame();
+        if let Some(pl) = &mut self.player {
+            pl.draw(r, &mut self.textures, st, now, safe_area);
+        }
+    }
+
     /// Playback ended: refresh what it changed (resume points, watched).
     pub fn playback_finished(&mut self, now: Instant) {
+        self.player = None;
+        self.player_wants.clear();
         self.send_all(vec![Cmd::Refresh]);
         self.with_ctx(now, |me, ctx| {
             if let Some(Page::Detail(d)) = me.stack.last_mut() {
@@ -571,10 +678,16 @@ impl HomeApp {
 
     /// When the loop must wake even without input (debounced search).
     pub fn next_deadline(&self) -> Option<Instant> {
-        match self.stack.last() {
+        let page = match self.stack.last() {
             _ if self.uploaded => Some(self.wants_at),
             Some(Page::Search(v)) if matches!(self.screen, Screen::Browse) => v.next_deadline(),
             _ => None,
+        };
+        // The toast's end needs a redraw too.
+        let toast = self.toast.as_ref().map(|t| t.1);
+        match (page, toast) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
         }
     }
 
@@ -646,6 +759,23 @@ impl HomeApp {
                     Point::new(lw * safe, lh * safe),
                     theme::TEXT,
                 );
+            }
+        }
+        if let Some((msg, until)) = &self.toast {
+            if now < *until {
+                let (lw, lh) = r.logical_size();
+                let style = TextStyle::new(24.0, Weight::Bold).max_width(lw * 0.6);
+                let m = r.measure_text(msg, &style);
+                let rect = Rect::new(
+                    (lw - m.width) / 2.0 - 24.0,
+                    lh - lh * safe - m.height - 60.0,
+                    m.width + 48.0,
+                    m.height + 28.0,
+                );
+                r.fill_rrect(rect, 12.0, Color::rgba(14, 16, 22, 240));
+                r.text(msg, &style, Point::new(rect.x + 24.0, rect.y + 14.0), theme::NOTICE);
+            } else {
+                self.toast = None;
             }
         }
     }

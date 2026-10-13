@@ -18,6 +18,7 @@ use jellyroll_render::Renderer;
 
 use crate::args::{Bench, Options};
 use crate::home::HomeApp;
+use crate::home::player::{Outcome as PlayerOutcome, Tick as PlayerTick};
 use crate::hud::{CPU_BUDGET_MS, GPU_BUDGET_MS, Hud};
 use crate::input::{self, Input, InputAction, KeyRepeat};
 use crate::net::{NetConfig, NetHandle};
@@ -253,9 +254,12 @@ pub fn run<P: Platform, R: Renderer>(
             earliest(systemd.next_deadline(), bench_end),
         );
         let deadline = earliest(deadline, script.as_ref().and_then(|s| s.next_deadline()));
-        let (deadline, animating) = match &playback {
-            Some(pb) => (earliest(deadline, pb.osd.next_deadline(now)), pb.playing()),
-            None => (earliest(deadline, view.next_deadline()), view.is_animating(now)),
+        let (deadline, animating) = match (&playback, &view) {
+            (Some(pb), View::Home(h)) if h.has_player() => {
+                (earliest(deadline, h.player_deadline(now)), pb.playing())
+            }
+            (Some(pb), _) => (earliest(deadline, pb.osd.next_deadline(now)), pb.playing()),
+            (None, _) => (earliest(deadline, view.next_deadline()), view.is_animating(now)),
         };
         let timeout = wait_timeout(dirty, animating, deadline, now);
         events.clear();
@@ -368,6 +372,15 @@ pub fn run<P: Platform, R: Renderer>(
                     }
                     Some(Input::Press { button, action: Some(a) }) => {
                         repeat.press(button, a, now);
+                        if let (Some(pb), View::Home(h)) = (playback.as_mut(), &mut view)
+                            && h.has_player()
+                        {
+                            match h.player_action(a, pb, now) {
+                                PlayerOutcome::Stop => stop_playback = true,
+                                PlayerOutcome::Continue { redraw } => dirty |= redraw,
+                            }
+                            continue;
+                        }
                         if let Some(pb) = playback.as_mut() {
                             match pb.on_action(a, now) {
                                 Outcome::Exit if browsing => stop_playback = true,
@@ -392,7 +405,36 @@ pub fn run<P: Platform, R: Renderer>(
                 },
             }
         }
-        if let Some(pb) = playback.as_mut() {
+        let mut next_episode = false;
+        if let (Some(pb), View::Home(h)) = (playback.as_mut(), &mut view)
+            && h.has_player()
+        {
+            // The browsing player (M7): input, reports, the end and the
+            // next episode are the player UI's.
+            if let Some(a) = repeat.tick(now) {
+                match h.player_action(a, pb, now) {
+                    PlayerOutcome::Stop => stop_playback = true,
+                    PlayerOutcome::Continue { redraw } => dirty |= redraw,
+                }
+            }
+            dirty |= pb.poll(now);
+            match h.player_tick(pb, now) {
+                PlayerTick::Continue { redraw } => dirty |= redraw,
+                PlayerTick::Finished => {
+                    if let Some((reason, error)) = &pb.ended {
+                        match error {
+                            Some(e) => tracing::warn!("playback ended: {reason:?}: {e}"),
+                            None => tracing::info!("playback ended: {reason:?}"),
+                        }
+                    }
+                    stop_playback = true;
+                }
+                PlayerTick::Next(_) => next_episode = true,
+            }
+            let overlay = h.player_overlay_visible(now, &pb.player.state);
+            dirty |= pb.playing() || overlay != overlay_shown;
+            overlay_shown = overlay;
+        } else if let Some(pb) = playback.as_mut() {
             if let Some(a) = repeat.tick(now)
                 && let Outcome::Continue { redraw } = pb.on_action(a, now)
             {
@@ -455,20 +497,13 @@ pub fn run<P: Platform, R: Renderer>(
             if let View::Home(h) = &mut view
                 && let Some(req) = h.take_play()
             {
-                let popts = jellyroll_video::PlayerOptions {
-                    http_header: Some(format!("Authorization: {}", req.authorization)),
-                    start_secs: Some(req.start_secs),
-                    ..Default::default()
-                };
-                match Playback::start_with(p, &req.url, &req.title, popts, now) {
-                    Ok(pb) => {
-                        playback = Some(pb);
-                        overlay_shown = false;
-                        repeat.reset();
-                        dirty = true;
-                    }
-                    Err(e) => tracing::error!("playback: {e}"),
+                playback = start_play(p, req, now);
+                if playback.is_none() {
+                    h.playback_finished(now);
                 }
+                overlay_shown = false;
+                repeat.reset();
+                dirty = true;
             }
             if view.is_animating(now) {
                 dirty = true;
@@ -481,6 +516,22 @@ pub fn run<P: Platform, R: Renderer>(
         } else {
             0
         };
+        if next_episode {
+            // Straight into the next episode: no stop back to the page.
+            playback = None;
+            r.reset_gl_state();
+            repeat.reset();
+            if let View::Home(h) = &mut view
+                && let Some(req) = h.take_play()
+            {
+                playback = start_play(p, req, now);
+                if playback.is_none() {
+                    h.playback_finished(now);
+                }
+            }
+            overlay_shown = false;
+            dirty = true;
+        }
         if std::mem::take(&mut stop_playback) {
             playback = None;
             // mpv changed GL state; Skia must not trust its cache.
@@ -506,11 +557,17 @@ pub fn run<P: Platform, R: Renderer>(
             r.reset_gl_state();
             let submit_start = Instant::now();
             stats.record_ms.push(ms(submit_start - frame_start));
-            if (pb.osd.any_visible(now, &pb.player.state) || hud.visible) && r.begin_frame(fb) {
+            let home = matches!(&view, View::Home(h) if h.has_player());
+            let overlay =
+                if home { overlay_shown } else { pb.osd.any_visible(now, &pb.player.state) };
+            if (overlay || hud.visible) && r.begin_frame(fb) {
                 // OSD text (time) and HUD lines change while playing; keep
                 // their shaping out of the steady-state allocation check.
                 let a0 = alloc_counter::allocations();
-                pb.osd.draw(r, now, &pb.player.state, &pb.drops, safe_area);
+                match &mut view {
+                    View::Home(h) if home => h.draw_player(r, &pb.player.state, now, safe_area),
+                    _ => pb.osd.draw(r, now, &pb.player.state, &pb.drops, safe_area),
+                }
                 let (lw, lh) = r.logical_size();
                 hud.draw(r, &stats, lw * (1.0 - safe_area), lh * safe_area);
                 hud_allocs = alloc_counter::allocations() - a0;
@@ -618,6 +675,24 @@ pub fn run<P: Platform, R: Renderer>(
             tracing::info!(ms = t.as_millis() as u64, "first frame presented");
             systemd.ready(t);
             p.start_input_devices();
+        }
+    }
+}
+
+/// Starts mpv for a request from the browsing UI.
+fn start_play<P: Platform>(p: &P, req: crate::home::PlayRequest, now: Instant) -> Option<Playback> {
+    let popts = jellyroll_video::PlayerOptions {
+        http_header: Some(format!("Authorization: {}", req.authorization)),
+        start_secs: Some(req.start_secs),
+        audio_track: req.audio_track,
+        sub_track: req.sub_track,
+        ..Default::default()
+    };
+    match Playback::start_with(p, &req.url, &req.title, popts, now) {
+        Ok(pb) => Some(pb),
+        Err(e) => {
+            tracing::error!("playback: {e}");
+            None
         }
     }
 }

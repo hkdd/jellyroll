@@ -6,6 +6,7 @@
 
 mod fetch;
 pub mod images;
+mod reports;
 mod session;
 pub mod store;
 
@@ -45,6 +46,9 @@ pub enum Cmd {
     /// already in flight finish; queued ones not in the new list are
     /// dropped (spec 4: cancel work for rows scrolled away).
     WantImages(Vec<ImageJob>),
+    /// A playback report (start/progress/stop), sent in order and retried
+    /// until delivered (spec 7.2).
+    Report(Box<jellyfin_api::playback::Report>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -129,10 +133,11 @@ pub enum Fetch {
         id: String,
         on: bool,
     },
-    /// URL and auth header to direct-play a video.
-    Stream {
+    /// Everything to play an item (PlaybackInfo, chapters, segments,
+    /// trickplay, the next episode), from `start_ticks`.
+    Play {
         id: String,
-        media_source: String,
+        start_ticks: i64,
     },
 }
 
@@ -144,8 +149,18 @@ pub enum Fetched {
     Cards(Vec<Card>),
     Names(Vec<String>),
     UserData { favorite: bool, played: bool },
-    Stream { url: String, authorization: String },
+    Play(Box<PlayFetched>),
     Failed(String),
+}
+
+/// The player's data plus how to reach the server (stream URL, external
+/// subtitles).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlayFetched {
+    pub info: crate::home::playinfo::PlayInfo,
+    pub base_url: String,
+    /// `Authorization` header value for media requests.
+    pub authorization: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -356,6 +371,52 @@ mod tests {
         }
         got.sort();
         assert_eq!(got, [(1, 100, 150), (2, 21, 32)]);
+
+        // Playback (M7): play data, then a stop report the server records
+        // as the resume point.
+        let movie = data.rows[3].cards[0].id.clone();
+        assert!(
+            h.send(Cmd::Fetch { id: 77, req: Fetch::Play { id: movie.clone(), start_ticks: 0 } })
+        );
+        let pf = loop {
+            match next(&mut h, deadline) {
+                Event::Fetched { id: 77, result: Fetched::Play(p) } => break p,
+                Event::Fetched { id: 77, result } => panic!("{result:?}"),
+                _ => {}
+            }
+        };
+        assert_eq!(pf.info.audio.len(), 2);
+        assert!(pf.info.subtitles.iter().any(|t| t.external.is_some()));
+        assert!(pf.authorization.contains("Token="));
+        assert!(h.send(Cmd::Report(Box::new(jellyfin_api::playback::Report {
+            kind: jellyfin_api::playback::ReportKind::Stopped,
+            item_id: movie.clone(),
+            media_source_id: pf.info.media_source_id.clone(),
+            play_session_id: pf.info.play_session_id.clone(),
+            position_ticks: 1234,
+            paused: false,
+            audio_stream_index: Some(1),
+            subtitle_stream_index: None,
+            play_method: pf.info.play_method,
+        }))));
+        let mut n = 100;
+        loop {
+            n += 1;
+            assert!(h.send(Cmd::Fetch { id: n, req: Fetch::Detail(movie.clone()) }));
+            let resume = loop {
+                match next(&mut h, deadline) {
+                    Event::Fetched { id, result: Fetched::Detail(d) } if id == n => {
+                        break d.resume_ticks;
+                    }
+                    _ => {}
+                }
+            };
+            if resume == 1234 {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the stop report never arrived");
+            std::thread::sleep(Duration::from_millis(50));
+        }
         h.stop();
         let cached_images = std::fs::read_dir(dir.join("cache/images")).unwrap().count();
         assert_eq!(cached_images, 1, "server image cached on disk");

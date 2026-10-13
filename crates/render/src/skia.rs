@@ -600,6 +600,20 @@ impl Renderer for SkiaRenderer {
         self.canvas().draw_rrect(rrect(dst, radius), &p);
     }
 
+    fn image_region(&mut self, img: ImageId, src: Rect, dst: Rect) {
+        let Some(Some(entry)) = self.images.get(img.0 as usize) else { return };
+        let image = entry.image.clone();
+        let sampling = sk::SamplingOptions::new(sk::FilterMode::Linear, sk::MipmapMode::None);
+        let p = sk::Paint::default();
+        self.canvas().draw_image_rect_with_sampling_options(
+            &image,
+            Some((&sk_rect(src), sk::canvas::SrcRectConstraint::Strict)),
+            sk_rect(dst),
+            sampling,
+            &p,
+        );
+    }
+
     fn text(&mut self, text: &str, style: &TextStyle, origin: Point, c: Color) -> TextMetrics {
         let e = self.shaped(text, style);
         let (blob, metrics) = (e.blob.clone(), e.metrics);
