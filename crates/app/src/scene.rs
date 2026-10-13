@@ -10,7 +10,7 @@
 
 use std::time::{Duration, Instant};
 
-use jellyroll_render::{Color, Gradient, ImageId, Point, Rect, Renderer, TextStyle, Weight};
+use jellyroll_render::{Color, ImageId, Point, Rect, Renderer, TextStyle, Weight};
 
 use crate::anim::Tween;
 use crate::input::InputAction;
@@ -72,7 +72,8 @@ const TITLES: [&str; 20] = [
 const TEXT: Color = Color::rgb(235, 235, 240);
 const TEXT_DIM: Color = Color::rgb(170, 175, 190);
 const NOTICE: Color = Color::rgb(240, 180, 60);
-const BG: Color = Color::rgb(12, 14, 20);
+const BG_RGB: [u8; 3] = [12, 14, 20];
+const BG: Color = Color::rgb(BG_RGB[0], BG_RGB[1], BG_RGB[2]);
 
 pub struct Scene {
     focus: usize,
@@ -127,6 +128,7 @@ impl Scene {
                 // Backdrops are softly upscaled; half resolution is plenty.
                 let (w, h) = ((960.0 * scale) as u32, (540.0 * scale) as u32);
                 posters::backdrop(i, w, h, &mut self.pixels);
+                posters::apply_scrim(&mut self.pixels, w, h, BG_RGB, 0.92, 0.95);
                 self.backdrops[i] = r.create_image(w, h, &self.pixels);
             } else {
                 let c = i - BACKDROPS;
@@ -213,7 +215,9 @@ impl Scene {
         let (sx, sy) = (lw * safe_area, lh * safe_area);
         r.clear(BG);
 
-        // Backdrop crossfade, then scrims so text stays legible.
+        // Backdrop crossfade. The legibility scrims are baked into the
+        // backdrop textures, so this is one full-screen pass (two while
+        // fading).
         let fade = self.fade.value(now);
         if fade < 1.0
             && let Some(img) = self.backdrops[self.prev_backdrop]
@@ -223,16 +227,6 @@ impl Scene {
         if let Some(img) = self.backdrops[self.backdrop] {
             r.image(img, screen, 0.0, fade);
         }
-        r.fill_gradient(
-            Rect::new(0.0, 0.0, lw * 0.75, lh),
-            0.0,
-            &Gradient { from: BG.with_alpha(0.92), to: BG.with_alpha(0.0), vertical: false },
-        );
-        r.fill_gradient(
-            Rect::new(0.0, lh * 0.35, lw, lh * 0.65),
-            0.0,
-            &Gradient { from: BG.with_alpha(0.0), to: BG.with_alpha(0.95), vertical: true },
-        );
 
         r.text("Jellyroll", &TextStyle::new(44.0, Weight::Bold), Point::new(sx, sy), TEXT);
         r.text(

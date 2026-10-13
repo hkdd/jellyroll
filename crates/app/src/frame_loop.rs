@@ -205,7 +205,10 @@ pub fn run<P: Platform, R: Renderer>(
             let (lw, lh) = r.logical_size();
             hud.draw(r, &stats, lw * (1.0 - safe_area), lh * safe_area);
             hud_allocs = alloc_counter::allocations() - a0;
+            let submit_start = Instant::now();
+            stats.record_ms.push(ms(submit_start - frame_start));
             r.end_frame();
+            stats.submit_ms.push(ms(submit_start.elapsed()));
         }
         if timing && let Some(t) = gpu_timer.as_mut() {
             t.end(p.gl());
@@ -275,6 +278,10 @@ fn finish_bench<P: Platform, R: Renderer>(
             println!("bench: pacing {:.1}s", d.as_secs_f32());
             println!("frames: {}", stats.frames);
             println!("cpu_ms: p50 {:.3} p99 {:.3} max {:.3}", cpu.p50, cpu.p99, cpu.max);
+            let rec = stats.record_ms.percentiles(&mut scratch);
+            let sub = stats.submit_ms.percentiles(&mut scratch);
+            println!("  record_ms: p50 {:.3} p99 {:.3} max {:.3}", rec.p50, rec.p99, rec.max);
+            println!("  submit_ms: p50 {:.3} p99 {:.3} max {:.3}", sub.p50, sub.p99, sub.max);
             if info.gpu_timer_queries {
                 println!("gpu_ms: p50 {:.3} p99 {:.3} max {:.3}", gpu.p50, gpu.p99, gpu.max);
             } else {

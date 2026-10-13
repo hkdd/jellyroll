@@ -65,6 +65,12 @@ pub fn ms(d: Duration) -> f32 {
 pub struct FrameStats {
     /// CPU time from frame start until just before swap (update + draw).
     pub cpu_ms: Ring<HISTORY>,
+    /// Part of `cpu_ms` spent recording draw commands (scene + HUD).
+    pub record_ms: Ring<HISTORY>,
+    /// Part of `cpu_ms` spent in the renderer's flush/submit. High values
+    /// while the GPU is busy usually mean the driver is throttling the CPU,
+    /// not CPU work.
+    pub submit_ms: Ring<HISTORY>,
     /// GPU time from GL timer queries (arrives a few frames late).
     pub gpu_ms: Ring<HISTORY>,
     /// Interval between consecutive presents while rendering continuously.

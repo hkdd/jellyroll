@@ -102,6 +102,29 @@ pub fn backdrop(i: usize, w: u32, h: u32, out: &mut Vec<u8>) {
     }
 }
 
+/// Bakes the legibility scrims into a backdrop (spec 6.5: precomputed
+/// gradient scrims), so drawing it costs one full-screen pass instead of
+/// three: darken toward `bg` from the left edge (`left_alpha` at x = 0,
+/// clear at 75% width) and toward the bottom (clear at 35% height,
+/// `bottom_alpha` at the bottom edge).
+pub fn apply_scrim(px: &mut [u8], w: u32, h: u32, bg: [u8; 3], left_alpha: f32, bottom_alpha: f32) {
+    let (wf, hf) = (w as f32, h as f32);
+    for y in 0..h {
+        let ty = ((y as f32 / hf - 0.35) / 0.65).clamp(0.0, 1.0);
+        let ab = bottom_alpha * ty;
+        for x in 0..w {
+            let al = left_alpha * (1.0 - (x as f32 / (wf * 0.75)).min(1.0));
+            let i = ((y * w + x) * 4) as usize;
+            for (k, &b) in bg.iter().enumerate() {
+                let v = px[i + k] as f32;
+                let v = v + (b as f32 - v) * al;
+                let v = v + (b as f32 - v) * ab;
+                px[i + k] = v.round() as u8;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,5 +141,17 @@ mod tests {
         backdrop(1, 16, 9, &mut a);
         assert_eq!(a.len(), 16 * 9 * 4);
         assert!(a.chunks(4).all(|p| p[3] == 255));
+    }
+
+    #[test]
+    fn scrim_darkens_left_and_bottom_only() {
+        let (w, h) = (100u32, 100u32);
+        let mut px = vec![200u8; (w * h * 4) as usize];
+        apply_scrim(&mut px, w, h, [0, 0, 0], 0.9, 0.9);
+        let at = |x: u32, y: u32| px[((y * w + x) * 4) as usize];
+        assert!(at(0, 0) < 30, "left edge darkened");
+        assert_eq!(at(99, 0), 200, "top right untouched");
+        assert!(at(99, 99) < 30, "bottom darkened");
+        assert!(at(50, 20) > at(10, 20), "fades toward the right");
     }
 }

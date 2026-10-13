@@ -120,7 +120,13 @@ impl Hud {
         }
         let [l0, l1, l2, l3, l4, l5, l6, l7] = &mut self.lines;
         let _ = write!(l0, "{}×{} @ {:.2} Hz  {}", fb.0, fb.1, refresh_hz, info.video_driver);
-        let _ = write!(l1, "CPU ms  p50 {:5.2}  p99 {:5.2}  max {:5.2}", cpu.p50, cpu.p99, cpu.max);
+        let rec = stats.record_ms.percentiles(&mut self.scratch);
+        let sub = stats.submit_ms.percentiles(&mut self.scratch);
+        let _ = write!(
+            l1,
+            "CPU ms  p50 {:5.2}  p99 {:5.2}  (record {:4.2} submit {:4.2})",
+            cpu.p50, cpu.p99, rec.p50, sub.p50
+        );
         if info.gpu_timer_queries {
             let _ =
                 write!(l2, "GPU ms  p50 {:5.2}  p99 {:5.2}  max {:5.2}", gpu.p50, gpu.p99, gpu.max);

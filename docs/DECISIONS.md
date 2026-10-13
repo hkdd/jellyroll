@@ -109,9 +109,15 @@ change, not a code change.
 dirty frame against the `Renderer`; nothing is re-shaped or re-rasterized:
 - Shaped text is cached as `TextBlob`s keyed by (text, size, weight,
   max width), evicting entries unused for 120 frames once 4096 are cached.
-- Shadows are blurred once into textures, keyed by size rounded up to 16
-  device px and stretched, so animated sizes (focus scale-up) reuse one or
-  two textures instead of re-blurring every frame. Capped at 64.
+- Shadows are blurred once into a small nine-patch texture per (radius,
+  blur, colour): fixed corners, stretchable edges and a transparent centre,
+  drawn as a Skia lattice in device pixels. Any card size or focus scale
+  reuses it, and the area hidden under the card is never filled. The margin
+  is 3 sigma of the blur.
+- Backdrop legibility scrims are baked into the backdrop texture at upload
+  (spec 6.5), so the backdrop costs one full-screen pass.
+- Images that are fully opaque are uploaded as `AlphaType::Opaque`, so Skia
+  draws them without blending.
 - Rounded artwork is one draw (image shader on a rounded rect), not a
   clip plus image.
 - Cards outside the viewport are skipped (row virtualization).
@@ -137,7 +143,20 @@ still checks the scene's frames.
 | Machine | Output | CPU p50/p99 ms | GPU p50/p99 ms | Missed vsyncs | Result |
 |---|---|---|---|---|---|
 | CI container, Mesa llvmpipe (software) | 1280×720 | 8.7 / 14.3 | 0.1 / 25.1 | 0 | Not meaningful: software rasterizer runs GPU work on the CPU |
-| Reference HTPC | 3840×2160 | _to record_ | _to record_ | _to record_ | _pending_ |
+| Reference HTPC (GPU _to fill in_), first M2 build | 3840×2160 @ 60 | 10.7 / 14.0 | 16.1 / 17.4 | 1465 of 2135 frames (locked at 30 fps) | **Fail** |
+| Reference HTPC, after the fill-rate fixes below | 3840×2160 @ 60 | _to record_ | _to record_ | _to record_ | _pending_ |
+
+First hardware run analysis: GPU-bound on fill rate. The scene blended
+roughly 31M pixels per 4K frame (backdrop, two near-full-screen scrim
+gradients, and 60 shadows each about twice the card's area and mostly
+hidden under it). A custom GL renderer would have to fill the same pixels,
+so this is a scene-cost problem, not a Skia verdict. The fixes (shadow
+nine-patch with transparent centre, scrims baked into the backdrop, opaque
+images drawn without blending) cut that to roughly 16M pixels; in software
+rendering at 4K the frame time dropped about 20%. The CPU number is now
+split into `record` (building draw commands) and `submit` (Skia flush and
+GL submission); a high `submit` while GPU-bound is the driver making the CPU
+wait, not CPU work.
 
 ## Dependency approvals
 

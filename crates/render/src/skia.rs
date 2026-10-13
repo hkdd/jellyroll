@@ -22,10 +22,6 @@ const GL_RGBA8: u32 = 0x8058;
 const TEXT_CACHE_CAP: usize = 4096;
 /// Entries unused for this many frames are evicted when the cache is full.
 const TEXT_CACHE_KEEP_FRAMES: u64 = 120;
-/// Shadow textures are baked at sizes rounded up to this step (device px)
-/// and stretched to fit, so animated sizes (focus scale-up) reuse a couple
-/// of textures instead of baking a blur every frame.
-const SHADOW_SIZE_STEP: u32 = 16;
 /// Baked shadow textures kept before the cache is reset.
 const SHADOW_CACHE_CAP: usize = 64;
 
@@ -57,13 +53,30 @@ struct ImageEntry {
     bytes: u64,
 }
 
+/// Shadows are baked once per (radius, blur, colour) as a small nine-patch:
+/// fixed corners, stretchable edges and a transparent centre. Any card size
+/// reuses the same texture, and the part hidden under the card is never
+/// drawn (spec 6.1: no per-frame blur, minimal fill).
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 struct ShadowKey {
-    w: u32,
-    h: u32,
     radius: u32,
     blur: u32,
     argb: u32,
+}
+
+impl ShadowKey {
+    /// Margin around the shape: 3 sigma of the blur (sigma = blur / 2).
+    fn pad(&self) -> u32 {
+        (self.blur * 3).div_ceil(2)
+    }
+    /// Corner cell size: margin plus corner radius.
+    fn corner(&self) -> u32 {
+        self.pad() + self.radius + 1
+    }
+    /// Baked texture side: two corners and a 2 px stretchable middle.
+    fn side(&self) -> u32 {
+        2 * self.corner() + 2
+    }
 }
 
 pub struct SkiaRenderer {
@@ -231,9 +244,8 @@ impl SkiaRenderer {
         if self.shadows.len() >= SHADOW_CACHE_CAP {
             self.shadows.clear();
         }
-        let pad = (key.blur * 2) as f32;
-        let (w, h) = (key.w as f32 + 2.0 * pad, key.h as f32 + 2.0 * pad);
-        let mut surf = sk::surfaces::raster_n32_premul((w.ceil() as i32, h.ceil() as i32))?;
+        let (pad, side) = (key.pad() as f32, key.side() as i32);
+        let mut surf = sk::surfaces::raster_n32_premul((side, side))?;
         let c = surf.canvas();
         c.clear(sk::Color::TRANSPARENT);
         let mut p = sk::Paint::default();
@@ -244,7 +256,8 @@ impl SkiaRenderer {
             key.blur as f32 / 2.0,
             false,
         ));
-        let r = sk::Rect::from_xywh(pad, pad, key.w as f32, key.h as f32);
+        let inner = side as f32 - 2.0 * pad;
+        let r = sk::Rect::from_xywh(pad, pad, inner, inner);
         c.draw_rrect(sk::RRect::new_rect_xy(r, key.radius as f32, key.radius as f32), &p);
         let raster = surf.image_snapshot();
         let tex = gpu::images::texture_from_image(
@@ -372,27 +385,35 @@ impl Renderer for SkiaRenderer {
     }
 
     fn shadow(&mut self, r: Rect, radius: f32, blur: f32, c: Color) {
-        // Bake at device resolution so the texture maps 1:1 on screen.
+        // Baked and drawn in device pixels so the fixed corner cells map 1:1.
         let s = self.scale;
-        let step = |v: f32| ((v * s).max(1.0) as u32).div_ceil(SHADOW_SIZE_STEP) * SHADOW_SIZE_STEP;
         let key = ShadowKey {
-            w: step(r.w),
-            h: step(r.h),
             radius: (radius * s).round() as u32,
             blur: (blur * s).round().max(1.0) as u32,
             argb: c.to_argb8(),
         };
         let Some(img) = self.baked_shadow(key) else { return };
-        let pad = (key.blur * 2) as f32 / s;
-        let dst = Rect::new(r.x - pad, r.y - pad, r.w + 2.0 * pad, r.h + 2.0 * pad);
-        let p = sk::Paint::default();
-        self.canvas().draw_image_rect_with_sampling_options(
-            &img,
-            None,
-            sk_rect(dst),
-            sk::SamplingOptions::new(sk::FilterMode::Linear, sk::MipmapMode::None),
-            &p,
-        );
+        let (corner, side) = (key.corner() as i32, key.side() as i32);
+        let divs = [corner, side - corner];
+        let mut types = [sk::canvas::lattice::RectType::Default; 9];
+        types[4] = sk::canvas::lattice::RectType::Transparent;
+        let colors = [sk::Color::TRANSPARENT; 9];
+        let lattice = sk::canvas::lattice::Lattice {
+            x_divs: &divs,
+            y_divs: &divs,
+            rect_types: Some(&types),
+            bounds: None,
+            colors: Some(&colors),
+        };
+        let c = self.canvas();
+        let (dev, _) = c.local_to_device_as_3x3().map_rect(sk_rect(r));
+        let pad = key.pad() as f32;
+        let dst =
+            sk::Rect::from_ltrb(dev.left - pad, dev.top - pad, dev.right + pad, dev.bottom + pad);
+        c.save();
+        c.reset_matrix();
+        c.draw_image_lattice(&img, &lattice, dst, sk::FilterMode::Linear, None);
+        c.restore();
     }
 
     fn image(&mut self, img: ImageId, dst: Rect, radius: f32, opacity: f32) {
@@ -463,12 +484,12 @@ impl Renderer for SkiaRenderer {
         if width == 0 || height == 0 || rgba.len() < bytes {
             return None;
         }
-        let info = sk::ImageInfo::new(
-            (width as i32, height as i32),
-            sk::ColorType::RGBA8888,
-            sk::AlphaType::Unpremul,
-            None,
-        );
+        // Fully opaque images (posters, backdrops) are tagged as such so
+        // Skia can draw them without blending.
+        let opaque = rgba[..bytes].chunks_exact(4).all(|p| p[3] == 255);
+        let alpha = if opaque { sk::AlphaType::Opaque } else { sk::AlphaType::Unpremul };
+        let info =
+            sk::ImageInfo::new((width as i32, height as i32), sk::ColorType::RGBA8888, alpha, None);
         let raster = sk::images::raster_from_data(
             &info,
             sk::Data::new_copy(&rgba[..bytes]),
