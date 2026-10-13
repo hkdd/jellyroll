@@ -1,0 +1,15 @@
+[package]
+name = "jf-htpc"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+jf-platform = { path = "../platform" }
+sd-notify = "=0.5.0"
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["fmt", "std", "ansi"] }
+tracing-journald = "=0.3.2"
+
+[features]
+build-sdl = ["jf-platform/build-sdl"]
