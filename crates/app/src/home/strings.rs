@@ -12,10 +12,10 @@ pub const LOADING: &str = "Loading…";
 pub const NOTHING_HERE: &str = "Nothing here yet.";
 pub const NO_MATCHES: &str = "Nothing matches these filters.";
 
-pub const SORT_NAME: &str = "Sort: Name";
-pub const SORT_ADDED: &str = "Sort: Date added";
-pub const SORT_YEAR: &str = "Sort: Year";
-pub const SORT_RATING: &str = "Sort: Rating";
+pub const SORT_NAME: &str = "Name";
+pub const SORT_ADDED: &str = "Date added";
+pub const SORT_YEAR: &str = "Year";
+pub const SORT_RATING: &str = "Rating";
 pub const FILTER_UNWATCHED: &str = "Unwatched";
 pub const FILTER_FAVORITES: &str = "Favorites";
 pub const GENRE_ALL: &str = "Genre: All";
@@ -57,7 +57,11 @@ pub const UI_RES_NATIVE: &str = "Interface: full resolution (sharpest)";
 pub const MATCH_REFRESH: &str = "Match refresh rate";
 pub const SORT_TITLE: &str = "Sort by";
 pub const GENRE_TITLE: &str = "Genre";
-pub const GENRE_ALL_OPT: &str = "All genres";
+pub const REVERSE_ORDER: &str = "Reverse order";
+pub const SORT_LABEL: &str = "Sort: %s";
+pub const SORT_REVERSED: &str = "Sort: %s, reversed";
+pub const CLEAR_ALL: &str = "Clear all";
+pub const GENRES_MORE: &str = "Genres: %s +%s";
 pub const UI_RES_TITLE: &str = "Interface resolution";
 pub const UI_RES_OPT_NATIVE: &str = "Full resolution (sharpest)";
 pub const UI_RES_OPT_1080: &str = "1080p, upscaled (smoother)";
@@ -177,7 +181,11 @@ pub const ALL: &[&str] = &[
     MATCH_REFRESH,
     SORT_TITLE,
     GENRE_TITLE,
-    GENRE_ALL_OPT,
+    REVERSE_ORDER,
+    SORT_LABEL,
+    SORT_REVERSED,
+    CLEAR_ALL,
+    GENRES_MORE,
     UI_RES_TITLE,
     UI_RES_OPT_NATIVE,
     UI_RES_OPT_1080,

@@ -693,7 +693,7 @@ impl Server {
         let fav = filters.contains("IsFavorite") || q("isfavorite") == Some("true");
         let unplayed = filters.contains("IsUnplayed");
         let term = q("searchterm").map(str::to_lowercase);
-        let genre = q("genres");
+        let genres: Vec<&str> = q("genres").map(|g| g.split('|').collect()).unwrap_or_default();
         let before = q("namelessthan").map(str::to_lowercase);
         let mut v: Vec<&Value> = src
             .iter()
@@ -706,9 +706,10 @@ impl Server {
                     .is_none_or(|t| j["Name"].as_str().unwrap_or("").to_lowercase().contains(t))
             })
             .filter(|j| {
-                genre.is_none_or(|g| {
-                    j["Genres"].as_array().is_some_and(|a| a.iter().any(|x| x == g))
-                })
+                genres.is_empty()
+                    || j["Genres"]
+                        .as_array()
+                        .is_some_and(|a| a.iter().any(|x| genres.iter().any(|g| x == *g)))
             })
             .filter(|j| before.as_ref().is_none_or(|b| sort_name(j).as_str() < b.as_str()))
             .collect();

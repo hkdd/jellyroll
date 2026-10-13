@@ -175,7 +175,8 @@ pub struct ItemsQuery {
     pub descending: bool,
     pub unplayed: bool,
     pub favorites: bool,
-    pub genre: Option<String>,
+    /// Items in any of these genres.
+    pub genres: Vec<String>,
     pub year: Option<i32>,
     pub search: Option<String>,
     /// Only items whose sort name sorts before this (alphabet jump: with
@@ -203,7 +204,7 @@ pub fn items(user_id: &str, q: &ItemsQuery) -> Request<BaseItemDtoQueryResult> {
         .param("sortBy", q.sort_by.as_deref().unwrap_or("SortName"))
         .param("sortOrder", if q.descending { "Descending" } else { "Ascending" })
         .opt("filters", (!filters.is_empty()).then(|| filters.join(",")))
-        .opt("genres", q.genre.as_deref())
+        .opt("genres", (!q.genres.is_empty()).then(|| q.genres.join("|")))
         .opt("years", q.year)
         .opt("searchTerm", q.search.as_deref())
         .opt("nameLessThan", q.name_less_than.as_deref())
@@ -390,13 +391,13 @@ mod tests {
             include_types: Some("Movie".into()),
             unplayed: true,
             favorites: true,
-            genre: Some("Sci-Fi".into()),
+            genres: vec!["Sci-Fi".into(), "Drama".into()],
             start: 200,
             limit: 100,
             ..Default::default()
         };
         let p = items("u", &q).path;
-        assert!(p.starts_with("/Items?userId=u&parentId=lib&recursive=true&includeItemTypes=Movie&sortBy=SortName&sortOrder=Ascending&filters=IsUnplayed%2CIsFavorite&genres=Sci-Fi&startIndex=200&limit=100"), "{p}");
+        assert!(p.starts_with("/Items?userId=u&parentId=lib&recursive=true&includeItemTypes=Movie&sortBy=SortName&sortOrder=Ascending&filters=IsUnplayed%2CIsFavorite&genres=Sci-Fi%7CDrama&startIndex=200&limit=100"), "{p}");
         assert!(p.ends_with("enableTotalRecordCount=true"), "{p}");
         let idx = ItemsQuery { name_less_than: Some("M".into()), ..Default::default() };
         assert!(items("u", &idx).path.contains("nameLessThan=M&startIndex=0&limit=0"));

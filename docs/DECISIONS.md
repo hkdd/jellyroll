@@ -797,6 +797,17 @@ and reports a change; during playback, a change (or a display reconnect)
 makes mpv reopen its audio output (`ao-reload`). To be confirmed on the
 HTPC.
 
+**D55: Multi-select genres, reversible sort (by request).** The
+Genre list is checkboxes: Select ticks or unticks and the list stays open;
+closing it (Back) applies the selection, so the grid reloads once, not per
+tick. It opens with the selected genres first (above a divider) so they
+are easy to untick, and "Clear all" above them when two or more are
+selected (it clears and closes). Several genres show items in any of them
+(Jellyfin's `genres=A|B`). The Sort list starts with a "Reverse order"
+checkbox above the sorts; the A-Z column is hidden while the name sort is
+reversed (the jump index assumes ascending names). The bar shows "Sort:
+Name, reversed" and "Genres: Drama +2".
+
 ## Dependency approvals
 
 | Crate | Status |

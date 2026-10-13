@@ -11,7 +11,7 @@ use jellyfin_api::dto::CollectionType;
 use jellyfin_api::endpoints::ItemsQuery;
 use jellyroll_render::{Color, Point, Rect, Renderer, TextStyle, Weight};
 
-use super::blade::{self, Blade};
+use super::blade::{self, Blade, Row};
 use super::model::{self, Card, Kind, Shape};
 use super::pages::{Ctx, Open};
 use super::strings as s;
@@ -55,9 +55,10 @@ const BAR: [BarItem; 4] = [BarItem::Sort, BarItem::Unwatched, BarItem::Favorites
 
 /// Which list the blade shows.
 enum Pick {
+    /// "Reverse order", then the sorts.
     Sort,
-    /// "All genres", then the library's genres.
-    Genre(Vec<String>),
+    /// The genre of each row; None for "Clear all".
+    Genre(Vec<Option<String>>),
 }
 
 pub struct LibraryView {
@@ -68,7 +69,10 @@ pub struct LibraryView {
     sort: usize,
     unwatched: bool,
     favorites: bool,
-    genre: Option<String>,
+    /// Selected genres (items in any of them are shown).
+    genres: Vec<String>,
+    /// The sort's order reversed.
+    reverse: bool,
     /// Requested pages (by page number) of the current query.
     pages: HashMap<u32, u64>,
     total: Option<u32>,
@@ -127,7 +131,8 @@ impl LibraryView {
             sort: 0,
             unwatched: false,
             favorites: false,
-            genre: None,
+            genres: Vec::new(),
+            reverse: false,
             pages: HashMap::new(),
             total: None,
             items: Vec::new(),
@@ -143,7 +148,7 @@ impl LibraryView {
             bar_rects: Vec::new(),
             count_label: String::new(),
             genre_label: widgets::list_label(s::GENRE_ALL),
-            sort_label: widgets::list_label(SORTS[0].0),
+            sort_label: widgets::list_label(&s::fill(s::SORT_LABEL, &[SORTS[0].0])),
             vp,
         };
         v.load(ctx);
@@ -156,10 +161,10 @@ impl LibraryView {
             parent_id: Some(self.id.clone()),
             include_types: self.include_types.clone(),
             sort_by: Some(sort_by.into()),
-            descending: desc,
+            descending: desc != self.reverse,
             unplayed: self.unwatched,
             favorites: self.favorites,
-            genre: self.genre.clone(),
+            genres: self.genres.clone(),
             ..Default::default()
         }
     }
@@ -263,29 +268,39 @@ impl LibraryView {
     }
 
     pub fn on_action(&mut self, a: InputAction, now: Instant, ctx: &mut Ctx) -> bool {
-        if let Some((pick, b)) = &mut self.picker {
-            match b.on_action(a) {
-                blade::Outcome::Stay => return true,
-                blade::Outcome::Closed => {}
-                blade::Outcome::Picked(i) => match pick {
-                    Pick::Sort => {
-                        self.sort = i.min(SORTS.len() - 1);
-                        self.sort_label = widgets::list_label(SORTS[self.sort].0);
-                        self.bar_rects.clear();
-                        self.reset(ctx, now);
-                    }
-                    Pick::Genre(options) => {
-                        self.genre = (i > 0).then(|| options[i].clone());
-                        self.genre_label = widgets::list_label(&match &self.genre {
-                            Some(g) => format!("{}{g}", s::GENRE_PREFIX),
-                            None => s::GENRE_ALL.into(),
-                        });
-                        self.bar_rects.clear();
-                        self.reset(ctx, now);
-                    }
-                },
+        if let Some((_, b)) = &mut self.picker {
+            let outcome = b.on_action(a);
+            if outcome == blade::Outcome::Stay {
+                return true;
             }
-            self.picker = None;
+            let Some((pick, b)) = self.picker.take() else { return true };
+            let (sort, reverse, genres) = match (pick, outcome) {
+                (Pick::Sort, blade::Outcome::Picked(i)) => {
+                    (i.saturating_sub(1).min(SORTS.len() - 1), b.is_checked(0), self.genres.clone())
+                }
+                (Pick::Sort, _) => (self.sort, b.is_checked(0), self.genres.clone()),
+                // "Clear all".
+                (Pick::Genre(_), blade::Outcome::Picked(_)) => {
+                    (self.sort, self.reverse, Vec::new())
+                }
+                (Pick::Genre(rows), _) => {
+                    let mut g: Vec<String> = rows
+                        .into_iter()
+                        .enumerate()
+                        .filter(|(k, _)| b.is_checked(*k))
+                        .filter_map(|(_, name)| name)
+                        .collect();
+                    g.sort();
+                    (self.sort, self.reverse, g)
+                }
+            };
+            if (sort, reverse, &genres) != (self.sort, self.reverse, &self.genres) {
+                self.sort = sort;
+                self.reverse = reverse;
+                self.genres = genres;
+                self.update_labels();
+                self.reset(ctx, now);
+            }
             return true;
         }
         let total = self.total.unwrap_or(0) as usize;
@@ -295,7 +310,7 @@ impl LibraryView {
             (Focus::Grid(i), InputAction::Right) if i % cols < cols - 1 && i + 1 < total => {
                 self.focus_grid(i + 1, now, ctx)
             }
-            (Focus::Grid(_), InputAction::Right) if self.sort == 0 => {
+            (Focus::Grid(_), InputAction::Right) if self.sort == 0 && !self.reverse => {
                 let l = self.letter_index();
                 self.leave_grid(Focus::Letters(l), now);
             }
@@ -327,8 +342,11 @@ impl LibraryView {
             }
             (Focus::Bar(b), InputAction::Select) => match BAR[b] {
                 BarItem::Sort => {
-                    let options = SORTS.iter().map(|s| s.0.to_string()).collect();
-                    let b = Blade::new(s::SORT_TITLE, options, Some(self.sort), now);
+                    let mut rows = vec![Row::check(s::REVERSE_ORDER, self.reverse)];
+                    rows.extend(SORTS.iter().map(|s| Row::choice(s.0)));
+                    let current = self.sort + 1;
+                    let b = Blade::with_rows(s::SORT_TITLE, rows, Some(current), current, now)
+                        .divider_after(0);
                     self.picker = Some((Pick::Sort, b));
                 }
                 BarItem::Unwatched => {
@@ -371,15 +389,28 @@ impl LibraryView {
         if self.genres_req == Some(id) {
             self.genres_req = None;
             if let Fetched::Names(names) = result {
-                let mut options = vec![s::GENRE_ALL_OPT.to_string()];
-                options.extend(names.iter().cloned());
-                let focus = self
-                    .genre
-                    .as_ref()
-                    .and_then(|g| options.iter().position(|o| o == g))
-                    .unwrap_or(0);
-                let b = Blade::new(s::GENRE_TITLE, options.clone(), Some(focus), Instant::now());
-                self.picker = Some((Pick::Genre(options), b));
+                // Selected genres first (easy to untick), "Clear all" above
+                // them when there are several; then the rest.
+                let mut rows = Vec::new();
+                let mut names_by_row = Vec::new();
+                if self.genres.len() > 1 {
+                    rows.push(Row::action(s::CLEAR_ALL));
+                    names_by_row.push(None);
+                }
+                for g in &self.genres {
+                    rows.push(Row::check(g.clone(), true));
+                    names_by_row.push(Some(g.clone()));
+                }
+                let selected_end = rows.len();
+                for n in names.iter().filter(|n| !self.genres.contains(n)) {
+                    rows.push(Row::check(n.clone(), false));
+                    names_by_row.push(Some(n.clone()));
+                }
+                let mut b = Blade::with_rows(s::GENRE_TITLE, rows, None, 0, Instant::now());
+                if selected_end > 0 {
+                    b = b.divider_after(selected_end - 1);
+                }
+                self.picker = Some((Pick::Genre(names_by_row), b));
                 return true;
             }
             return false;
@@ -499,9 +530,13 @@ impl LibraryView {
                 BarItem::Favorites => {
                     widgets::draw_toggle(r, rect, self.bar_label(*b), self.favorites, focused)
                 }
-                BarItem::Genre => {
-                    widgets::draw_button(r, rect, self.bar_label(*b), focused, self.genre.is_some())
-                }
+                BarItem::Genre => widgets::draw_button(
+                    r,
+                    rect,
+                    self.bar_label(*b),
+                    focused,
+                    !self.genres.is_empty(),
+                ),
                 BarItem::Sort => widgets::draw_button(r, rect, self.bar_label(*b), focused, false),
             }
         }
@@ -546,7 +581,7 @@ impl LibraryView {
                 );
             }
             Some(0) => {
-                let msg = if self.unwatched || self.favorites || self.genre.is_some() {
+                let msg = if self.unwatched || self.favorites || !self.genres.is_empty() {
                     s::NO_MATCHES
                 } else {
                     s::NOTHING_HERE
@@ -566,7 +601,7 @@ impl LibraryView {
         }
 
         // A–Z column (name sort only).
-        if self.sort == 0 && self.total.unwrap_or(0) > 0 {
+        if self.sort == 0 && !self.reverse && self.total.unwrap_or(0) > 0 {
             let x = lw - sx - LETTERS_W;
             let step = ((lh - sy * 2.0 - GRID_TOP) / LETTERS.len() as f32).min(32.0);
             let st = TextStyle::new(18.0, Weight::Bold);
@@ -593,6 +628,19 @@ impl LibraryView {
         if let Some((_, b)) = &self.picker {
             b.draw(r, now, self.vp.safe);
         }
+    }
+
+    /// The Sort and Genre button labels (kept, so drawing doesn't allocate).
+    fn update_labels(&mut self) {
+        let sort = SORTS[self.sort].0;
+        let fmt = if self.reverse { s::SORT_REVERSED } else { s::SORT_LABEL };
+        self.sort_label = widgets::list_label(&s::fill(fmt, &[sort]));
+        self.genre_label = widgets::list_label(&match self.genres.as_slice() {
+            [] => s::GENRE_ALL.to_string(),
+            [g] => format!("{}{g}", s::GENRE_PREFIX),
+            [g, rest @ ..] => s::fill(s::GENRES_MORE, &[g, &rest.len().to_string()]),
+        });
+        self.bar_rects.clear();
     }
 
     fn bar_label(&self, b: BarItem) -> &str {
@@ -718,5 +766,101 @@ mod tests {
         let mut ctx = Ctx::new(&mut next);
         v.on_fetched(id, &Fetched::Index(240), t, &mut ctx);
         assert_eq!(v.focus, Focus::Grid(240));
+    }
+
+    fn library(next: &mut u64) -> LibraryView {
+        let mut ctx = Ctx::new(next);
+        let t = Instant::now();
+        let mut v = LibraryView::new(
+            "lib".into(),
+            "Movies".into(),
+            Some(CollectionType::Movies),
+            VP,
+            t,
+            &mut ctx,
+        );
+        let (id0, _) = fetches(&ctx)[0];
+        page(&mut v, id0, 0, 500, 100, &mut ctx);
+        v
+    }
+
+    fn press(v: &mut LibraryView, a: InputAction, next: &mut u64) -> Vec<ItemsQuery> {
+        let mut ctx = Ctx::new(next);
+        v.on_action(a, Instant::now(), &mut ctx);
+        fetches(&ctx).into_iter().map(|f| f.1).collect()
+    }
+
+    fn open_genres(v: &mut LibraryView, next: &mut u64) {
+        v.focus = Focus::Bar(3);
+        let mut ctx = Ctx::new(next);
+        v.on_action(InputAction::Select, Instant::now(), &mut ctx);
+        let Some(crate::net::Cmd::Fetch { id, req: Fetch::Genres(_) }) = ctx.cmds.pop() else {
+            panic!("genre list request")
+        };
+        let names = ["Comedy", "Drama", "Horror", "Thriller"].map(String::from).to_vec();
+        v.on_fetched(id, &Fetched::Names(names), Instant::now(), &mut ctx);
+        assert!(v.picker.is_some());
+    }
+
+    #[test]
+    fn genres_multi_select() {
+        let mut next = 0;
+        let mut v = library(&mut next);
+        open_genres(&mut v, &mut next);
+        // Tick Drama and Thriller; nothing reloads until the list closes.
+        assert!(press(&mut v, InputAction::Down, &mut next).is_empty());
+        press(&mut v, InputAction::Select, &mut next);
+        press(&mut v, InputAction::Down, &mut next);
+        press(&mut v, InputAction::Down, &mut next);
+        assert!(press(&mut v, InputAction::Select, &mut next).is_empty());
+        let q = press(&mut v, InputAction::Back, &mut next);
+        assert_eq!(q.last().unwrap().genres, ["Drama", "Thriller"]);
+        assert_eq!(v.genre_label, widgets::list_label("Genres: Drama +1"));
+        // Reopened: "Clear all", then the selected genres, then the rest.
+        open_genres(&mut v, &mut next);
+        let (_, b) = v.picker.as_ref().unwrap();
+        assert!(b.is_checked(1) && b.is_checked(2) && !b.is_checked(3));
+        let q = press(&mut v, InputAction::Select, &mut next);
+        assert!(q.last().unwrap().genres.is_empty(), "Clear all");
+        assert!(v.picker.is_none());
+        // One selected: no "Clear all"; unticking it clears the filter.
+        open_genres(&mut v, &mut next);
+        press(&mut v, InputAction::Select, &mut next);
+        press(&mut v, InputAction::Back, &mut next);
+        assert_eq!(v.genres, ["Comedy"]);
+        open_genres(&mut v, &mut next);
+        press(&mut v, InputAction::Select, &mut next);
+        let q = press(&mut v, InputAction::Back, &mut next);
+        assert!(q.last().unwrap().genres.is_empty());
+        // Closing without a change reloads nothing.
+        open_genres(&mut v, &mut next);
+        assert!(press(&mut v, InputAction::Back, &mut next).is_empty());
+    }
+
+    #[test]
+    fn sort_list_with_reverse() {
+        let mut next = 0;
+        let mut v = library(&mut next);
+        v.focus = Focus::Bar(0);
+        press(&mut v, InputAction::Select, &mut next);
+        // Opens on the current sort (Name, row 1); row 0 is Reverse order.
+        press(&mut v, InputAction::Up, &mut next);
+        assert!(press(&mut v, InputAction::Select, &mut next).is_empty(), "a toggle");
+        let q = press(&mut v, InputAction::Back, &mut next);
+        assert!(q.last().unwrap().descending, "name, reversed");
+        assert_eq!(v.sort_label, widgets::list_label("Sort: Name, reversed"));
+        // No A-Z column on a reversed name sort.
+        v.focus_grid(v.cols() - 1, Instant::now(), &mut Ctx::new(&mut next));
+        press(&mut v, InputAction::Right, &mut next);
+        assert!(!matches!(v.focus, Focus::Letters(_)));
+        // Pick Year: newest first by default, reversed: oldest first.
+        v.focus = Focus::Bar(0);
+        press(&mut v, InputAction::Select, &mut next);
+        press(&mut v, InputAction::Down, &mut next);
+        press(&mut v, InputAction::Down, &mut next);
+        let q = press(&mut v, InputAction::Select, &mut next);
+        let q = q.last().unwrap();
+        assert_eq!(q.sort_by.as_deref(), Some("ProductionYear,SortName"));
+        assert!(!q.descending);
     }
 }
