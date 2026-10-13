@@ -6,9 +6,9 @@
 |---|---|---|
 | 1 | Can SDL3 KMSDRM do refresh-rate matching, or do we need direct DRM/GBM/EGL from the start? | **Open.** M1 lists modes via `--print-diagnostics`. Run it on the reference hardware and check that every TV mode (23.976/24/25/50/59.94/60) appears with exact numerator/denominator. Test actual switching in M8. |
 | 2 | Skia vs a custom GL renderer | **Decided: Skia.** On the HTPC (Intel HD 530, 4K) the scene holds 60 fps with 0 missed vsyncs; recording takes ~1.1 ms. The remaining cost is driver submission (~2 ms) and 4K fill (~8 ms GPU), which a custom renderer would not remove. The spec's p99 budgets (CPU < 4 ms, GPU < 6 ms) are not met on this 2015 GT2 iGPU at native 4K; recorded as a hardware limit, revisit if M3 overlays need the headroom. See "M2 benchmark results". |
-| 3 | redb vs SQLite | Open (M5). |
+| 3 | redb vs SQLite | **Decided: redb** (D30). Both are under 1 ms for everything the cache does; redb is pure Rust and a key-value store fits the data. |
 | 4 | HDR on DRM/KMS | Open (M9). |
-| 5 | Minimum Jellyfin server version | Open (M5). |
+| 5 | Minimum Jellyfin server version | **10.10.0** (D31), the same floor as the official Jellyfin SDK. Written against API 12.2.0 (the SDK's current spec). Media Segments/Trickplay availability is checked again in M7. |
 | 6 | Retained tree vs immediate mode | **Leaning immediate-style** (D15): the scene is rebuilt on each dirty frame, with everything expensive cached by the renderer. Revisit with the M6 10k-item scroll benchmark. |
 | 7 | NVIDIA | Open. M1 code is vendor-neutral, but only Mesa has been exercised. |
 | 8 | Video decode on the reference hardware | **Constraint found.** The HTPC's Intel HD 530 (Skylake) decodes HEVC 8-bit and H.264 in hardware, but not HEVC 10-bit, VP9 or AV1 (intel/media-driver README codec table, SKL column, checked 2026-10-13). M3's exit test (4K HEVC 10-bit) cannot use hardware decode here. Confirmed on the HTPC with `vainfo` (iHD 26.1.5 from RPM Fusion): decode for MPEG-2, H.264 Main/High, VC-1, VP8, HEVC Main; no HEVC Main10, VP9 or AV1. CPU decode is not viable either (i3-6100T: 2 cores / 4 threads, 35 W). Fedora's own `libva-intel-media-driver` reports no H.264/HEVC at all (patent-restricted build); the full driver is RPM Fusion nonfree `intel-media-driver`. **Decided (D19):** direct play whatever the hardware decodes; say clearly when it can't; no silent software decode and no automatic transcoding. Unsupported content on this HTPC is the trigger for a hardware upgrade. |
@@ -363,8 +363,115 @@ is what a dead CEC line looks like.
 | Gamepad | Not tested on hardware (no pad on the HTPC). The SDL path passes end to end with an SDL virtual gamepad in CI |
 | HDMI-CEC | **Hardware can't do it.** `/dev/cec0` comes from i915 DP CEC tunneling on DP-1 (physical address 1.0.0.0, the TV's input 1), and jellyroll opens it. But the adapter never wins a logical address and `cec-ctl -S` shows an empty topology: nothing answers on the line, not even the TV (LG OLED G3, SIMPLINK on). The DP-to-HDMI adapter reports CEC tunneling but doesn't carry the CEC wire, a failure the kernel's CEC admin guide describes as common |
 
+## Decisions made in M5
+
+**D30: Metadata cache in redb.** Spec open question 3. Benchmarked the
+cache's real workload (open at startup, read 8 × 20 KB home rows, write
+one row and commit) in release builds: redb 4.3.0 open 0.33–0.83 ms,
+read 0.09–0.22 ms, write+commit 0.55–1.4 ms; rusqlite 0.40.2 (bundled
+SQLite, WAL) open 0.26–0.39 ms, read 0.08–0.18 ms, write 0.81–1.31 ms.
+Both are far inside the 1.5 s start-to-interactive budget, so speed
+doesn't decide. redb wins on being pure Rust (no bundled C build) and
+on matching the data: whole home screens stored by key
+(`home/<server>/<user>`), no queries. Library browsing pages come from the
+server (spec 8), not a local database. A corrupt or outdated cache file is
+deleted and rebuilt; any other open error (for example another process
+holding it) leaves it alone. A test covers this, after the first version
+deleted a cache that was merely locked.
+
+**D31: Jellyfin API target.** The spec says not to assume the API. The
+pinned source is the `openapi.json` checked in to the official
+jellyfin-sdk-typescript (commit `7685bb8`, Jellyfin API **12.2.0**,
+sha256 in `scripts/gen-jellyfin-dto.py`). Minimum server **10.10.0**, as
+in that SDK (`MINIMUM_VERSION`); older servers get a clear "not supported"
+screen. Every endpoint used (`/UserViews`, `/UserItems/Resume`,
+`/Shows/NextUp`, `/Items/Latest`, `/Items`, Quick Connect,
+`/Users/AuthenticateWithQuickConnect`) exists in that range. The
+`Authorization` header copies the SDK's format exactly (`MediaBrowser
+Client=…, Device=…, DeviceId=…, Version=…, Token=…`, values
+`encodeURIComponent`-encoded).
+
+**D32: DTOs from our own small generator.** The spec asks for DTOs
+generated from OpenAPI by a pinned generator. Generating the whole API
+(about 300 paths and 360 schemas) would add tens of thousands of lines
+and slow builds, for the ~10 schemas we use. `scripts/gen-jellyfin-dto.py`
+(stdlib Python) generates only the selected schemas and fields from the
+pinned spec, with every field optional, missing fields defaulted, and a
+catch-all variant on every enum, so a newer or older server can't make
+parsing fail (spec 12). Requests ask the server for the same minimal field
+sets (`fields=`, `enableImageTypes`, `imageTypeLimit=1`,
+`enableTotalRecordCount=false`). To regenerate against a real server:
+`scripts/gen-jellyfin-dto.py <(curl -s SERVER/api-docs/openapi.json)`.
+
+**D33: Network thread and image pipeline.**
+- The network side runs on one thread with a single-threaded tokio
+  runtime (`net` thread); disk and decode work goes to its small blocking
+  pool (4 threads).
+- It talks to the render thread through bounded channels: 64 commands in,
+  256 events out. The render side uses `try_send`/`try_recv` and never
+  blocks; each event also wakes the render loop through the platform
+  waker.
+- Images:
+  1. The UI computes exactly what's on screen, plus a few cards ahead,
+     and the size in output pixels (4K: posters 320×480).
+  2. The server resizes (`maxWidth`/`maxHeight`, `format=Webp`); the
+     `tag` in the URL changes when the artwork does.
+  3. The bytes are cached on disk under an FNV-1a hash of server+path,
+     with a size cap and least-recently-used eviction by mtime
+     (`cache.images_mb`).
+  4. The worker pool decodes (image crate: WebP/JPEG/PNG), center-crops
+     and resizes to the exact pixel size (fast_image_resize, Catmull-Rom),
+     and bakes in card corners or the backdrop scrim.
+  5. The render thread only uploads: at most 2 ms per frame, with an LRU
+     texture cap (`cache.textures_mb`).
+- Each new list of wanted images replaces the previous queue, so work for
+  rows scrolled away is dropped (spec 4).
+- BlurHash placeholders (from item metadata) decode on the same pool and
+  show until the real image arrives.
+
+**D34: Sign-in is Quick Connect in M5.** The TV shows a 6-digit code;
+the user approves it from any signed-in Jellyfin app. If Quick Connect is
+turned off on the server, the screen explains how to turn it on.
+Username/password sign-in needs the on-screen keyboard (M6). Tokens are
+kept in `~/.local/share/jellyroll/state.json` (mode 0600, atomic writes)
+with a random per-install DeviceId; passwords are never stored. A token
+the server rejects (401) is forgotten and sign-in starts again. The state
+file holds several servers and users; the picker UI comes with M6.
+
+**D35: Home screen behavior.**
+- Rows in jellyfin-web's default order: My Media, Continue Watching, Next
+  Up, Latest per library (except playlists, collections, live TV and
+  folders), then Favorites. Card shapes: posters for movies/shows,
+  landscape for episodes and libraries, square for music.
+- Stale-while-revalidate: at startup the last home screen is drawn from
+  the cache at once, then replaced by fresh data. A refresh keeps focus on
+  the same item and keeps each row's scroll. The home screen refreshes
+  every 5 minutes.
+- If the server is unreachable while cached data is shown, an "Offline ·
+  showing saved data" badge appears and the app keeps retrying with
+  backoff (2 s up to 60 s). With no cache, a full-screen explanation with
+  Select to retry (spec 8: never a blank screen).
+- Server choice: `[server] url` in the config, else the last server used,
+  else LAN discovery (UDP 7359, 3 s).
+- `--demo` keeps the synthetic M2 scene; `--bench-pacing`/`--bench-idle`
+  imply it, so render benchmarks and CI never depend on a server.
+
+**D36: TLS and the mock server.**
+- reqwest 0.13's `rustls` feature: aws-lc-rs crypto, and system trust via
+  rustls-platform-verifier. `[server] ca_file` adds a PEM CA or a
+  self-signed server certificate (spec 12).
+- `crates/mock-server` (`jellyroll-mock`) is a small hand-written HTTP/1.1
+  server. It implements exactly the endpoints jellyroll calls, over a
+  synthetic library of any size (`--movies 10000` for M6), with generated
+  artwork, a self-approving Quick Connect (code 424242), token checks and
+  discovery.
+- An end-to-end test runs the real network thread against it: connect,
+  Quick Connect, home rows, a poster and a placeholder decoded, then a
+  restart that shows the cached home first with no sign-in.
+
 ## Dependency approvals
 
 | Crate | Status |
 |---|---|
 | `toml` | Approved 2026-10-13 (D11) |
+| `tokio`, `reqwest` (rustls), `serde_json`, `image`, `fast_image_resize`, `redb` | Listed in spec §3; versions in `docs/VERSIONS.md` (M5) |

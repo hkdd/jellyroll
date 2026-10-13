@@ -40,6 +40,11 @@ impl Tween {
         self.from + (self.to - self.from) * ease_out_cubic(t)
     }
 
+    /// Where the tween is heading (its final value).
+    pub fn target(&self) -> f32 {
+        self.to
+    }
+
     pub fn is_animating(&self, now: Instant) -> bool {
         now.saturating_duration_since(self.start) < self.duration
     }

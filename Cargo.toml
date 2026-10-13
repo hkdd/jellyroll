@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/platform", "crates/render", "crates/video", "crates/app"]
+members = ["crates/platform", "crates/render", "crates/video", "crates/jellyfin-api", "crates/mock-server", "crates/app"]
 
 [workspace.package]
 edition = "2024"

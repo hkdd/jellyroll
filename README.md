@@ -17,13 +17,18 @@ and verified versions.
 | **M2** Renderer trait + Skia: rects, rounded rects, gradients, text (incl. CJK), images, animation clock | **Done.** On the HTPC (Intel HD 530, 4K): steady 60 fps, 0 missed vsyncs; Skia kept. The spec's p99 budgets are not met on this GPU at native 4K (GPU ~8 ms, CPU ~3.3 ms p50); see `docs/DECISIONS.md` |
 | **M3** libmpv playback: hwdec, GL handoff with the overlay, audio | **Done.** On the HTPC: 4K H.264 and HEVC 8-bit via VA-API at ~11-12% CPU with 0 dropped frames; HEVC 10-bit (unsupported on this GPU) is flagged, never silently degraded. See `docs/DECISIONS.md` |
 | **M4** Input: keyboard, gamepad, HDMI-CEC; spatial focus graph; key repeat | **Done.** Keyboard verified on the HTPC; gamepad tested end to end with an SDL virtual pad. CEC is built and unit-tested, but the HTPC's DisplayPort-to-HDMI adapter doesn't carry CEC, so the TV remote waits for an adapter that does (`docs/DECISIONS.md` D29) |
-| M5 to M10 | Not started |
+| **M5** Jellyfin client: discovery, Quick Connect, auth, home data, images with caching; mock server | **Built**, awaiting a run against your server ([`docs/M5-HARDWARE-CHECKLIST.md`](docs/M5-HARDWARE-CHECKLIST.md)). Tested end to end against the mock server |
+| M6 to M10 | Not started |
 
-The app currently shows the M2 render benchmark: a home-screen-like layout
-with a backdrop, a nav bar, 60 poster cards with shadows and titles,
-Japanese and Cyrillic text, a focus animation, and a perf HUD on F3. Focus
-moves spatially; Select on a card shows its title. The data and
-artwork are fake; the real UI and Jellyfin data arrive in M5/M6.
+The app connects to your Jellyfin server and shows its home screen: My
+Media, Continue Watching, Next Up, the latest additions to each library and
+Favorites, with the focused item's backdrop and details on top. Sign-in
+uses Quick Connect: the TV shows a code, and you approve it from the
+Jellyfin app on your phone or computer. After the first run the home
+screen appears instantly from the cache and refreshes in the background.
+Select does nothing yet beyond showing the title; detail pages, libraries
+and search come in M6, playback from the server in M7. `--demo` still shows
+the synthetic M2 render benchmark.
 
 ## Layout
 
@@ -34,14 +39,20 @@ crates/render     jellyroll-render: Renderer trait, Skia backend, text
                   shaping (cosmic-text) over the bundled fonts.
 crates/video      jellyroll-video: libmpv render-API binding (FFI; may use
                   `unsafe`) and the VA-API decode-capability probe.
+crates/jellyfin-api  Jellyfin client: DTOs generated from the server's
+                  OpenAPI spec (scripts/gen-jellyfin-dto.py), auth header,
+                  endpoints, HTTP client (reqwest + rustls), LAN discovery.
+crates/mock-server   jellyroll-mock: a fake Jellyfin server for development
+                  and CI (synthetic library of any size, Quick Connect).
 crates/app        jellyroll binary (#![forbid(unsafe_code)]): render loop,
-                  input normalization + key repeat, perf stats/HUD, systemd.
+                  input normalization + key repeat, focus graph, network
+                  thread and caches, home screen, perf stats/HUD, systemd.
 dist/             systemd unit, example config
 scripts/make-test-clips.sh  synthetic H.264 / HEVC 8-bit / HEVC 10-bit clips
 scripts/          install.sh, dev-cage.sh, bench-startup.sh
 assets/fonts/     bundled Noto fonts (subset; regenerate with
                   scripts/subset-fonts.sh)
-docs/             VERSIONS.md, DECISIONS.md, M1/M2 hardware checklists
+docs/             VERSIONS.md, DECISIONS.md, per-milestone hardware checklists
 ```
 
 ## Building
@@ -85,7 +96,9 @@ On Fedora, H.264/HEVC playback also needs the full ffmpeg from RPM Fusion
 (`sudo dnf swap ffmpeg-free ffmpeg --allowerasing`); `ffmpeg-free` leaves
 those codecs out.
 
-libcec comes in at M4.
+HDMI-CEC uses the kernel's CEC devices directly (no libcec). The
+Jellyfin client needs no extra system packages: TLS (rustls with
+aws-lc) builds with the C compiler already required above.
 
 **Hardware video decode on Fedora (Intel):** Fedora's own
 `libva-intel-media-driver` leaves out H.264 and HEVC. Install the full
@@ -131,6 +144,7 @@ devices are readable. The service user gets the group from `install.sh`.
 | `--hud` | Show the perf HUD (F3 toggles) |
 | `--allow-exit` | Esc/Back quits outside dev mode |
 | `--double-buffer` | Double instead of triple buffering on KMSDRM |
+| `--demo` | Synthetic render benchmark scene instead of the Jellyfin home screen |
 | `--bench-pacing SECS` | Continuous animation. Prints CPU/GPU/present p50/p99, missed vsyncs and allocating frames, and exits 1 if a spec §2 budget is exceeded |
 | `--bench-idle SECS` | Static screen. Fails if anything redraws or CPU ≥ 1% |
 | `--print-diagnostics` | SDL/GL/driver/display modes, DRI/CEC/input devices, mpv version, and which codecs the GPU decodes in hardware |
@@ -185,6 +199,31 @@ devices and their addresses. Settings: `cec`, `cec_wake_tv` and
   out and back in.
 - Some TVs need CEC switched on in their own menus (Anynet+, Bravia Sync,
   SimpLink, ...).
+
+### Connecting to Jellyfin
+
+1. **Server:** jellyroll uses `[server] url` from the config if set, else
+   the last server you signed in to, else the first server that answers
+   on the local network (UDP 7359). Servers 10.10.0 and newer are
+   supported.
+2. **Sign in:** a 6-digit Quick Connect code appears on the TV. In the
+   Jellyfin app on a phone or computer, open your profile, choose **Quick
+   Connect** and enter the code. Quick Connect must be turned on in the
+   server's Dashboard (General). Username/password sign-in arrives with
+   the on-screen keyboard in M6.
+3. **Remembered:** the access token (never your password) is kept in
+   `~/.local/share/jellyroll/state.json` (readable only by you). Caches
+   live in `~/.cache/jellyroll/` and can be deleted at any time.
+
+For an HTTPS server with a self-signed certificate, set `[server] ca_file`
+to its certificate (PEM).
+
+To try jellyroll without a server, or for development, run the mock:
+
+```sh
+cargo run --release -p jellyroll-mock-server -- --port 8096
+# then [server] url = "http://127.0.0.1:8096" (Quick Connect code 424242, approves itself)
+```
 
 ## Installing as the boot-to-app session
 

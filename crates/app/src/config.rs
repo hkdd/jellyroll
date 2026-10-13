@@ -19,9 +19,37 @@ use crate::input::RepeatConfig;
 #[serde(default)]
 pub struct Config {
     pub log: Log,
+    pub server: Server,
     pub display: Display,
     pub input: Input,
+    pub cache: Cache,
     pub debug: Debug,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Server {
+    /// Server address, e.g. "http://192.168.1.10:8096". Empty: the last
+    /// server signed in to, else the first one found on the LAN.
+    pub url: String,
+    /// PEM file with an extra CA or the server's self-signed certificate
+    /// (spec 12). Empty: system roots only.
+    pub ca_file: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Cache {
+    /// Disk cache for downloaded artwork (spec 9).
+    pub images_mb: u64,
+    /// GPU memory for artwork textures (spec 2: hard cap, LRU).
+    pub textures_mb: u64,
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Self { images_mb: 2048, textures_mb: 512 }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -222,6 +250,8 @@ fn validate(c: &mut Config, out: &mut Vec<String>) {
         c.display.ui_render_scale = 1.0;
     }
     clamp(&mut c.display.ui_render_scale, 0.5, 1.0, "display.ui_render_scale", out);
+    clamp(&mut c.cache.images_mb, 64, 1 << 20, "cache.images_mb", out);
+    clamp(&mut c.cache.textures_mb, 64, 4096, "cache.textures_mb", out);
     let i = &mut c.input;
     clamp(&mut i.repeat_delay_ms, 50, 2000, "input.repeat_delay_ms", out);
     clamp(&mut i.repeat_interval_ms, 10, 1000, "input.repeat_interval_ms", out);

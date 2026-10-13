@@ -19,10 +19,12 @@ USAGE: jellyroll [OPTIONS]
                          Esc/Back stop. Exits when playback ends
   --bench-play SECS      With --play: measure playback for SECS (dropped frames,
                          missed vsyncs, CPU), toggling the OSD every 2 s
-  --bench-pacing SECS    Animate continuously for SECS, print frame stats, exit
-                         non-zero if any budget is exceeded
-  --bench-idle SECS      Sit on a static screen for SECS, verify no redraws and
-                         < 1% CPU, exit non-zero otherwise
+  --demo                 Show the synthetic render benchmark scene instead of
+                         connecting to a server (no network)
+  --bench-pacing SECS    Animate the demo scene for SECS, print frame stats, exit
+                         non-zero if any budget is exceeded (implies --demo)
+  --bench-idle SECS      Sit on the static demo scene for SECS, verify no redraws
+                         and < 1% CPU, exit non-zero otherwise (implies --demo)
   --print-diagnostics    Print SDL/GL/display information and exit
   -h, --help             Show this help
 ";
@@ -36,6 +38,8 @@ pub struct Options {
     pub allow_exit: bool,
     pub double_buffer: bool,
     pub no_vsync: bool,
+    /// Synthetic M2 scene instead of the Jellyfin home screen.
+    pub demo: bool,
     pub bench: Option<Bench>,
     pub play: Option<String>,
     pub print_diagnostics: bool,
@@ -82,6 +86,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             "--allow-exit" => o.allow_exit = true,
             "--double-buffer" => o.double_buffer = true,
             "--no-vsync" => o.no_vsync = true,
+            "--demo" => o.demo = true,
             "--bench-pacing" => o.bench = Some(Bench::Pacing(secs(it.next(), &a)?)),
             "--bench-idle" => o.bench = Some(Bench::Idle(secs(it.next(), &a)?)),
             "--bench-play" => o.bench = Some(Bench::Play(secs(it.next(), &a)?)),
@@ -93,6 +98,11 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
     }
     if o.dev {
         o.allow_exit = true;
+    }
+    // Render benchmarks measure the renderer, not the network: they always
+    // run on the deterministic demo scene.
+    if matches!(o.bench, Some(Bench::Pacing(_) | Bench::Idle(_))) {
+        o.demo = true;
     }
     match (o.bench, &o.play) {
         (Some(Bench::Play(_)), None) => return Err("--bench-play needs --play URL".into()),

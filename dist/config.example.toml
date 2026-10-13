@@ -10,6 +10,14 @@
 # The RUST_LOG environment variable takes precedence.
 level = "info"
 
+[server]
+# Jellyfin server address. Empty: the last server you signed in to, else
+# the first one found on the local network.
+url = ""
+# PEM file with an extra CA certificate, or your server's self-signed
+# certificate, for https. Empty: the system's trusted roots only.
+ca_file = ""
+
 [display]
 # Fraction of each screen edge kept clear for TV overscan (0.0 - 0.1).
 safe_area = 0.025
@@ -34,6 +42,12 @@ repeat_interval_ms = 80
 # After holding this long, repeats speed up to repeat_fast_interval_ms.
 repeat_accelerate_after_ms = 1500
 repeat_fast_interval_ms = 40
+
+[cache]
+# Disk space for downloaded artwork (~/.cache/jellyroll/images).
+images_mb = 2048
+# GPU memory for artwork textures; least recently shown are dropped first.
+textures_mb = 512
 
 [debug]
 # Show the perf HUD at startup (F3 toggles).

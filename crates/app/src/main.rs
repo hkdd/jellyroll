@@ -8,10 +8,12 @@ mod config;
 mod diagnostics;
 mod focus;
 mod frame_loop;
+mod home;
 mod hud;
 mod input;
 mod input_access;
 mod logging;
+mod net;
 mod osd;
 mod perf;
 mod playback;
@@ -126,7 +128,23 @@ fn main() -> ExitCode {
         }
     };
     tracing::info!(ms = process_start.elapsed().as_millis() as u64, "renderer ready");
-    match frame_loop::run(&mut platform, &mut renderer, &opts, &loaded, &notice, process_start) {
+    let c = &loaded.config;
+    let net = net::NetConfig {
+        server_url: c.server.url.clone(),
+        ca_file: (!c.server.ca_file.is_empty()).then(|| c.server.ca_file.clone().into()),
+        image_cache_bytes: c.cache.images_mb << 20,
+        data_dir: net::store::data_dir(),
+        cache_dir: net::store::cache_dir(),
+    };
+    match frame_loop::run(
+        &mut platform,
+        &mut renderer,
+        &opts,
+        &loaded,
+        Some(net),
+        &notice,
+        process_start,
+    ) {
         frame_loop::Exit::Quit | frame_loop::Exit::BenchPassed => ExitCode::SUCCESS,
         frame_loop::Exit::BenchFailed | frame_loop::Exit::Error => ExitCode::FAILURE,
     }

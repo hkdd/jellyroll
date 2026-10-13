@@ -17,12 +17,56 @@ use jellyroll_platform::{GpuTimer, Platform, PlatformEvent};
 use jellyroll_render::Renderer;
 
 use crate::args::{Bench, Options};
+use crate::home::HomeApp;
 use crate::hud::{CPU_BUDGET_MS, GPU_BUDGET_MS, Hud};
 use crate::input::{self, Input, InputAction, KeyRepeat};
+use crate::net::{NetConfig, NetHandle};
 use crate::perf::{FrameStats, is_missed_vsync, ms};
 use crate::playback::{Outcome, Playback};
 use crate::scene::{Scene, UPLOAD_BUDGET};
 use crate::systemd::Systemd;
+
+/// What the loop shows when not playing: the Jellyfin home screen, or the
+/// synthetic demo scene (`--demo`, render benchmarks).
+enum View {
+    Demo(Box<Scene>),
+    Home(Box<HomeApp>),
+}
+
+impl View {
+    fn is_animating(&self, now: Instant) -> bool {
+        match self {
+            View::Demo(s) => s.is_animating(now),
+            View::Home(h) => h.is_animating(now),
+        }
+    }
+
+    /// Startup work done (artwork uploaded): steady state may begin.
+    fn settled(&self) -> bool {
+        match self {
+            View::Demo(s) => !s.uploads_pending(),
+            View::Home(h) => h.settled(),
+        }
+    }
+
+    fn on_action(&mut self, a: InputAction, now: Instant) -> bool {
+        match self {
+            View::Demo(s) => s.on_action(a, now),
+            View::Home(h) => h.on_action(a, now),
+        }
+    }
+
+    /// Per-iteration update; returns true if a redraw is needed.
+    fn update(&mut self, now: Instant) -> bool {
+        match self {
+            View::Demo(s) => {
+                s.update(now);
+                false
+            }
+            View::Home(h) => h.update(now),
+        }
+    }
+}
 
 /// Minimum time before steady state (allocation checks and benchmark
 /// windows). Steady state also waits for initial artwork uploads to finish.
@@ -93,12 +137,12 @@ pub fn run<P: Platform, R: Renderer>(
     r: &mut R,
     opts: &Options,
     config: &crate::config::Loaded,
+    net: Option<NetConfig>,
     notice: &str,
     process_start: Instant,
 ) -> Exit {
     let start = Instant::now();
     let mut systemd = Systemd::new(start);
-    let mut scene = Scene::new(start);
     let mut hud = Hud::new(opts.hud, start);
     let mut repeat = KeyRepeat::new(config.config.input.repeat());
     let safe_area = config.config.display.safe_area;
@@ -110,6 +154,19 @@ pub fn run<P: Platform, R: Renderer>(
     let mut refresh_hz = p.refresh_hz();
     let mut header = String::new();
     make_header(fb, refresh_hz, &mut header);
+    let mut view = match net {
+        Some(cfg) if !opts.demo && opts.play.is_none() => {
+            let cap = config.config.cache.textures_mb << 20;
+            match NetHandle::start(cfg, p.waker()) {
+                Ok(h) => View::Home(Box::new(HomeApp::new(h, cap, fb, safe_area))),
+                Err(e) => {
+                    tracing::error!("cannot start the network thread: {e}");
+                    View::Demo(Box::new(Scene::new(start)))
+                }
+            }
+        }
+        _ => View::Demo(Box::new(Scene::new(start))),
+    };
 
     let mut playback = match &opts.play {
         Some(url) => match Playback::start(p, url, start) {
@@ -129,7 +186,7 @@ pub fn run<P: Platform, R: Renderer>(
     });
     // Until steady state the loop must still wake up to notice it.
     let mut bench_end = bench_len.map(|_| start + WARMUP);
-    if let Some(Bench::Pacing(_)) = opts.bench {
+    if let (Some(Bench::Pacing(_)), View::Demo(scene)) = (opts.bench, &mut view) {
         scene.bench = true;
     }
     let mut bench_reset_done = false;
@@ -149,7 +206,7 @@ pub fn run<P: Platform, R: Renderer>(
         );
         let (deadline, animating) = match &playback {
             Some(pb) => (earliest(deadline, pb.osd.next_deadline(now)), pb.playing()),
-            None => (deadline, scene.is_animating(now)),
+            None => (deadline, view.is_animating(now)),
         };
         let timeout = wait_timeout(dirty, animating, deadline, now);
         events.clear();
@@ -170,7 +227,7 @@ pub fn run<P: Platform, R: Renderer>(
         }
         let loaded = match &playback {
             Some(pb) => pb.started,
-            None => !scene.uploads_pending(),
+            None => view.settled(),
         };
         if !bench_reset_done && now >= start + WARMUP && loaded {
             bench_reset_done = true;
@@ -188,6 +245,10 @@ pub fn run<P: Platform, R: Renderer>(
             && now >= end
         {
             return finish_bench(opts, &stats, &base, p, r, playback.as_ref());
+        }
+
+        if let View::Home(h) = &mut view {
+            dirty |= h.poll(now);
         }
 
         // ---- input + update (measured) --------------------------------
@@ -219,6 +280,9 @@ pub fn run<P: Platform, R: Renderer>(
                     fb = p.framebuffer_size();
                     refresh_hz = p.refresh_hz();
                     make_header(fb, refresh_hz, &mut header);
+                    if let View::Home(h) = &mut view {
+                        h.set_output(fb, safe_area, now);
+                    }
                     tracing::info!(w = fb.0, h = fb.1, refresh_hz, "output changed");
                     repeat.reset();
                     dirty = true;
@@ -243,7 +307,7 @@ pub fn run<P: Platform, R: Renderer>(
                             systemd.stopping();
                             return Exit::Quit;
                         }
-                        dirty |= scene.on_action(a, now);
+                        dirty |= view.on_action(a, now);
                     }
                     Some(Input::Press { action: None, .. }) | None => {}
                 },
@@ -284,10 +348,10 @@ pub fn run<P: Platform, R: Renderer>(
             overlay_shown = overlay;
         } else {
             if let Some(a) = repeat.tick(now) {
-                dirty |= scene.on_action(a, now);
+                dirty |= view.on_action(a, now);
             }
-            scene.update(now);
-            if scene.is_animating(now) {
+            dirty |= view.update(now);
+            if view.is_animating(now) {
                 dirty = true;
             }
         }
@@ -317,17 +381,31 @@ pub fn run<P: Platform, R: Renderer>(
             }
             stats.submit_ms.push(ms(submit_start.elapsed()));
         } else if r.begin_frame(fb) {
-            if scene.uploads_pending() {
-                scene.pump_uploads(r, fb.1, UPLOAD_BUDGET);
+            match &mut view {
+                View::Demo(scene) => {
+                    if scene.uploads_pending() {
+                        scene.pump_uploads(r, fb.1, UPLOAD_BUDGET);
+                    }
+                    scene.set_viewport(r.logical_size().0, safe_area);
+                    scene.draw(r, now, safe_area, &header, notice);
+                }
+                View::Home(h) => {
+                    // Texture uploads allocate (once per image); keep them
+                    // out of the steady-state check like the HUD.
+                    let a0 = alloc_counter::allocations();
+                    let uploading = !h.settled();
+                    h.draw(r, now, notice);
+                    if uploading {
+                        hud_allocs += alloc_counter::allocations() - a0;
+                    }
+                }
             }
-            scene.set_viewport(r.logical_size().0, safe_area);
-            scene.draw(r, now, safe_area, &header, notice);
             // HUD text changes every refresh and is re-shaped then; keep its
             // allocations out of the steady-state check.
             let a0 = alloc_counter::allocations();
             let (lw, lh) = r.logical_size();
             hud.draw(r, &stats, lw * (1.0 - safe_area), lh * safe_area);
-            hud_allocs = alloc_counter::allocations() - a0;
+            hud_allocs += alloc_counter::allocations() - a0;
             let submit_start = Instant::now();
             stats.record_ms.push(ms(submit_start - frame_start));
             r.end_frame();

@@ -8,12 +8,21 @@ license.workspace = true
 jellyroll-platform = { path = "../platform" }
 jellyroll-render = { path = "../render" }
 jellyroll-video = { path = "../video" }
+jellyfin-api = { package = "jellyroll-jellyfin-api", path = "../jellyfin-api" }
+fast_image_resize = "=6.1.0"
+image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+redb = "=4.3.0"
+serde_json = "=1.0.154"
+tokio = { version = "=1.53.2", features = ["rt", "time", "sync", "macros"] }
 sd-notify = "=0.5.0"
 serde = { version = "=1.0.229", features = ["derive"] }
 toml = { version = "=0.9.8", default-features = false, features = ["std", "serde", "parse"] }
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["fmt", "std", "ansi"] }
 tracing-journald = "=0.3.2"
+
+[dev-dependencies]
+jellyroll-mock-server = { path = "../mock-server" }
 
 [features]
 build-sdl = ["jellyroll-platform/build-sdl"]
