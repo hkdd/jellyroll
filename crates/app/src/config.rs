@@ -76,9 +76,10 @@ pub struct Display {
 #[serde(rename_all = "lowercase")]
 pub enum UiResolution {
     /// 1080p, upscaled, on outputs taller than 1080 pixels.
-    #[default]
     Auto,
     /// The output's own resolution: sharpest, the most work per frame.
+    /// The default: chosen after testing on the reference HTPC (D44).
+    #[default]
     Native,
     /// Drawn at 1080p and upscaled by the GPU.
     #[serde(rename = "1080p")]
@@ -133,7 +134,7 @@ impl Default for Display {
         Self {
             safe_area: crate::scene::DEFAULT_SAFE_AREA,
             double_buffer: false,
-            ui_resolution: UiResolution::Auto,
+            ui_resolution: UiResolution::Native,
         }
     }
 }

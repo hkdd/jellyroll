@@ -628,7 +628,7 @@ allocating frames, but CPU p99 8-11 ms and GPU p99 7.4-8.4 ms.
   budget, choose between rendering the UI at 1080p with artwork sized to
   match, and documenting the overrun at native 4K.
 
-**D44: UI resolution setting; 1080p upscaled by default on 4K.** With
+**D44: UI resolution setting; native by default.** With
 textures reused (D43), an artwork upload during scrolling still cost
 ~2 ms on the HD 530 at native 4K (the driver copies synchronously while
 the GPU is busy), so frames that load new artwork exceed the 4 ms CPU
@@ -644,10 +644,20 @@ Decided:
   upscaled (smoother)" / "full resolution (sharpest)". It applies at once
   (surfaces rebuilt, textures re-requested at the new size) and is saved
   in `~/.local/share/jellyroll/ui.json`, which wins over config.toml.
-- Native 4K remains available and is a documented deviation from the
-  spec 2 budgets on this GPU. M2 found `ui_render_scale = 0.75` did not
-  lower GPU time (the iGPU clocks down; the upscale pass costs about what
-  it saves), so the GPU effect at 1080p is measured, not assumed.
+- Results on the HTPC (HD 530, 3840x2160, `--bench-scroll 20`):
+
+  | UI resolution | CPU p50 / p99 | loading frames p99 | steady frames p99 | GPU p50 / p99 | artwork upload | missed vsyncs |
+  |---|---|---|---|---|---|---|
+  | 1080p upscaled | 2.7 / 4.8 ms | 4.8 ms | 2.5 ms | 2.9 / 3.4 ms | 0.47 ms | 0 |
+  | native 4K | 4.5 / 6.9 ms | 6.9 ms | 3.4 ms | 4.8 / 6.7 ms | 1.84 ms | 0 |
+
+  At 1080p the GPU budget passes with room and CPU is just over on frames
+  that load artwork during the (faster than key repeat) scripted scroll.
+- **Compared both on the TV: native looks better.** Native is the default (`auto` and `1080p`
+  stay available in Settings and config). Accepted deviation from spec 2
+  on this GPU at native 4K: CPU p99 ~7 ms on frames that load new artwork
+  and GPU p99 ~6.5 ms, with steady 60 fps, 0 missed vsyncs and 0
+  allocating frames; frames with nothing new to load are within budget.
 
 ## Dependency approvals
 

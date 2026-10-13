@@ -18,11 +18,12 @@ copy them from the desktop with `cat FILE | tee >(wl-copy)`.
    The screen opens Movies and scrolls down by itself for 20 s, then exits.
    Pass: `result: PASS` (CPU p99 < 4 ms, GPU p99 < 6 ms, 0 missed vsyncs,
    0 allocating frames). It uses `[display] ui_resolution` from the config
-   (default `auto`: 1080p upscaled on 4K; the output's first lines show the
-   render scale). For comparison, run it once more at native resolution:
+   (default `native`; the output's first lines show the render scale). At
+   native 4K the HD 530 is over budget on frames that load artwork (D44);
+   for comparison, run it once more at 1080p upscaled:
    ```sh
-   printf '[display]\nui_resolution = "native"\n' > /tmp/native.toml
-   ./target/release/jellyroll --config /tmp/native.toml --bench-scroll 20 > ~/jellyroll-m6-scroll-native.txt 2>/dev/null
+   printf '[display]\nui_resolution = "1080p"\n' > /tmp/1080p.toml
+   ./target/release/jellyroll --config /tmp/1080p.toml --bench-scroll 20 > ~/jellyroll-m6-scroll-1080p.txt 2>/dev/null
    ```
 3. **Browse your server:**
    ```sh
@@ -48,8 +49,8 @@ copy them from the desktop with `cat FILE | tee >(wl-copy)`.
      decode). Under Display, switch the interface between "1080p,
      upscaled" and "full resolution" and look at text and posters from the
      couch; the choice is remembered. Leave Sign out / Change server for
-     last: Sign out returns to
-     the Quick Connect screen; there, **Sign in with password** works too.
+     last: Sign out returns to the Quick Connect screen; there, **Sign in
+     with password** works too.
    - Home key returns to the home screen from any page; Esc goes back one
      page, and quits from the home screen.
 4. **Results**, from the desktop:
