@@ -44,6 +44,21 @@ pub fn print(opts: &SdlOptions) -> ExitCode {
             println!("env.{var}: {v}");
         }
     }
+    let (major, minor) = jellyroll_video::client_api_version();
+    println!("mpv.client_api: {major}.{minor}");
+    println!("video.hwdec_order: {}", jellyroll_video::default_hwdec());
+    match jellyroll_video::va::probe() {
+        Ok(caps) => {
+            println!("vaapi.device: {}", caps.device);
+            println!("vaapi.driver: {}", caps.driver);
+            let names = |v: Vec<jellyroll_video::va::Codec>| {
+                v.iter().map(|c| c.name()).collect::<Vec<_>>().join(", ")
+            };
+            println!("vaapi.decode: {}", names(caps.supported()));
+            println!("vaapi.no_decode: {}", names(caps.unsupported()));
+        }
+        Err(e) => println!("vaapi.error: {e}"),
+    }
     if let Err(e) = jellyroll_platform::print_sdl_diagnostics(opts) {
         println!("sdl.error: {e}");
     }

@@ -27,6 +27,16 @@ const GPU_DISJOINT_EXT: GLenum = 0x8FBB;
 
 type FnGetString = unsafe extern "C" fn(GLenum) -> *const u8;
 type FnGetIntegerv = unsafe extern "C" fn(GLenum, *mut GLint);
+type FnEnable = unsafe extern "C" fn(GLenum);
+type FnColorMask = unsafe extern "C" fn(u8, u8, u8, u8);
+type FnBindFramebuffer = unsafe extern "C" fn(GLenum, GLuint);
+type FnBindBuffer = unsafe extern "C" fn(GLenum, GLuint);
+type FnBindVertexArray = unsafe extern "C" fn(GLuint);
+type FnUseProgram = unsafe extern "C" fn(GLuint);
+type FnActiveTexture = unsafe extern "C" fn(GLenum);
+type FnBindTexture = unsafe extern "C" fn(GLenum, GLuint);
+type FnPixelStorei = unsafe extern "C" fn(GLenum, GLint);
+type FnGetError = unsafe extern "C" fn() -> GLenum;
 type FnGenQueries = unsafe extern "C" fn(GLsizei, *mut GLuint);
 type FnDeleteQueries = unsafe extern "C" fn(GLsizei, *const GLuint);
 type FnBeginQuery = unsafe extern "C" fn(GLenum, GLuint);
@@ -46,9 +56,24 @@ struct TimerFns {
     check_disjoint: bool,
 }
 
+/// Entry points for [`Gl::reset_to_defaults`].
+struct ResetFns {
+    disable: FnEnable,
+    color_mask: FnColorMask,
+    bind_framebuffer: FnBindFramebuffer,
+    bind_buffer: FnBindBuffer,
+    bind_vertex_array: FnBindVertexArray,
+    use_program: FnUseProgram,
+    active_texture: FnActiveTexture,
+    bind_texture: FnBindTexture,
+    pixel_storei: FnPixelStorei,
+    get_error: FnGetError,
+}
+
 pub struct Gl {
     get_string: FnGetString,
     get_integerv: FnGetIntegerv,
+    reset: ResetFns,
     timer: Option<TimerFns>,
     pub is_gles: bool,
     // Raw function pointers already make this !Send/!Sync; keep it explicit.
@@ -128,6 +153,18 @@ impl Gl {
         Ok(Self {
             get_string: req!("glGetString"),
             get_integerv: req!("glGetIntegerv"),
+            reset: ResetFns {
+                disable: req!("glDisable"),
+                color_mask: req!("glColorMask"),
+                bind_framebuffer: req!("glBindFramebuffer"),
+                bind_buffer: req!("glBindBuffer"),
+                bind_vertex_array: req!("glBindVertexArray"),
+                use_program: req!("glUseProgram"),
+                active_texture: req!("glActiveTexture"),
+                bind_texture: req!("glBindTexture"),
+                pixel_storei: req!("glPixelStorei"),
+                get_error: req!("glGetError"),
+            },
             timer,
             is_gles,
             _not_send: PhantomData,
@@ -161,6 +198,62 @@ impl Gl {
 
     pub fn has_timer_queries(&self) -> bool {
         self.timer.is_some()
+    }
+
+    /// Puts the GL state that other renderers commonly leave behind back to
+    /// OpenGL defaults. libmpv's render API requires default state except
+    /// viewport, scissor box, blend func and clear colour (render_gl.h), and
+    /// Skia leaves blending, scissoring, bound buffers and programs set
+    /// after a flush (spec 6.3).
+    pub fn reset_to_defaults(&self) {
+        const BLEND: GLenum = 0x0BE2;
+        const SCISSOR_TEST: GLenum = 0x0C11;
+        const STENCIL_TEST: GLenum = 0x0B90;
+        const DEPTH_TEST: GLenum = 0x0B71;
+        const CULL_FACE: GLenum = 0x0B44;
+        const FRAMEBUFFER_SRGB: GLenum = 0x8DB9;
+        const FRAMEBUFFER: GLenum = 0x8D40;
+        const ARRAY_BUFFER: GLenum = 0x8892;
+        const PIXEL_PACK_BUFFER: GLenum = 0x88EB;
+        const PIXEL_UNPACK_BUFFER: GLenum = 0x88EC;
+        const TEXTURE0: GLenum = 0x84C0;
+        const TEXTURE_2D: GLenum = 0x0DE1;
+        const UNPACK_ALIGNMENT: GLenum = 0x0CF5;
+        const UNPACK_ROW_LENGTH: GLenum = 0x0CF2;
+        const PACK_ALIGNMENT: GLenum = 0x0D05;
+        let r = &self.reset;
+        // SAFETY: context current; plain value arguments; every name is a
+        // valid default (0) or a core enum for this context type.
+        unsafe {
+            for cap in [BLEND, SCISSOR_TEST, STENCIL_TEST, DEPTH_TEST, CULL_FACE] {
+                (r.disable)(cap);
+            }
+            if !self.is_gles {
+                (r.disable)(FRAMEBUFFER_SRGB);
+            }
+            (r.color_mask)(1, 1, 1, 1);
+            (r.bind_framebuffer)(FRAMEBUFFER, 0);
+            (r.bind_vertex_array)(0);
+            (r.bind_buffer)(ARRAY_BUFFER, 0);
+            (r.bind_buffer)(PIXEL_PACK_BUFFER, 0);
+            (r.bind_buffer)(PIXEL_UNPACK_BUFFER, 0);
+            (r.use_program)(0);
+            (r.active_texture)(TEXTURE0);
+            (r.bind_texture)(TEXTURE_2D, 0);
+            (r.pixel_storei)(UNPACK_ALIGNMENT, 4);
+            (r.pixel_storei)(UNPACK_ROW_LENGTH, 0);
+            (r.pixel_storei)(PACK_ALIGNMENT, 4);
+            // GL errors are sticky until read. Clear any left by the previous
+            // user so the next one (mpv checks after its own calls) is not
+            // blamed for them.
+            for _ in 0..8 {
+                let e = (r.get_error)();
+                if e == 0 {
+                    break;
+                }
+                tracing::debug!(error = format!("{e:#06x}"), "stale GL error cleared");
+            }
+        }
     }
 
     fn disjoint(&self) -> bool {

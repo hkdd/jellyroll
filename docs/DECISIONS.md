@@ -11,7 +11,7 @@
 | 5 | Minimum Jellyfin server version | Open (M5). |
 | 6 | Retained tree vs immediate mode | **Leaning immediate-style** (D15): the scene is rebuilt on each dirty frame, with everything expensive cached by the renderer. Revisit with the M6 10k-item scroll benchmark. |
 | 7 | NVIDIA | Open. M1 code is vendor-neutral, but only Mesa has been exercised. |
-| 8 | Video decode on the reference hardware | **Constraint found.** The HTPC's Intel HD 530 (Skylake) decodes HEVC 8-bit and H.264 in hardware, but not HEVC 10-bit, VP9 or AV1 (intel/media-driver README codec table, SKL column, checked 2026-10-13). M3's exit test (4K HEVC 10-bit) cannot use hardware decode here. Confirmed on the HTPC with `vainfo` (iHD 26.1.5 from RPM Fusion): decode for MPEG-2, H.264 Main/High, VC-1, VP8, HEVC Main; no HEVC Main10, VP9 or AV1. CPU decode is not viable either (i3-6100T: 2 cores / 4 threads, 35 W). Fedora's own `libva-intel-media-driver` reports no H.264/HEVC at all (patent-restricted build); the full driver is RPM Fusion nonfree `intel-media-driver`. **Plan (proposed, option a):** M3 proves playback with H.264 and HEVC 8-bit; M5's device profile reports exactly what `vainfo`/mpv say this GPU decodes, so Jellyfin transcodes the rest. |
+| 8 | Video decode on the reference hardware | **Constraint found.** The HTPC's Intel HD 530 (Skylake) decodes HEVC 8-bit and H.264 in hardware, but not HEVC 10-bit, VP9 or AV1 (intel/media-driver README codec table, SKL column, checked 2026-10-13). M3's exit test (4K HEVC 10-bit) cannot use hardware decode here. Confirmed on the HTPC with `vainfo` (iHD 26.1.5 from RPM Fusion): decode for MPEG-2, H.264 Main/High, VC-1, VP8, HEVC Main; no HEVC Main10, VP9 or AV1. CPU decode is not viable either (i3-6100T: 2 cores / 4 threads, 35 W). Fedora's own `libva-intel-media-driver` reports no H.264/HEVC at all (patent-restricted build); the full driver is RPM Fusion nonfree `intel-media-driver`. **Decided (D19):** direct play whatever the hardware decodes; say clearly when it can't; no silent software decode and no automatic transcoding. Unsupported content on this HTPC is the trigger for a hardware upgrade. |
 
 ## Decisions made in M1
 
@@ -185,6 +185,57 @@ artwork uploads finish, so upload frames no longer show up as steady-state
 spikes. The HD 530 is a 2015 GT2 iGPU; if full-resolution 4K stays above
 the 6 ms GPU budget, `ui_render_scale = 0.75` is the intended setting for
 it (spec 6.4).
+
+## Decisions made in M3
+
+**D19: Playback policy: direct play by detected capability, never
+silently degrade.** Decided (2026-10-13): the client must
+work on any hardware, so what it can decode is detected at runtime
+(VA-API profile query, D21) rather than assumed. Anything the hardware
+decodes is direct-played. Anything it can't is reported clearly: a red
+on-screen badge and a log warning naming the codec. There is no silent
+software decode (spec 7.1) and no automatic server transcode; if content
+won't play on this HTPC, the hardware gets replaced. Server transcoding may
+come back later as an explicit, off-by-default setting.
+
+**D20: Hand-written libmpv binding, non-blocking on the render thread.**
+`crates/video` declares the ~25 libmpv functions it uses (client API 2.x,
+checked against the 2.2 headers) instead of adding a binding crate. With
+`MPV_RENDER_PARAM_ADVANCED_CONTROL` the render thread must never wait for
+mpv's core (render.h, "Threading"): the first build deadlocked when the
+render thread called `mpv_get_property_string` during a video reconfig
+while the core waited on the renderer. The binding now only uses
+non-blocking calls on that thread: every value (time, duration, pause,
+decoder, codec, size, fps, drop counters) is an observed property
+delivered as an event, and every command is `mpv_command_async`.
+Synchronous getters were removed from the API so the mistake can't recur.
+mpv's wakeup and render-update callbacks only set an atomic flag and push
+an SDL user event (the platform waker).
+
+**D21: Decode capability probe via libva.** At startup and in
+`--print-diagnostics` the app opens each DRM render node and asks VA-API
+which profiles have a decode (VLD) entry point, the query `vainfo` makes,
+mapped to codecs (H.264, HEVC 8/10-bit, VP9 8/10-bit, AV1, ...). M5's
+Jellyfin device profile will be built from this. Linked: `libva`,
+`libva-drm`.
+
+**D22: mpv configuration (spec 7.1).** `hwdec` is `vaapi`, plus `nvdec`
+only when the NVIDIA kernel driver is loaded (`auto-safe` probed CUDA and
+VDPAU everywhere and logged errors). `video-sync=display-resample`,
+`interpolation=no`, demuxer cache 150 MiB / 50 MiB back, no config files,
+user scripts, built-in scripts (stats, console, select, ytdl, ...), OSC
+or default key bindings. `audio-fallback-to-null=yes`, so a missing audio
+device (TV or receiver off) doesn't stop video (spec 12).
+
+**D23: Frame handoff (spec 6.3).** While video advances, the loop renders
+every vsync: reset GL to defaults (mpv requires default state; Skia leaves
+blending, scissor, bound buffers and programs set), mpv renders into FBO 0,
+then Skia's GL state cache is invalidated (`GrDirectContext::reset`) and
+the OSD is drawn only if something is visible. With nothing on screen,
+Skia is skipped entirely. `mpv_render_context_report_swap` follows each
+swap. Paused, the loop idles and redraws only on input or when the OSD
+appears/disappears. The GL error flag is cleared during the reset so mpv
+isn't blamed for earlier errors.
 
 ## Dependency approvals
 

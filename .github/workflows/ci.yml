@@ -23,6 +23,8 @@ jobs:
             libx11-dev libxext-dev libxcursor-dev libxi-dev libxrandr-dev libxss-dev \
             libxfixes-dev libxtst-dev libxinerama-dev \
             libdbus-1-dev libasound2-dev libpipewire-0.3-dev libibus-1.0-dev \
+            libfreetype-dev libfontconfig-dev \
+            libmpv-dev libva-dev ffmpeg \
             xvfb libgl1-mesa-dri libegl-mesa0
 
       - name: Toolchain
@@ -62,3 +64,11 @@ jobs:
 
       - name: startup bench (Xvfb)
         run: xvfb-run -a -s "-screen 0 1920x1080x24" env BIN=target/release/jellyroll scripts/bench-startup.sh 5 --dev
+
+      # Playback smoke test: a short clip must play to the end and exit 0.
+      # There is no GPU here, so mpv decodes in software (the app warns); the
+      # playback benchmark's pass/fail is for real hardware only.
+      - name: playback smoke test (Xvfb)
+        run: |
+          scripts/make-test-clips.sh /tmp/clips 640x360 3
+          xvfb-run -a -s "-screen 0 1920x1080x24" timeout 60 target/release/jellyroll --dev --play /tmp/clips/h264-360p.mp4

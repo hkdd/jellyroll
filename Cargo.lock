@@ -292,6 +292,7 @@ version = "0.1.0"
 dependencies = [
  "jellyroll-platform",
  "jellyroll-render",
+ "jellyroll-video",
  "sd-notify",
  "serde",
  "toml 0.9.8",
@@ -316,6 +317,13 @@ dependencies = [
  "skia-safe",
  "tracing",
  "unicode-script",
+]
+
+[[package]]
+name = "jellyroll-video"
+version = "0.1.0"
+dependencies = [
+ "tracing",
 ]
 
 [[package]]

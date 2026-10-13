@@ -15,7 +15,8 @@ and verified versions.
 |---|---|
 | **M1** Skeleton: SDL3 KMSDRM, GL context, vsync loop, dirty redraw, perf HUD, systemd unit, dev mode | **Done.** Ran on the HTPC: boots to the test screen on a text console, input works, idle CPU near zero. Pacing numbers not yet recorded |
 | **M2** Renderer trait + Skia: rects, rounded rects, gradients, text (incl. CJK), images, animation clock | **Done.** On the HTPC (Intel HD 530, 4K): steady 60 fps, 0 missed vsyncs; Skia kept. The spec's p99 budgets are not met on this GPU at native 4K (GPU ~8 ms, CPU ~3.3 ms p50); see `docs/DECISIONS.md` |
-| M3 to M10 | Not started |
+| **M3** libmpv playback: hwdec, GL handoff with the overlay, audio | **Implemented.** Verified in software (Xvfb, software decode). **Needs a run on the HTPC**; see [`docs/M3-HARDWARE-CHECKLIST.md`](docs/M3-HARDWARE-CHECKLIST.md) |
+| M4 to M10 | Not started |
 
 The app currently shows the M2 render benchmark: a home-screen-like layout
 with a backdrop, 60 poster cards with shadows and titles, Japanese and
@@ -29,9 +30,12 @@ crates/platform   jellyroll-platform: Platform trait, SDL3 backend, GL loader,
                   counting allocator. The only crate allowed `unsafe`.
 crates/render     jellyroll-render: Renderer trait, Skia backend, text
                   shaping (cosmic-text) over the bundled fonts.
+crates/video      jellyroll-video: libmpv render-API binding (FFI; may use
+                  `unsafe`) and the VA-API decode-capability probe.
 crates/app        jellyroll binary (#![forbid(unsafe_code)]): render loop,
                   input normalization + key repeat, perf stats/HUD, systemd.
 dist/             systemd unit, example config
+scripts/make-test-clips.sh  synthetic H.264 / HEVC 8-bit / HEVC 10-bit clips
 scripts/          install.sh, dev-cage.sh, bench-startup.sh
 assets/fonts/     bundled Noto fonts (subset; regenerate with
                   scripts/subset-fonts.sh)
@@ -67,7 +71,19 @@ System packages (runtime, plus headers when using `build-sdl`):
 | Skia (link) | `gcc-c++ freetype-devel fontconfig-devel` (gcc-c++ keeps libstdc++-devel on the same version as gcc) | `libstdc++-dev libfreetype-dev libfontconfig-dev` | `gcc-libs freetype2 fontconfig` |
 | build-sdl only | `cmake ninja-build` + X11/Wayland headers | see `.github/workflows/ci.yml` | `cmake ninja` |
 
-libmpv, PipeWire and libcec come in at M3/M4.
+Playback (M3) links libmpv (client API 2.x) and libva. Install them by
+what the build needs; dnf picks whichever package provides each:
+
+```sh
+sudo dnf install -y 'pkgconfig(mpv)' 'pkgconfig(libva)' 'pkgconfig(libva-drm)'   # Fedora
+sudo apt install libmpv-dev libva-dev                                               # Debian/Ubuntu
+```
+
+On Fedora, H.264/HEVC playback also needs the full ffmpeg from RPM Fusion
+(`sudo dnf swap ffmpeg-free ffmpeg --allowerasing`); `ffmpeg-free` leaves
+those codecs out.
+
+libcec comes in at M4.
 
 **Hardware video decode on Fedora (Intel):** Fedora's own
 `libva-intel-media-driver` leaves out H.264 and HEVC. Install the full
@@ -115,7 +131,9 @@ devices are readable. The service user gets the group from `install.sh`.
 | `--double-buffer` | Double instead of triple buffering on KMSDRM |
 | `--bench-pacing SECS` | Continuous animation. Prints CPU/GPU/present p50/p99, missed vsyncs and allocating frames, and exits 1 if a spec §2 budget is exceeded |
 | `--bench-idle SECS` | Static screen. Fails if anything redraws or CPU ≥ 1% |
-| `--print-diagnostics` | SDL/GL/driver/display-mode/DRI/CEC info, for support over SSH |
+| `--print-diagnostics` | SDL/GL/driver/display modes, DRI/CEC/input devices, mpv version, and which codecs the GPU decodes in hardware |
+| `--play FILE_OR_URL` | Play a video (M3 harness). Space pause, ←/→ seek 10 s, ↑/↓ 60 s, `i` decoder diagnostics, Esc stop |
+| `--bench-play SECS` | With `--play`: measure dropped frames, missed vsyncs and CPU, toggling the overlay every 2 s |
 
 Settings live in `~/.config/jellyroll/config.toml`. Every key is optional;
 see [`dist/config.example.toml`](dist/config.example.toml) for all keys and

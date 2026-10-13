@@ -78,6 +78,9 @@ pub enum PlatformEvent {
     Exposed,
     /// Mode or connector changed; refresh rate may differ.
     DisplayChanged,
+    /// Another thread asked the render loop to wake up (see
+    /// [`Platform::waker`]), e.g. mpv has events or a new video frame.
+    Wake,
 }
 
 #[derive(Clone, Debug)]
@@ -108,6 +111,9 @@ pub trait Platform {
     /// Resolves a GL/EGL symbol for the current context (null if missing).
     /// Used by Skia (and later mpv) to load their own entry points.
     fn gl_proc_address(&self, name: &str) -> *const std::ffi::c_void;
+    /// An owned GL/EGL symbol resolver usable for the life of the process
+    /// (mpv keeps its loader).
+    fn gl_loader(&self) -> Box<dyn Fn(&str) -> *const std::ffi::c_void>;
     fn info(&self) -> &PlatformInfo;
     /// Drawable size in pixels.
     fn framebuffer_size(&self) -> (u32, u32);
@@ -122,4 +128,8 @@ pub trait Platform {
     fn wait_events(&mut self, timeout: Duration, out: &mut Vec<PlatformEvent>);
     /// Presents the back buffer. With swap interval 1 this paces to vblank.
     fn swap(&mut self);
+    /// A thread-safe handle that makes `wait_events` return with
+    /// [`PlatformEvent::Wake`]. Cheap to call from any thread, including
+    /// C callbacks; it only queues an event.
+    fn waker(&self) -> std::sync::Arc<dyn Fn() + Send + Sync>;
 }

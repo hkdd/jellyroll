@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 jellyroll-platform = { path = "../platform" }
 jellyroll-render = { path = "../render" }
+jellyroll-video = { path = "../video" }
 sd-notify = "=0.5.0"
 serde = { version = "=1.0.229", features = ["derive"] }
 toml = { version = "=0.9.8", default-features = false, features = ["std", "serde", "parse"] }

@@ -11,7 +11,9 @@ mod hud;
 mod input;
 mod input_access;
 mod logging;
+mod osd;
 mod perf;
+mod playback;
 mod posters;
 mod scene;
 mod systemd;
@@ -119,6 +121,6 @@ fn main() -> ExitCode {
     tracing::info!(ms = process_start.elapsed().as_millis() as u64, "renderer ready");
     match frame_loop::run(&mut platform, &mut renderer, &opts, &loaded, &notice, process_start) {
         frame_loop::Exit::Quit | frame_loop::Exit::BenchPassed => ExitCode::SUCCESS,
-        frame_loop::Exit::BenchFailed => ExitCode::FAILURE,
+        frame_loop::Exit::BenchFailed | frame_loop::Exit::Error => ExitCode::FAILURE,
     }
 }

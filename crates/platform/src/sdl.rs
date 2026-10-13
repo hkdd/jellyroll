@@ -32,6 +32,8 @@ pub struct SdlPlatform {
     _sdl: sdl3::Sdl,
     gl: Gl,
     info: PlatformInfo,
+    /// SDL user event type used by the waker.
+    wake_type: u32,
 }
 
 fn mode_info(m: &sdl3::video::DisplayMode) -> ModeInfo {
@@ -162,7 +164,12 @@ impl SdlPlatform {
                 "GL context ready"
             );
             let pump = sdl.event_pump().map_err(|e| e.to_string())?;
-            return Ok(Self { _gl_ctx: ctx, window, video, pump, _sdl: sdl, gl, info });
+            // SAFETY: SDL is initialized; registers one user event type.
+            let wake_type = unsafe { sdl3::sys::events::SDL_RegisterEvents(1) };
+            if wake_type == 0 {
+                return Err("SDL_RegisterEvents failed".into());
+            }
+            return Ok(Self { _gl_ctx: ctx, window, video, pump, _sdl: sdl, gl, info, wake_type });
         }
         Err(format!("no usable GL context: {last_err}"))
     }
@@ -227,8 +234,9 @@ fn map_mods(m: Mod) -> Modifiers {
     }
 }
 
-fn convert(ev: Event, window: &Window) -> Option<PlatformEvent> {
+fn convert(ev: Event, window: &Window, wake_type: u32) -> Option<PlatformEvent> {
     Some(match ev {
+        Event::User { type_, .. } if type_ == wake_type => PlatformEvent::Wake,
         Event::Quit { .. } => PlatformEvent::Quit,
         Event::KeyDown { keycode: Some(k), keymod, repeat, .. } => {
             PlatformEvent::KeyDown { key: map_key(k)?, mods: map_mods(keymod), repeat }
@@ -254,6 +262,18 @@ fn convert(ev: Event, window: &Window) -> Option<PlatformEvent> {
 impl Platform for SdlPlatform {
     fn gl(&self) -> &Gl {
         &self.gl
+    }
+
+    fn gl_loader(&self) -> Box<dyn Fn(&str) -> *const c_void> {
+        Box::new(|name: &str| {
+            let Ok(name) = std::ffi::CString::new(name) else { return std::ptr::null() };
+            // SAFETY: SDL video is initialized for the process lifetime of
+            // the platform; SDL_GL_GetProcAddress accepts any name.
+            match unsafe { sdl3::sys::video::SDL_GL_GetProcAddress(name.as_ptr()) } {
+                Some(f) => f as *const c_void,
+                None => std::ptr::null(),
+            }
+        })
     }
 
     fn gl_proc_address(&self, name: &str) -> *const c_void {
@@ -290,7 +310,7 @@ impl Platform for SdlPlatform {
 
     fn poll_events(&mut self, out: &mut Vec<PlatformEvent>) {
         while let Some(ev) = self.pump.poll_event() {
-            if let Some(e) = convert(ev, &self.window) {
+            if let Some(e) = convert(ev, &self.window, self.wake_type) {
                 out.push(e);
             }
         }
@@ -298,7 +318,7 @@ impl Platform for SdlPlatform {
 
     fn wait_events(&mut self, timeout: Duration, out: &mut Vec<PlatformEvent>) {
         if let Some(ev) = self.pump.wait_event_timeout(timeout)
-            && let Some(e) = convert(ev, &self.window)
+            && let Some(e) = convert(ev, &self.window, self.wake_type)
         {
             out.push(e);
         }
@@ -307,6 +327,19 @@ impl Platform for SdlPlatform {
 
     fn swap(&mut self) {
         self.window.gl_swap_window();
+    }
+
+    fn waker(&self) -> std::sync::Arc<dyn Fn() + Send + Sync> {
+        let wake_type = self.wake_type;
+        std::sync::Arc::new(move || {
+            // SAFETY: SDL_PushEvent is documented thread-safe; the event is
+            // fully initialized (zeroed, then type set) and copied by SDL.
+            unsafe {
+                let mut ev: sdl3::sys::events::SDL_Event = std::mem::zeroed();
+                ev.r#type = wake_type;
+                sdl3::sys::events::SDL_PushEvent(&mut ev);
+            }
+        })
     }
 }
 

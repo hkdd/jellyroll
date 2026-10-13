@@ -150,6 +150,9 @@ pub trait Renderer {
     fn begin_frame(&mut self, fb: (u32, u32)) -> bool;
     /// Submits all recorded work to the GPU (does not swap).
     fn end_frame(&mut self);
+    /// Another user of the GL context (mpv) changed GL state; forget any
+    /// cached state before the next draw (spec 6.3).
+    fn reset_gl_state(&mut self);
 
     /// Logical size of the current frame.
     fn logical_size(&self) -> (f32, f32);

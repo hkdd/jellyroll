@@ -106,9 +106,19 @@ pub fn rss_bytes() -> Option<u64> {
     Some(pages * 4096)
 }
 
-/// Total user+system CPU time of this process from /proc/self/stat.
+/// Total user+system CPU time of this process (all threads, including
+/// mpv's decoder and audio threads).
 pub fn process_cpu_time() -> Option<Duration> {
-    let s = std::fs::read_to_string("/proc/self/stat").ok()?;
+    stat_cpu_time("/proc/self/stat")
+}
+
+/// User+system CPU time of the calling thread (the render thread).
+pub fn thread_cpu_time() -> Option<Duration> {
+    stat_cpu_time("/proc/thread-self/stat")
+}
+
+fn stat_cpu_time(path: &str) -> Option<Duration> {
+    let s = std::fs::read_to_string(path).ok()?;
     // Fields after the ")" of comm; utime and stime are fields 14 and 15.
     let rest = &s[s.rfind(')')? + 2..];
     let mut f = rest.split_whitespace();
@@ -159,5 +169,6 @@ mod tests {
     fn proc_readers() {
         assert!(rss_bytes().unwrap() > 0);
         assert!(process_cpu_time().is_some());
+        assert!(thread_cpu_time().is_some());
     }
 }

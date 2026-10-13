@@ -3,6 +3,11 @@
 //! Redraw only when dirty: input, a running animation, a HUD refresh, or an
 //! expose/resize. Otherwise block in `wait_events` until the next deadline
 //! (key repeat, HUD refresh, watchdog ping, benchmark end) with no page flip.
+//!
+//! With `--play`, mpv renders the video each vsync while playing (its
+//! `display-resample` timing needs that), then Skia draws the OSD on top
+//! only when something is visible (spec 6.3). mpv wakes the loop from its
+//! own threads through the platform waker.
 
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
@@ -15,6 +20,7 @@ use crate::args::{Bench, Options};
 use crate::hud::{CPU_BUDGET_MS, GPU_BUDGET_MS, Hud};
 use crate::input::{InputAction, KeyRepeat, map_key};
 use crate::perf::{FrameStats, is_missed_vsync, ms};
+use crate::playback::{Outcome, Playback};
 use crate::scene::{Scene, UPLOAD_BUDGET};
 use crate::systemd::Systemd;
 
@@ -29,7 +35,21 @@ pub enum Exit {
     Quit,
     BenchPassed,
     BenchFailed,
+    /// Playback could not start or ended with an error.
+    Error,
 }
+
+/// Baselines captured when the benchmark window starts.
+#[derive(Default)]
+struct BenchBase {
+    process_cpu: Option<Duration>,
+    thread_cpu: Option<Duration>,
+    frames: u64,
+    drops: jellyroll_video::FrameDrops,
+}
+
+/// Bench mode toggles the OSD on this period to catch overlay hitches.
+const BENCH_OSD_PERIOD: Duration = Duration::from_secs(2);
 
 fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
     match (a, b) {
@@ -91,8 +111,21 @@ pub fn run<P: Platform, R: Renderer>(
     let mut header = String::new();
     make_header(fb, refresh_hz, &mut header);
 
+    let mut playback = match &opts.play {
+        Some(url) => match Playback::start(p, url, start) {
+            Ok(pb) => Some(pb),
+            Err(e) => {
+                tracing::error!("playback: {e}");
+                return Exit::Error;
+            }
+        },
+        None => None,
+    };
+    let mut bench_osd_next = start;
+    let mut overlay_shown = false;
+
     let bench_len = opts.bench.map(|b| match b {
-        Bench::Pacing(d) | Bench::Idle(d) => d,
+        Bench::Pacing(d) | Bench::Idle(d) | Bench::Play(d) => d,
     });
     // Until steady state the loop must still wake up to notice it.
     let mut bench_end = bench_len.map(|_| start + WARMUP);
@@ -100,8 +133,7 @@ pub fn run<P: Platform, R: Renderer>(
         scene.bench = true;
     }
     let mut bench_reset_done = false;
-    let mut idle_cpu_at_warmup = None;
-    let mut frames_at_warmup = 0;
+    let mut base = BenchBase::default();
 
     let mut dirty = true;
     let mut first_frame = true;
@@ -115,7 +147,11 @@ pub fn run<P: Platform, R: Renderer>(
             earliest(repeat.next_deadline(), hud.next_deadline()),
             earliest(systemd.next_deadline(), bench_end),
         );
-        let timeout = wait_timeout(dirty, scene.is_animating(now), deadline, now);
+        let (deadline, animating) = match &playback {
+            Some(pb) => (earliest(deadline, pb.osd.next_deadline(now)), pb.playing()),
+            None => (deadline, scene.is_animating(now)),
+        };
+        let timeout = wait_timeout(dirty, animating, deadline, now);
         events.clear();
         if timeout.is_zero() {
             p.poll_events(&mut events);
@@ -132,18 +168,26 @@ pub fn run<P: Platform, R: Renderer>(
             hud.refresh(now, &stats, &r.stats(), p.info(), refresh_hz, fb);
             dirty = true;
         }
-        if !bench_reset_done && now >= start + WARMUP && !scene.uploads_pending() {
+        let loaded = match &playback {
+            Some(pb) => pb.started,
+            None => !scene.uploads_pending(),
+        };
+        if !bench_reset_done && now >= start + WARMUP && loaded {
             bench_reset_done = true;
             bench_end = bench_len.map(|d| now + d);
             stats.reset();
-            idle_cpu_at_warmup = crate::perf::process_cpu_time();
-            frames_at_warmup = 0;
+            base = BenchBase {
+                process_cpu: crate::perf::process_cpu_time(),
+                thread_cpu: crate::perf::thread_cpu_time(),
+                frames: 0,
+                drops: playback.as_ref().map(|pb| pb.player.frame_drops()).unwrap_or_default(),
+            };
         }
         if let Some(end) = bench_end
             && bench_reset_done
             && now >= end
         {
-            return finish_bench(opts, &stats, idle_cpu_at_warmup, frames_at_warmup, p, r);
+            return finish_bench(opts, &stats, &base, p, r, playback.as_ref());
         }
 
         // ---- input + update (measured) --------------------------------
@@ -166,6 +210,16 @@ pub fn run<P: Platform, R: Renderer>(
                     }
                     if let Some(a) = map_key(key, mods) {
                         repeat.press(key, a, now);
+                        if let Some(pb) = playback.as_mut() {
+                            match pb.on_action(a, now) {
+                                Outcome::Exit => {
+                                    systemd.stopping();
+                                    return Exit::Quit;
+                                }
+                                Outcome::Continue { redraw } => dirty |= redraw,
+                            }
+                            continue;
+                        }
                         if a == InputAction::Back && opts.allow_exit {
                             systemd.stopping();
                             return Exit::Quit;
@@ -183,14 +237,42 @@ pub fn run<P: Platform, R: Renderer>(
                     dirty = true;
                 }
                 PlatformEvent::Exposed => dirty = true,
+                PlatformEvent::Wake => {}
             }
         }
-        if let Some(a) = repeat.tick(now) {
-            dirty |= scene.on_action(a, now);
-        }
-        scene.update(now);
-        if scene.is_animating(now) {
-            dirty = true;
+        if let Some(pb) = playback.as_mut() {
+            if let Some(a) = repeat.tick(now)
+                && let Outcome::Continue { redraw } = pb.on_action(a, now)
+            {
+                dirty |= redraw;
+            }
+            dirty |= pb.poll(now);
+            if let Some((reason, error)) = &pb.ended {
+                systemd.stopping();
+                if bench_reset_done && bench_end.is_some() {
+                    println!("playback ended early: {reason:?}");
+                    return finish_bench(opts, &stats, &base, p, r, playback.as_ref());
+                }
+                return if error.is_some() { Exit::Error } else { Exit::Quit };
+            }
+            if matches!(opts.bench, Some(Bench::Play(_))) && now >= bench_osd_next {
+                bench_osd_next = now + BENCH_OSD_PERIOD;
+                pb.osd.toggle(now);
+                dirty = true;
+            }
+            // Video advancing: draw every vsync. Otherwise redraw only when
+            // the overlay appears or disappears (e.g. auto-hide while paused).
+            let overlay = pb.osd.any_visible(now, &pb.player.state);
+            dirty |= pb.playing() || overlay != overlay_shown;
+            overlay_shown = overlay;
+        } else {
+            if let Some(a) = repeat.tick(now) {
+                dirty |= scene.on_action(a, now);
+            }
+            scene.update(now);
+            if scene.is_animating(now) {
+                dirty = true;
+            }
         }
         if !dirty {
             continue;
@@ -199,7 +281,25 @@ pub fn run<P: Platform, R: Renderer>(
         // ---- draw ------------------------------------------------------
         let timing = gpu_timer.as_mut().is_some_and(|t| t.begin(p.gl()));
         let mut hud_allocs = 0;
-        if r.begin_frame(fb) {
+        if let Some(pb) = playback.as_mut() {
+            // mpv needs default GL state; Skia must then forget its cache.
+            p.gl().reset_to_defaults();
+            pb.player.render(fb);
+            r.reset_gl_state();
+            let submit_start = Instant::now();
+            stats.record_ms.push(ms(submit_start - frame_start));
+            if (pb.osd.any_visible(now, &pb.player.state) || hud.visible) && r.begin_frame(fb) {
+                // OSD text (time) and HUD lines change while playing; keep
+                // their shaping out of the steady-state allocation check.
+                let a0 = alloc_counter::allocations();
+                pb.osd.draw(r, now, &pb.player.state, &pb.drops, safe_area);
+                let (lw, lh) = r.logical_size();
+                hud.draw(r, &stats, lw * (1.0 - safe_area), lh * safe_area);
+                hud_allocs = alloc_counter::allocations() - a0;
+                r.end_frame();
+            }
+            stats.submit_ms.push(ms(submit_start.elapsed()));
+        } else if r.begin_frame(fb) {
             if scene.uploads_pending() {
                 scene.pump_uploads(r, fb.1, UPLOAD_BUDGET);
             }
@@ -223,6 +323,9 @@ pub fn run<P: Platform, R: Renderer>(
         // ---- present -----------------------------------------------------
         p.swap();
         let presented = Instant::now();
+        if let Some(pb) = playback.as_mut() {
+            pb.player.report_swap();
+        }
         dirty = false;
 
         if let Some(prev) = last_present {
@@ -236,7 +339,7 @@ pub fn run<P: Platform, R: Renderer>(
         last_present = Some(presented);
         stats.cpu_ms.push(ms(cpu));
         stats.frames += 1;
-        frames_at_warmup += 1;
+        base.frames += 1;
         if let Some(t) = gpu_timer.as_mut() {
             t.collect(p.gl(), |ns| stats.gpu_ms.push(ns as f32 / 1.0e6));
         }
@@ -263,10 +366,10 @@ pub fn run<P: Platform, R: Renderer>(
 fn finish_bench<P: Platform, R: Renderer>(
     opts: &Options,
     stats: &FrameStats,
-    cpu_at_warmup: Option<Duration>,
-    frames: u64,
+    base: &BenchBase,
     p: &P,
     r: &R,
+    playback: Option<&Playback>,
 ) -> Exit {
     let mut scratch = Box::new([0.0f32; crate::perf::HISTORY]);
     let info = p.info();
@@ -320,8 +423,63 @@ fn finish_bench<P: Platform, R: Renderer>(
             check(stats.allocating_frames == 0, "steady-state frames allocated");
             check(stats.frames > 0, "no frames rendered");
         }
+        Some(Bench::Play(d)) => {
+            let Some(pb) = playback else { return Exit::Error };
+            let s = &pb.player.state;
+            let drops = pb.player.frame_drops();
+            let pct = |a: Option<Duration>, b: Option<Duration>| {
+                a.zip(b).map(|(a, b)| 100.0 * b.saturating_sub(a).as_secs_f64() / d.as_secs_f64())
+            };
+            let process = pct(base.process_cpu, crate::perf::process_cpu_time());
+            let render = pct(base.thread_cpu, crate::perf::thread_cpu_time());
+            let present = stats.present_ms.percentiles(&mut scratch);
+            let cpu = stats.cpu_ms.percentiles(&mut scratch);
+            println!("bench: play {:.1}s", d.as_secs_f32());
+            println!(
+                "video: {} {}x{} @ {:.3} fps, audio {}",
+                s.video_codec, s.width, s.height, s.fps, s.audio_codec
+            );
+            let hw = if s.software_decode() { "SOFTWARE" } else { s.hwdec.as_str() };
+            println!("decoder: {hw}");
+            println!("frames_presented: {}", stats.frames);
+            println!(
+                "present_ms: p50 {:.3} p99 {:.3} max {:.3}",
+                present.p50, present.p99, present.max
+            );
+            println!("missed_vsyncs: {}", stats.missed_vsyncs);
+            // Includes time mpv blocks until a frame's display time.
+            println!(
+                "render_thread_frame_ms (incl. waiting): p50 {:.3} p99 {:.3}",
+                cpu.p50, cpu.p99
+            );
+            println!(
+                "mpv_dropped: vo {} decoder {} (delayed {} mistimed {})",
+                drops.vo - base.drops.vo,
+                drops.decoder - base.drops.decoder,
+                drops.delayed - base.drops.delayed,
+                drops.mistimed - base.drops.mistimed
+            );
+            let fmt = |v: Option<f64>| v.map_or("unknown".into(), |v| format!("{v:.1}"));
+            println!("cpu_percent_of_one_core: process {} (incl. decode, audio)", fmt(process));
+            println!("cpu_percent_of_one_core: render thread {}", fmt(render));
+            println!("allocating_frames: {}", stats.allocating_frames);
+            let mut check = |ok: bool, what: &str| {
+                if !ok {
+                    println!("FAIL: {what}");
+                    pass = false;
+                }
+            };
+            check(!s.software_decode(), "software decoding (no hardware decoder for this video)");
+            check(drops.vo - base.drops.vo == 0, "frames dropped by video output");
+            check(drops.decoder - base.drops.decoder == 0, "frames dropped by decoder");
+            check(opts.no_vsync || stats.missed_vsyncs == 0, "missed vsyncs");
+            check(stats.allocating_frames == 0, "steady-state frames allocated");
+            check(stats.frames > 0, "no frames presented");
+        }
         Some(Bench::Idle(d)) => {
-            let cpu = cpu_at_warmup
+            let frames = base.frames;
+            let cpu = base
+                .process_cpu
                 .zip(crate::perf::process_cpu_time())
                 .map(|(a, b)| b.saturating_sub(a));
             let pct = cpu.map(|c| 100.0 * c.as_secs_f64() / d.as_secs_f64());

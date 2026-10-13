@@ -341,6 +341,10 @@ impl Renderer for SkiaRenderer {
         self.ctx.flush_and_submit();
     }
 
+    fn reset_gl_state(&mut self) {
+        self.ctx.reset(None);
+    }
+
     fn logical_size(&self) -> (f32, f32) {
         self.logical
     }
@@ -453,10 +457,13 @@ impl Renderer for SkiaRenderer {
             let canvas = self.canvas();
             let m = canvas.local_to_device_as_3x3();
             let p = m.map_point((origin.x, origin.y));
-            let mut linear = m;
-            linear.set_translate((p.x.round(), p.y.round()));
+            // Keep the scale, replace only the translation. (Skia's
+            // `set_translate` would reset the whole matrix to a translation.)
+            let mut snapped = m;
+            snapped.set_translate_x(p.x.round());
+            snapped.set_translate_y(p.y.round());
             canvas.save();
-            canvas.set_matrix(&sk::M44::from(linear));
+            canvas.set_matrix(&sk::M44::from(snapped));
             canvas.draw_text_blob(&blob, (0.0, 0.0), &paint(c));
             canvas.restore();
         }

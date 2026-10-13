@@ -14,6 +14,11 @@ USAGE: jellyroll [OPTIONS]
   --allow-exit           Let Esc/Back on the top level quit (always on with --dev)
   --double-buffer        Request double instead of triple buffering (KMSDRM)
   --no-vsync             Disable vsync (benchmarking only)
+  --play URL             Play a file or URL with mpv (M3 harness). Keys: Space
+                         pause, Left/Right seek 10 s, Up/Down 60 s, i diagnostics,
+                         Esc/Back stop. Exits when playback ends
+  --bench-play SECS      With --play: measure playback for SECS (dropped frames,
+                         missed vsyncs, CPU), toggling the OSD every 2 s
   --bench-pacing SECS    Animate continuously for SECS, print frame stats, exit
                          non-zero if any budget is exceeded
   --bench-idle SECS      Sit on a static screen for SECS, verify no redraws and
@@ -32,6 +37,7 @@ pub struct Options {
     pub double_buffer: bool,
     pub no_vsync: bool,
     pub bench: Option<Bench>,
+    pub play: Option<String>,
     pub print_diagnostics: bool,
     pub help: bool,
 }
@@ -40,6 +46,7 @@ pub struct Options {
 pub enum Bench {
     Pacing(Duration),
     Idle(Duration),
+    Play(Duration),
 }
 
 fn secs(v: Option<String>, flag: &str) -> Result<Duration, String> {
@@ -77,6 +84,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             "--no-vsync" => o.no_vsync = true,
             "--bench-pacing" => o.bench = Some(Bench::Pacing(secs(it.next(), &a)?)),
             "--bench-idle" => o.bench = Some(Bench::Idle(secs(it.next(), &a)?)),
+            "--bench-play" => o.bench = Some(Bench::Play(secs(it.next(), &a)?)),
+            "--play" => o.play = Some(it.next().ok_or("--play needs a file or URL")?),
             "--print-diagnostics" => o.print_diagnostics = true,
             "-h" | "--help" => o.help = true,
             other => return Err(format!("unknown argument '{other}' (see --help)")),
@@ -84,6 +93,13 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
     }
     if o.dev {
         o.allow_exit = true;
+    }
+    match (o.bench, &o.play) {
+        (Some(Bench::Play(_)), None) => return Err("--bench-play needs --play URL".into()),
+        (Some(Bench::Pacing(_) | Bench::Idle(_)), Some(_)) => {
+            return Err("--bench-pacing/--bench-idle cannot be combined with --play".into());
+        }
+        _ => {}
     }
     Ok(o)
 }
@@ -144,6 +160,16 @@ mod tests {
         assert!(p(&["--window", "big"]).is_err());
         assert!(p(&["--window", "0x10"]).is_err());
         assert!(p(&["--window"]).is_err());
+    }
+
+    #[test]
+    fn play_flags() {
+        let o = p(&["--play", "/m/a.mkv", "--bench-play", "5"]).unwrap();
+        assert_eq!(o.play.as_deref(), Some("/m/a.mkv"));
+        assert_eq!(o.bench, Some(Bench::Play(Duration::from_secs(5))));
+        assert!(p(&["--bench-play", "5"]).is_err());
+        assert!(p(&["--play", "x", "--bench-idle", "1"]).is_err());
+        assert!(p(&["--play"]).is_err());
     }
 
     #[test]
