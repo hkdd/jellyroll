@@ -145,6 +145,12 @@ pub struct RenderStats {
     /// Skia's own GPU resource cache: in use and its budget.
     pub gpu_cache_bytes: u64,
     pub gpu_cache_limit: u64,
+    /// Image uploads so far and the time spent in each step (ns): the
+    /// opaque check, copying the pixels for Skia, and the GPU upload.
+    pub uploads: u64,
+    pub upload_scan_ns: u64,
+    pub upload_copy_ns: u64,
+    pub upload_gpu_ns: u64,
 }
 
 pub trait Renderer {
@@ -181,7 +187,8 @@ pub trait Renderer {
     fn push_opacity(&mut self, alpha: f32);
     fn pop(&mut self);
 
-    /// Uploads straight-alpha RGBA8 pixels as a GPU texture.
+    /// Uploads premultiplied-alpha RGBA8 pixels as a GPU texture (the GPU's
+    /// native form: nothing to convert on the render thread).
     fn create_image(&mut self, width: u32, height: u32, rgba: &[u8]) -> Option<ImageId>;
     fn release_image(&mut self, img: ImageId);
 

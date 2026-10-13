@@ -306,6 +306,9 @@ pub fn run<P: Platform, R: Renderer>(
             && bench_reset_done
             && now >= end
         {
+            if let View::Home(h) = &view {
+                stats.upload_ns = h.upload_ns();
+            }
             return finish_bench(opts, &stats, &base, p, r, playback.as_ref(), script.as_ref());
         }
 
@@ -665,6 +668,14 @@ fn finish_bench<P: Platform, R: Renderer>(
             println!("  cpu_ms, loading frames: {}", pct(&stats.loading_cpu_ms));
             println!("  upload_ms, frames that uploaded: {}", pct(&stats.upload_ms));
             println!("  strings shaped, frames that shaped: {}", pct(&stats.new_text));
+            let [small, large] = stats.upload_ns;
+            if large > 0.0 {
+                println!(
+                    "  one upload (moving avg): placeholder {:.3} ms, artwork {:.3} ms",
+                    small / 1e6,
+                    large / 1e6
+                );
+            }
             let rs = r.stats();
             println!(
                 "render: textures {:.1} MB ({} images), text cache {} entries ({} hits / {} misses), shadows {}",
@@ -675,6 +686,16 @@ fn finish_bench<P: Platform, R: Renderer>(
                 rs.text_cache_misses,
                 rs.shadow_cache_entries
             );
+            if rs.uploads > 0 {
+                let n = rs.uploads as f64 * 1000.0;
+                println!(
+                    "uploads: {} (per image, us: opaque check {:.0}, copy {:.0}, GPU upload {:.0})",
+                    rs.uploads,
+                    rs.upload_scan_ns as f64 / n,
+                    rs.upload_copy_ns as f64 / n,
+                    rs.upload_gpu_ns as f64 / n
+                );
+            }
             println!(
                 "skia cache: {:.1} of {:.1} MB",
                 rs.gpu_cache_bytes as f64 / (1024.0 * 1024.0),

@@ -49,6 +49,7 @@ fn apply(rgba: &mut [u8], w: u32, h: u32, finish: Finish) {
         Finish::Card { radius } => posters::round_corners(rgba, w, h, radius),
         Finish::Backdrop { bg } => posters::apply_scrim(rgba, w, h, bg, 0.92, 0.95),
     }
+    posters::premultiply(rgba);
 }
 
 // ---- BlurHash ----------------------------------------------------------------

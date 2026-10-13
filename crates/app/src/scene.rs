@@ -189,6 +189,7 @@ impl Scene {
                 let (w, h) = ((CARD_W * scale).round() as u32, (CARD_H * scale).round() as u32);
                 posters::poster(c, w, h, &mut self.pixels);
                 posters::round_corners(&mut self.pixels, w, h, CARD_RADIUS * scale);
+                posters::premultiply(&mut self.pixels);
                 self.posters[c] = r.create_image(w, h, &self.pixels);
             }
             self.pending += 1;

@@ -503,17 +503,20 @@ impl Renderer for SkiaRenderer {
         if width == 0 || height == 0 || rgba.len() < bytes {
             return None;
         }
+        let t0 = std::time::Instant::now();
         // Fully opaque images (posters, backdrops) are tagged as such so
         // Skia can draw them without blending.
         let opaque = rgba[..bytes].as_chunks::<4>().0.iter().all(|p| p[3] == 255);
-        let alpha = if opaque { sk::AlphaType::Opaque } else { sk::AlphaType::Unpremul };
+        let alpha = if opaque { sk::AlphaType::Opaque } else { sk::AlphaType::Premul };
         let info =
             sk::ImageInfo::new((width as i32, height as i32), sk::ColorType::RGBA8888, alpha, None);
+        let t1 = std::time::Instant::now();
         let raster = sk::images::raster_from_data(
             &info,
             sk::Data::new_copy(&rgba[..bytes]),
             width as usize * 4,
         )?;
+        let t2 = std::time::Instant::now();
         let image = gpu::images::texture_from_image(
             &mut self.ctx,
             &raster,
@@ -524,6 +527,11 @@ impl Renderer for SkiaRenderer {
             // and rebuilt its own scratch resources every frame (D42).
             gpu::Budgeted::No,
         )?;
+        let t3 = std::time::Instant::now();
+        self.stats.uploads += 1;
+        self.stats.upload_scan_ns += (t1 - t0).as_nanos() as u64;
+        self.stats.upload_copy_ns += (t2 - t1).as_nanos() as u64;
+        self.stats.upload_gpu_ns += (t3 - t2).as_nanos() as u64;
         let entry = ImageEntry { image, bytes: bytes as u64 };
         self.stats.texture_bytes += entry.bytes;
         self.stats.images += 1;

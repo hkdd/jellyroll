@@ -22,9 +22,18 @@ pub struct Textures {
     bytes: u64,
     cap: u64,
     frame: u64,
-    /// Measured upload cost (moving average), to stop before an upload
-    /// that would overrun the frame's budget.
-    ns_per_byte: f64,
+    /// Measured upload time (moving average, ns) for small images
+    /// (placeholders) and large ones (artwork), to stop before an upload
+    /// that would overrun the frame's budget. Small uploads are mostly
+    /// fixed cost, so one per-byte rate would mispredict both.
+    upload_ns: [f64; 2],
+}
+
+/// Images below this many bytes count as small (BlurHash placeholders).
+const SMALL: u64 = 64 << 10;
+
+fn bucket(bytes: u64) -> usize {
+    usize::from(bytes >= SMALL)
 }
 
 impl Textures {
@@ -36,7 +45,7 @@ impl Textures {
             bytes: 0,
             cap: cap_bytes,
             frame: 0,
-            ns_per_byte: 0.0,
+            upload_ns: [0.0; 2],
         }
     }
 
@@ -76,6 +85,11 @@ impl Textures {
         self.failed.clear();
     }
 
+    /// Measured upload time (small, large images), ns, for benchmarks.
+    pub fn upload_ns(&self) -> [f64; 2] {
+        self.upload_ns
+    }
+
     pub fn uploads_pending(&self) -> bool {
         !self.pending.is_empty()
     }
@@ -89,9 +103,9 @@ impl Textures {
         let budget_ns = budget.as_nanos() as f64;
         let mut first = true;
         while let Some(&(_, w, h, _)) = self.pending.front() {
-            let bytes = w as f64 * h as f64 * 4.0;
+            let b = bucket(w as u64 * h as u64 * 4);
             let elapsed = start.elapsed().as_nanos() as f64;
-            if !first && elapsed + bytes * self.ns_per_byte > budget_ns {
+            if !first && elapsed + self.upload_ns[b] > budget_ns {
                 break;
             }
             first = false;
@@ -112,9 +126,9 @@ impl Textures {
                     self.failed.insert(key);
                 }
             }
-            let cost = t.elapsed().as_nanos() as f64 / bytes.max(1.0);
-            self.ns_per_byte =
-                if self.ns_per_byte == 0.0 { cost } else { self.ns_per_byte * 0.8 + cost * 0.2 };
+            let cost = t.elapsed().as_nanos() as f64;
+            let avg = &mut self.upload_ns[b];
+            *avg = if *avg == 0.0 { cost } else { *avg * 0.8 + cost * 0.2 };
         }
         if self.bytes > self.cap {
             self.evict(r);

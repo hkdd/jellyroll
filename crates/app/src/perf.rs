@@ -91,6 +91,9 @@ pub struct FrameStats {
     pub upload_ms: Ring<HISTORY>,
     /// Per frame that shaped new text: how many strings.
     pub new_text: Ring<HISTORY>,
+    /// Measured time of one texture upload, small and large images, ns
+    /// (set when a benchmark ends).
+    pub upload_ns: [f64; 2],
 }
 
 impl FrameStats {

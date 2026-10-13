@@ -595,6 +595,14 @@ allocating frames, but CPU p99 8-11 ms and GPU p99 7.4-8.4 ms.
   frames as steady (Skia copies pixels in C++, which the Rust allocation
   counter doesn't see); any frame that uploads or shapes new text is now
   a loading frame.
+- Next HTPC run: steady frames 1.5 ms p50 (fine); nearly every scrolling
+  frame uploads. Two fixes: the upload-time estimate is kept separately
+  for small placeholders (mostly fixed cost) and artwork (one per-byte
+  rate made every poster look like ~2 ms, so only one upload fit per
+  frame); and pixels are premultiplied on the decoding thread, so Skia
+  has nothing to convert on the render thread (rounded corners made
+  posters non-opaque, uploaded as unpremultiplied). The benchmark prints
+  per-upload timings (opaque check, copy, GPU upload).
 - The GPU p99 is the HD 530 at native 4K, as measured in M2 (see
   "M2 benchmark results", open question 2): above the 6 ms budget, still
   60 fps with no missed vsyncs.

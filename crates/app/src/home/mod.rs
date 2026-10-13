@@ -535,6 +535,11 @@ impl HomeApp {
         self.load_work
     }
 
+    /// Measured time of one texture upload (small, large images), ns.
+    pub fn upload_ns(&self) -> [f64; 2] {
+        self.textures.upload_ns()
+    }
+
     pub fn settled(&self) -> bool {
         !self.textures.uploads_pending()
     }
