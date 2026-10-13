@@ -105,6 +105,9 @@ pub struct PlatformInfo {
 
 pub trait Platform {
     fn gl(&self) -> &Gl;
+    /// Resolves a GL/EGL symbol for the current context (null if missing).
+    /// Used by Skia (and later mpv) to load their own entry points.
+    fn gl_proc_address(&self, name: &str) -> *const std::ffi::c_void;
     fn info(&self) -> &PlatformInfo;
     /// Drawable size in pixels.
     fn framebuffer_size(&self) -> (u32, u32);

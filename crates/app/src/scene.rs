@@ -1,174 +1,302 @@
-//! M1 test pattern: a focusable tile grid with an animated focus frame, a
-//! safe-area outline, and (for pacing tests) a constantly sweeping bar that
-//! makes judder and tearing visible. Replaced by the real UI from M2/M6.
+//! M2 render benchmark scene (spec 15, M2 exit criteria: a 4K scene of 60
+//! cards plus text at 60 fps). A home-screen-like layout: full-bleed
+//! backdrop with crossfade and gradient scrims, four rows of fifteen poster
+//! cards with baked shadows, rounded artwork and ellipsized titles, a
+//! focus scale-up, and Latin/Japanese/Cyrillic text.
+//!
+//! The data is fake and the strings are fixtures; the real home screen and
+//! string table arrive in M5/M6. In bench mode the focus walks the grid and
+//! the rows sway, so every frame moves everything.
 
 use std::time::{Duration, Instant};
 
+use jellyroll_render::{Color, Gradient, ImageId, Point, Rect, Renderer, TextStyle, Weight};
+
 use crate::anim::Tween;
-use crate::draw::{Color, RectBatch, rgb};
 use crate::input::InputAction;
+use crate::posters;
 
-const COLS: i32 = 6;
-const ROWS: i32 = 2;
+pub const ROWS: usize = 4;
+pub const COLS: usize = 15;
+const CARDS: usize = ROWS * COLS;
+const BACKDROPS: usize = 4;
+
+const CARD_W: f32 = 100.0;
+const CARD_H: f32 = 150.0;
+const CARD_GAP: f32 = 16.0;
+const CARD_RADIUS: f32 = 8.0;
+const ROW_LABEL_H: f32 = 38.0;
+const TITLE_GAP: f32 = 6.0;
+const TITLE_H: f32 = 22.0;
+const ROW_GAP: f32 = 12.0;
+const ROW_H: f32 = ROW_LABEL_H + CARD_H + TITLE_GAP + TITLE_H + ROW_GAP;
+const HEADER_H: f32 = 100.0;
+const FOCUS_SCALE: f32 = 0.08;
+
 const FOCUS_ANIM: Duration = Duration::from_millis(150);
-const SWEEP_PERIOD: Duration = Duration::from_secs(2);
+const BACKDROP_FADE: Duration = Duration::from_millis(250);
+/// Bench mode: how often the focus advances.
+const BENCH_STEP: Duration = Duration::from_millis(120);
+/// Per-frame upload budget for artwork (spec 9: uploads never cause hitches).
+pub const UPLOAD_BUDGET: Duration = Duration::from_millis(2);
 
-const BG: Color = rgb(16, 20, 32);
-const SAFE: Color = rgb(40, 48, 70);
-const FOCUS: Color = rgb(240, 240, 240);
-const SWEEP: Color = rgb(250, 250, 250);
-const HEADER: Color = rgb(200, 205, 220);
-const NOTICE: Color = rgb(240, 180, 60);
+/// Fraction of each edge kept clear for TV overscan (spec 10.2).
+pub const DEFAULT_SAFE_AREA: f32 = 0.025;
+
+const ROW_LABELS: [&str; ROWS] =
+    ["Continue Watching", "Next Up", "Latest Movies", "最近追加された映画"];
+
+const TITLES: [&str; 20] = [
+    "The Long Voyage Home",
+    "千と千尋の神隠し",
+    "Midnight in the Archive",
+    "Северный ветер",
+    "A Very Long Title That Will Certainly Need An Ellipsis",
+    "Arrival",
+    "君の名は。",
+    "Glass Onion",
+    "The Quiet Earth",
+    "Тихий Дон",
+    "Paprika",
+    "Dune: Part Two",
+    "もののけ姫",
+    "Moon",
+    "Everything Everywhere All at Once",
+    "Heat",
+    "Solaris",
+    "Spirited Away",
+    "Le Samouraï",
+    "Ikiru",
+];
+
+const TEXT: Color = Color::rgb(235, 235, 240);
+const TEXT_DIM: Color = Color::rgb(170, 175, 190);
+const NOTICE: Color = Color::rgb(240, 180, 60);
+const BG: Color = Color::rgb(12, 14, 20);
 
 pub struct Scene {
-    focus: (i32, i32),
-    fx: Tween,
-    fy: Tween,
-    selected: [bool; (COLS * ROWS) as usize],
+    focus: usize,
+    prev_focus: usize,
+    focus_anim: Tween,
+    backdrop: usize,
+    prev_backdrop: usize,
+    fade: Tween,
+    posters: Vec<Option<ImageId>>,
+    backdrops: Vec<Option<ImageId>>,
+    pending: usize,
+    pixels: Vec<u8>,
     /// Continuous animation for pacing benchmarks.
-    pub sweep: bool,
+    pub bench: bool,
+    bench_next: Instant,
     start: Instant,
-}
-
-/// Pixel geometry for one frame.
-pub struct Layout {
-    pub scale: f32,
-    pub safe_x: i32,
-    pub safe_y: i32,
-    pub safe_w: i32,
-    pub safe_h: i32,
-}
-
-impl Layout {
-    /// Logical units: 1080 logical px = output height (spec 6.4).
-    /// `safe_area`: fraction of each edge kept clear for TV overscan
-    /// (spec 10.2, from config).
-    pub fn new(w: u32, h: u32, safe_area: f32) -> Self {
-        let scale = h as f32 / 1080.0;
-        let safe_x = (w as f32 * safe_area) as i32;
-        let safe_y = (h as f32 * safe_area) as i32;
-        Self { scale, safe_x, safe_y, safe_w: w as i32 - 2 * safe_x, safe_h: h as i32 - 2 * safe_y }
-    }
-}
-
-fn tile_color(i: usize, selected: bool) -> Color {
-    // Muted hue wheel; selected tiles brighten.
-    const PALETTE: [Color; 6] = [
-        rgb(70, 90, 160),
-        rgb(60, 130, 140),
-        rgb(80, 140, 90),
-        rgb(150, 130, 70),
-        rgb(150, 80, 80),
-        rgb(120, 80, 150),
-    ];
-    let c = PALETTE[i % PALETTE.len()];
-    if selected { [c[0] * 1.5, c[1] * 1.5, c[2] * 1.5, 1.0] } else { c }
 }
 
 impl Scene {
     pub fn new(now: Instant) -> Self {
         Self {
-            focus: (0, 0),
-            fx: Tween::settled(0.0, now),
-            fy: Tween::settled(0.0, now),
-            selected: Default::default(),
-            sweep: false,
+            focus: 0,
+            prev_focus: 0,
+            focus_anim: Tween::settled(1.0, now),
+            backdrop: 0,
+            prev_backdrop: 0,
+            fade: Tween::settled(1.0, now),
+            posters: vec![None; CARDS],
+            backdrops: vec![None; BACKDROPS],
+            pending: 0,
+            pixels: Vec::new(),
+            bench: false,
+            bench_next: now,
             start: now,
         }
     }
 
-    /// Applies an action; returns true if anything visible changed.
-    pub fn on_action(&mut self, a: InputAction, now: Instant) -> bool {
-        let (mut c, mut r) = self.focus;
-        match a {
-            InputAction::Left => c -= 1,
-            InputAction::Right => c += 1,
-            InputAction::Up => r -= 1,
-            InputAction::Down => r += 1,
-            InputAction::Select => {
-                let i = (r * COLS + c) as usize;
-                self.selected[i] = !self.selected[i];
-                return true;
+    pub fn uploads_pending(&self) -> bool {
+        self.pending < CARDS + BACKDROPS
+    }
+
+    /// Generates and uploads artwork within `budget`, decoded at on-screen
+    /// size for the current output (spec 9). Returns true if anything was
+    /// uploaded.
+    pub fn pump_uploads<R: Renderer>(&mut self, r: &mut R, fb_h: u32, budget: Duration) -> bool {
+        let start = Instant::now();
+        let scale = fb_h as f32 / 1080.0;
+        let mut any = false;
+        while self.uploads_pending() && start.elapsed() < budget {
+            let i = self.pending;
+            if i < BACKDROPS {
+                // Backdrops are softly upscaled; half resolution is plenty.
+                let (w, h) = ((960.0 * scale) as u32, (540.0 * scale) as u32);
+                posters::backdrop(i, w, h, &mut self.pixels);
+                self.backdrops[i] = r.create_image(w, h, &self.pixels);
+            } else {
+                let c = i - BACKDROPS;
+                let (w, h) = ((CARD_W * scale).round() as u32, (CARD_H * scale).round() as u32);
+                posters::poster(c, w, h, &mut self.pixels);
+                self.posters[c] = r.create_image(w, h, &self.pixels);
             }
-            _ => return false,
+            self.pending += 1;
+            any = true;
         }
-        let next = (c.clamp(0, COLS - 1), r.clamp(0, ROWS - 1));
+        if !self.uploads_pending() {
+            self.pixels = Vec::new();
+        }
+        any
+    }
+
+    fn set_focus(&mut self, next: usize, now: Instant) -> bool {
         if next == self.focus {
             return false;
         }
+        self.prev_focus = self.focus;
         self.focus = next;
-        self.fx.retarget(next.0 as f32, now, FOCUS_ANIM);
-        self.fy.retarget(next.1 as f32, now, FOCUS_ANIM);
+        self.focus_anim = Tween::settled(0.0, now);
+        self.focus_anim.retarget(1.0, now, FOCUS_ANIM);
+        let row_backdrop = (next / COLS + next % COLS) % BACKDROPS;
+        if row_backdrop != self.backdrop {
+            self.prev_backdrop = self.backdrop;
+            self.backdrop = row_backdrop;
+            self.fade = Tween::settled(0.0, now);
+            self.fade.retarget(1.0, now, BACKDROP_FADE);
+        }
         true
     }
 
-    pub fn is_animating(&self, now: Instant) -> bool {
-        self.sweep || self.fx.is_animating(now) || self.fy.is_animating(now)
+    /// Applies an action; returns true if anything visible changed.
+    pub fn on_action(&mut self, a: InputAction, now: Instant) -> bool {
+        let (r, c) = (self.focus / COLS, self.focus % COLS);
+        let next = match a {
+            InputAction::Left => (r, c.saturating_sub(1)),
+            InputAction::Right => (r, (c + 1).min(COLS - 1)),
+            InputAction::Up => (r.saturating_sub(1), c),
+            InputAction::Down => ((r + 1).min(ROWS - 1), c),
+            _ => return false,
+        };
+        self.set_focus(next.0 * COLS + next.1, now)
     }
 
-    pub fn draw(
+    /// Advances bench-mode animation; call once per frame.
+    pub fn update(&mut self, now: Instant) {
+        if self.bench && now >= self.bench_next {
+            self.bench_next = now + BENCH_STEP;
+            self.set_focus((self.focus + 1) % CARDS, now);
+        }
+    }
+
+    pub fn is_animating(&self, now: Instant) -> bool {
+        self.bench
+            || self.uploads_pending()
+            || self.focus_anim.is_animating(now)
+            || self.fade.is_animating(now)
+    }
+
+    fn card_scale(&self, i: usize, now: Instant) -> f32 {
+        let t = self.focus_anim.value(now);
+        if i == self.focus {
+            1.0 + FOCUS_SCALE * t
+        } else if i == self.prev_focus {
+            1.0 + FOCUS_SCALE * (1.0 - t)
+        } else {
+            1.0
+        }
+    }
+
+    pub fn draw<R: Renderer>(
         &self,
-        b: &mut RectBatch,
-        fb: (u32, u32),
-        l: &Layout,
+        r: &mut R,
         now: Instant,
+        safe_area: f32,
         header: &str,
         notice: &str,
     ) {
-        let (w, h) = (fb.0 as i32, fb.1 as i32);
-        let s = l.scale;
-        b.rect(0, 0, w, h, BG);
-        b.frame(l.safe_x, l.safe_y, l.safe_w, l.safe_h, (2.0 * s).max(1.0) as i32, SAFE);
+        let (lw, lh) = r.logical_size();
+        let screen = Rect::new(0.0, 0.0, lw, lh);
+        let (sx, sy) = (lw * safe_area, lh * safe_area);
+        r.clear(BG);
 
-        let text_px = (4.0 * s).round().max(1.0) as i32;
-        let text_x = l.safe_x + (40.0 * s) as i32;
-        b.text(text_x, l.safe_y + (40.0 * s) as i32, text_px, HEADER, header);
-
-        // Poster-like 2:3 tiles, centered in the safe area.
-        let gap = (32.0 * s) as i32;
-        let tile_w = (220.0 * s) as i32;
-        let tile_h = tile_w * 3 / 2;
-        let grid_w = COLS * tile_w + (COLS - 1) * gap;
-        let grid_h = ROWS * tile_h + (ROWS - 1) * gap;
-        let ox = l.safe_x + (l.safe_w - grid_w) / 2;
-        let oy = l.safe_y + (l.safe_h - grid_h) / 2;
-
-        // Focus frame sits behind the tiles and glides between them.
-        let fx = self.fx.value(now);
-        let fy = self.fy.value(now);
-        let border = (8.0 * s) as i32;
-        b.rect(
-            ox + (fx * (tile_w + gap) as f32) as i32 - border,
-            oy + (fy * (tile_h + gap) as f32) as i32 - border,
-            tile_w + 2 * border,
-            tile_h + 2 * border,
-            FOCUS,
+        // Backdrop crossfade, then scrims so text stays legible.
+        let fade = self.fade.value(now);
+        if fade < 1.0
+            && let Some(img) = self.backdrops[self.prev_backdrop]
+        {
+            r.image(img, screen, 0.0, 1.0 - fade);
+        }
+        if let Some(img) = self.backdrops[self.backdrop] {
+            r.image(img, screen, 0.0, fade);
+        }
+        r.fill_gradient(
+            Rect::new(0.0, 0.0, lw * 0.75, lh),
+            0.0,
+            &Gradient { from: BG.with_alpha(0.92), to: BG.with_alpha(0.0), vertical: false },
         );
-        for r in 0..ROWS {
-            for c in 0..COLS {
-                let i = (r * COLS + c) as usize;
-                b.rect(
-                    ox + c * (tile_w + gap),
-                    oy + r * (tile_h + gap),
-                    tile_w,
-                    tile_h,
-                    tile_color(i, self.selected[i]),
+        r.fill_gradient(
+            Rect::new(0.0, lh * 0.35, lw, lh * 0.65),
+            0.0,
+            &Gradient { from: BG.with_alpha(0.0), to: BG.with_alpha(0.95), vertical: true },
+        );
+
+        r.text("Jellyroll", &TextStyle::new(44.0, Weight::Bold), Point::new(sx, sy), TEXT);
+        r.text(
+            "ホーム · 映画 · テレビ番組 · Фильмы · Search · Settings",
+            &TextStyle::new(22.0, Weight::Regular),
+            Point::new(sx, sy + 58.0),
+            TEXT_DIM,
+        );
+        r.text(
+            header,
+            &TextStyle::new(16.0, Weight::Regular),
+            Point::new(sx + 260.0, sy + 18.0),
+            TEXT_DIM,
+        );
+
+        let t = now.saturating_duration_since(self.start).as_secs_f32();
+        let title_style = TextStyle::new(16.0, Weight::Regular).max_width(CARD_W);
+        let label_style = TextStyle::new(22.0, Weight::Bold);
+        for row in 0..ROWS {
+            let y = sy + HEADER_H + row as f32 * ROW_H;
+            r.text(ROW_LABELS[row], &label_style, Point::new(sx, y), TEXT);
+            let sway = if self.bench { (t * 1.6 + row as f32).sin() * 60.0 } else { 0.0 };
+            for col in 0..COLS {
+                let i = row * COLS + col;
+                let x = sx + sway + col as f32 * (CARD_W + CARD_GAP);
+                let base = Rect::new(x, y + ROW_LABEL_H, CARD_W, CARD_H);
+                // Row virtualization: skip anything off screen.
+                if !base.intersects(&screen) {
+                    continue;
+                }
+                let s = self.card_scale(i, now);
+                let card = Rect::new(
+                    base.x - base.w * (s - 1.0) / 2.0,
+                    base.y - base.h * (s - 1.0) / 2.0,
+                    base.w * s,
+                    base.h * s,
                 );
+                r.shadow(card, CARD_RADIUS, 14.0, Color::rgba(0, 0, 0, 150));
+                match self.posters[i] {
+                    Some(img) => r.image(img, card, CARD_RADIUS, 1.0),
+                    None => r.fill_rrect(card, CARD_RADIUS, posters::placeholder(i)),
+                }
+                let focus = (s - 1.0) / FOCUS_SCALE;
+                if focus > 0.01 {
+                    r.stroke_rrect(
+                        card.inset(-3.0),
+                        CARD_RADIUS + 3.0,
+                        3.0,
+                        Color::WHITE.with_alpha(focus),
+                    );
+                }
+                let title = TITLES[(i * 7 + row) % TITLES.len()];
+                let color = if i == self.focus { TEXT } else { TEXT_DIM };
+                r.text(title, &title_style, Point::new(base.x, base.bottom() + TITLE_GAP), color);
             }
         }
 
-        if self.sweep {
-            let period = SWEEP_PERIOD.as_secs_f32();
-            let t = now.saturating_duration_since(self.start).as_secs_f32() % period / period;
-            let bar_w = (24.0 * s) as i32;
-            let x = (t * (w - bar_w) as f32) as i32;
-            b.rect(x, 0, bar_w, h, SWEEP);
-        }
-
-        // Drawn last so nothing covers it; bottom-left of the safe area.
         if !notice.is_empty() {
-            let y = l.safe_y + l.safe_h - (40.0 * s) as i32 - 5 * text_px;
-            b.text(text_x, y, text_px, NOTICE, notice);
+            r.text(
+                notice,
+                &TextStyle::new(20.0, Weight::Bold),
+                Point::new(sx, lh - sy - 30.0),
+                NOTICE,
+            );
         }
     }
 }
@@ -184,37 +312,39 @@ mod tests {
         assert!(!s.on_action(InputAction::Left, t0));
         assert!(!s.on_action(InputAction::Up, t0));
         assert!(s.on_action(InputAction::Right, t0));
-        assert!(s.is_animating(t0 + Duration::from_millis(10)));
-        assert!(!s.is_animating(t0 + Duration::from_millis(200)));
-        for _ in 0..10 {
+        assert_eq!(s.focus, 1);
+        assert!(s.focus_anim.is_animating(t0 + Duration::from_millis(10)));
+        for _ in 0..30 {
             s.on_action(InputAction::Right, t0);
         }
-        assert_eq!(s.focus, (COLS - 1, 0));
-        assert!(s.on_action(InputAction::Down, t0));
-        assert!(!s.on_action(InputAction::Down, t0));
-        assert!(s.on_action(InputAction::Select, t0));
-        assert!(!s.on_action(InputAction::Info, t0));
-    }
-
-    #[test]
-    fn layout_scale() {
-        let l = Layout::new(3840, 2160, 0.025);
-        assert_eq!(l.scale, 2.0);
-        assert_eq!(l.safe_x, 96);
-        assert_eq!(l.safe_y, 54);
-    }
-
-    #[test]
-    fn draw_stays_on_screen_at_1080p_and_4k() {
-        let t0 = Instant::now();
-        let s = Scene::new(t0);
-        for (w, h) in [(1920u32, 1080u32), (3840, 2160), (1280, 720)] {
-            let mut b = RectBatch::with_capacity(256);
-            s.draw(&mut b, (w, h), &Layout::new(w, h, 0.1), t0, "TEST", "NOTICE");
-            for (r, _) in b.items() {
-                assert!(r.x >= 0 && r.y >= 0, "{r:?}");
-                assert!(r.x + r.w <= w as i32 && r.y + r.h <= h as i32, "{r:?} in {w}x{h}");
-            }
+        assert_eq!(s.focus, COLS - 1);
+        for _ in 0..10 {
+            s.on_action(InputAction::Down, t0);
         }
+        assert_eq!(s.focus, CARDS - 1);
+        assert!(!s.on_action(InputAction::Select, t0));
+    }
+
+    #[test]
+    fn focus_scale_animates_in_and_out() {
+        let t0 = Instant::now();
+        let mut s = Scene::new(t0);
+        s.on_action(InputAction::Right, t0);
+        let mid = t0 + FOCUS_ANIM / 2;
+        assert!(s.card_scale(1, mid) > 1.0 && s.card_scale(1, mid) < 1.0 + FOCUS_SCALE);
+        assert!(s.card_scale(0, mid) > 1.0);
+        let end = t0 + FOCUS_ANIM;
+        assert_eq!(s.card_scale(1, end), 1.0 + FOCUS_SCALE);
+        assert_eq!(s.card_scale(0, end), 1.0);
+        assert_eq!(s.card_scale(5, end), 1.0);
+    }
+
+    #[test]
+    fn layout_fits_1080_logical() {
+        // Header + 4 rows inside the default safe area.
+        let bottom = 1080.0 * DEFAULT_SAFE_AREA + HEADER_H + ROWS as f32 * ROW_H;
+        assert!(bottom <= 1080.0 * (1.0 - DEFAULT_SAFE_AREA), "{bottom}");
+        let right = 1920.0 * DEFAULT_SAFE_AREA + COLS as f32 * (CARD_W + CARD_GAP) - CARD_GAP;
+        assert!(right <= 1920.0 * (1.0 - DEFAULT_SAFE_AREA), "{right}");
     }
 }

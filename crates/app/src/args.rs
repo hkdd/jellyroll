@@ -9,6 +9,7 @@ USAGE: jellyroll [OPTIONS]
 
   --config PATH          Config file (default: ~/.config/jellyroll/config.toml)
   --dev                  Run in a desktop window (Wayland/X11/cage) instead of KMSDRM
+  --window WxH           Dev window size in pixels, e.g. 3840x2160 (with --dev)
   --hud                  Show the perf HUD at startup (toggle: F3, or Info x3 later)
   --allow-exit           Let Esc/Back on the top level quit (always on with --dev)
   --double-buffer        Request double instead of triple buffering (KMSDRM)
@@ -25,6 +26,7 @@ USAGE: jellyroll [OPTIONS]
 pub struct Options {
     pub config: Option<std::path::PathBuf>,
     pub dev: bool,
+    pub window: Option<(u32, u32)>,
     pub hud: bool,
     pub allow_exit: bool,
     pub double_buffer: bool,
@@ -49,6 +51,16 @@ fn secs(v: Option<String>, flag: &str) -> Result<Duration, String> {
     Ok(Duration::from_secs_f64(s))
 }
 
+fn size(v: Option<String>, flag: &str) -> Result<(u32, u32), String> {
+    let v = v.ok_or_else(|| format!("{flag} needs a size like 1920x1080"))?;
+    let (w, h) =
+        v.split_once(['x', 'X']).ok_or_else(|| format!("{flag}: expected WxH, got '{v}'"))?;
+    match (w.parse(), h.parse()) {
+        (Ok(w @ 1..=16384), Ok(h @ 1..=16384)) => Ok((w, h)),
+        _ => Err(format!("{flag}: invalid size '{v}'")),
+    }
+}
+
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
     let mut o = Options::default();
     let mut it = args.into_iter();
@@ -58,6 +70,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
                 o.config = Some(it.next().ok_or("--config needs a path")?.into());
             }
             "--dev" => o.dev = true,
+            "--window" => o.window = Some(size(it.next(), &a)?),
             "--hud" => o.hud = true,
             "--allow-exit" => o.allow_exit = true,
             "--double-buffer" => o.double_buffer = true,
@@ -123,6 +136,14 @@ mod tests {
         c.debug.hud = true;
         o.merge_config(&c);
         assert!(o.hud && !o.allow_exit && !o.double_buffer);
+    }
+
+    #[test]
+    fn window_size() {
+        assert_eq!(p(&["--window", "3840x2160"]).unwrap().window, Some((3840, 2160)));
+        assert!(p(&["--window", "big"]).is_err());
+        assert!(p(&["--window", "0x10"]).is_err());
+        assert!(p(&["--window"]).is_err());
     }
 
     #[test]

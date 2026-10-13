@@ -1,4 +1,6 @@
 //! Animation primitives. Time-based (not frame-count), short fixed durations.
+//! There is one animation clock: the render loop samples `Instant::now()` once
+//! per frame and every animation in that frame reads that same timestamp.
 
 use std::time::{Duration, Instant};
 

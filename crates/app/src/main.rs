@@ -6,20 +6,20 @@ mod anim;
 mod args;
 mod config;
 mod diagnostics;
-mod draw;
 mod frame_loop;
 mod hud;
 mod input;
 mod input_access;
 mod logging;
 mod perf;
+mod posters;
 mod scene;
 mod systemd;
 
 use std::process::ExitCode;
 use std::time::Instant;
 
-use jellyroll_platform::{SdlOptions, SdlPlatform};
+use jellyroll_platform::{Platform, SdlOptions, SdlPlatform};
 
 #[global_allocator]
 static ALLOC: jellyroll_platform::alloc_counter::CountingAlloc =
@@ -60,6 +60,7 @@ fn main() -> ExitCode {
         dev_window: opts.dev,
         double_buffer: opts.double_buffer,
         no_vsync: opts.no_vsync,
+        window_size: opts.window,
     };
     if opts.print_diagnostics {
         return diagnostics::print(&sdl_opts);
@@ -100,7 +101,23 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match frame_loop::run(&mut platform, &opts, &loaded, &notice, process_start) {
+    let skia_opts = jellyroll_render::skia::SkiaOptions {
+        render_scale: loaded.config.display.ui_render_scale,
+        ..Default::default()
+    };
+    tracing::info!(ms = process_start.elapsed().as_millis() as u64, "platform ready");
+    let mut renderer = match jellyroll_render::skia::SkiaRenderer::new(
+        |name| platform.gl_proc_address(name),
+        skia_opts,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("renderer init failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    tracing::info!(ms = process_start.elapsed().as_millis() as u64, "renderer ready");
+    match frame_loop::run(&mut platform, &mut renderer, &opts, &loaded, &notice, process_start) {
         frame_loop::Exit::Quit | frame_loop::Exit::BenchPassed => ExitCode::SUCCESS,
         frame_loop::Exit::BenchFailed => ExitCode::FAILURE,
     }

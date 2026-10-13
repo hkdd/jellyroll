@@ -5,11 +5,11 @@
 | # | Question | Status |
 |---|---|---|
 | 1 | Can SDL3 KMSDRM do refresh-rate matching, or do we need direct DRM/GBM/EGL from the start? | **Open.** M1 lists modes via `--print-diagnostics`. Run it on the reference hardware and check that every TV mode (23.976/24/25/50/59.94/60) appears with exact numerator/denominator. Test actual switching in M8. |
-| 2 | Skia vs a custom GL renderer | Open. Decided by the M2 benchmark. |
+| 2 | Skia vs a custom GL renderer | **Pending hardware numbers.** Skia backend implemented (D12). Go if `--bench-pacing` at 4K passes on the reference hardware (CPU p99 < 4 ms, GPU p99 < 6 ms, 0 missed vsyncs); otherwise profile, then consider the custom GL backend behind the same trait. Record the numbers below. |
 | 3 | redb vs SQLite | Open (M5). |
 | 4 | HDR on DRM/KMS | Open (M9). |
 | 5 | Minimum Jellyfin server version | Open (M5). |
-| 6 | Retained tree vs immediate mode | Open (M2/M6). |
+| 6 | Retained tree vs immediate mode | **Leaning immediate-style** (D15): the scene is rebuilt on each dirty frame, with everything expensive cached by the renderer. Revisit with the M6 10k-item scroll benchmark. |
 | 7 | NVIDIA | Open. M1 code is vendor-neutral, but only Mesa has been exercised. |
 
 ## Decisions made in M1
@@ -24,10 +24,9 @@ core in GL 3.3. On GLES they need `GL_EXT_disjoint_timer_query`, and without
 it the HUD shows GPU time as N/A. Both skia-safe (GL backend) and libmpv
 support either API. Revisit if a target driver only offers GLES.
 
-**D3: M1 drawing is scissored `glClear`s.** No shaders, textures or Skia
-yet, as spec §0 requires: prove the loop first. The HUD uses a 3x5 bitmap
-font with horizontal run-merging. All of this goes away when the `Renderer`
-trait arrives in M2.
+**D3: M1 drawing was scissored `glClear`s** (superseded in M2). No shaders,
+textures or Skia, as spec §0 required: prove the loop first. The bitmap font
+and rect batch were removed when the Skia renderer landed.
 
 **D4: `unsafe` is confined to `jellyroll-platform`.** The app crate is
 `#![forbid(unsafe_code)]`. The counting global allocator, which needs
@@ -79,6 +78,65 @@ approved stack) comes in at the same time. Rules:
   cannot drift from the structs. `dist/config.example.toml` is checked by a
   unit test to parse cleanly and equal the defaults.
 - New settings are added only when the feature that uses them exists.
+
+## Decisions made in M2
+
+**D12: Skia via `skia-safe` 0.153.3, Ganesh GL backend, prebuilt binary.**
+Skia shares SDL's GL context and draws straight into framebuffer 0
+(`wrap_backend_render_target`, RGBA8, 8 stencil bits). The feature set is
+the crate defaults plus `gl`, because rust-skia only publishes prebuilt
+binaries for sets that include `jpeg` and `pdf`; anything else forces a
+from-source Skia build (python, ninja, Skia's git deps, tens of minutes).
+The unused jpeg/pdf code costs binary size only. All Skia calls are safe
+Rust, so `jellyroll-render` is `#![forbid(unsafe_code)]`.
+
+**D13: Text = cosmic-text shaping + Skia glyph rasterization, bundled fonts
+only.** cosmic-text 0.19 (no default features) shapes and ellipsizes;
+glyph ids and positions become a Skia `TextBlob` drawn with typefaces loaded
+from the same font bytes through `FontMgr::custom_empty()`, so neither
+fontconfig nor a system font scan is involved. A custom `Fallback` limits
+font fallback to the bundled families (Noto Sans, then Noto Sans JP). Text
+renders identically on every machine.
+
+**D14: Bundled, subset Noto fonts (3.9 MB).** Regular and Bold of Noto Sans
+(Latin/Greek/Cyrillic) and Noto Sans JP (kana + JIS X 0208 kanji),
+subset by `scripts/subset-fonts.sh` from pinned upstream commits. Korean and
+Chinese-only characters are not covered yet; adding them is a font-subset
+change, not a code change.
+
+**D15: Immediate-style scene, aggressive caching.** The UI is rebuilt each
+dirty frame against the `Renderer`; nothing is re-shaped or re-rasterized:
+- Shaped text is cached as `TextBlob`s keyed by (text, size, weight,
+  max width), evicting entries unused for 120 frames once 4096 are cached.
+- Shadows are blurred once into textures, keyed by size rounded up to 16
+  device px and stretched, so animated sizes (focus scale-up) reuse one or
+  two textures instead of re-blurring every frame. Capped at 64.
+- Rounded artwork is one draw (image shader on a rounded rect), not a
+  clip plus image.
+- Cards outside the viewport are skipped (row virtualization).
+- `push_opacity` (saveLayer) exists but the scene does not use it.
+
+**D16: `display.ui_render_scale`** (0.5 to 1.0, default 1.0) renders the UI
+into a smaller offscreen target and upscales it with linear filtering (spec
+6.4). Verified at 0.5 in software at 3840×2160.
+
+**D17: Artwork uploads have a per-frame budget (2 ms).** Posters arrive as
+placeholders first and are generated and uploaded within the budget, so the
+first frame is not delayed and later frames never hitch on uploads. This is
+the shape M5's real image pipeline will use (decode on workers, upload on
+the render thread within the budget).
+
+**D18: HUD text is excluded from the steady-state allocation check.** HUD
+lines change every 500 ms and are re-shaped then (cosmic-text allocates).
+The loop counts the HUD's allocations separately, so `--bench-pacing --hud`
+still checks the scene's frames.
+
+### M2 benchmark results
+
+| Machine | Output | CPU p50/p99 ms | GPU p50/p99 ms | Missed vsyncs | Result |
+|---|---|---|---|---|---|
+| CI container, Mesa llvmpipe (software) | 1280×720 | 8.7 / 14.3 | 0.1 / 25.1 | 0 | Not meaningful: software rasterizer runs GPU work on the CPU |
+| Reference HTPC | 3840×2160 | _to record_ | _to record_ | _to record_ | _pending_ |
 
 ## Dependency approvals
 

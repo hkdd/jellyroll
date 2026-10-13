@@ -13,23 +13,29 @@ and verified versions.
 
 | Milestone | State |
 |---|---|
-| **M1** Skeleton: SDL3 KMSDRM, GL context, vsync loop, dirty redraw, perf HUD, systemd unit, dev mode | **Implemented.** Verified in software (Mesa llvmpipe under Xvfb). **Not yet run on real hardware**; see [`docs/M1-HARDWARE-CHECKLIST.md`](docs/M1-HARDWARE-CHECKLIST.md) |
-| M2 Renderer trait + Skia | Not started. The spec gates it on M1 passing on hardware |
+| **M1** Skeleton: SDL3 KMSDRM, GL context, vsync loop, dirty redraw, perf HUD, systemd unit, dev mode | **Done.** Ran on the HTPC: boots to the test screen on a text console, input works, idle CPU near zero. Pacing numbers not yet recorded |
+| **M2** Renderer trait + Skia: rects, rounded rects, gradients, text (incl. CJK), images, animation clock | **Implemented.** Verified in software (Mesa llvmpipe under Xvfb, up to 3840×2160). **Benchmark numbers on real hardware still needed** for the Skia go/no-go; see [`docs/M2-HARDWARE-CHECKLIST.md`](docs/M2-HARDWARE-CHECKLIST.md) |
 | M3 to M10 | Not started |
 
-M1 shows a test pattern: a tile grid with an animated focus frame, a
-safe-area outline, and a perf HUD on F3. The real UI starts in M2/M6.
+The app currently shows the M2 render benchmark: a home-screen-like layout
+with a backdrop, 60 poster cards with shadows and titles, Japanese and
+Cyrillic text, a focus animation, and a perf HUD on F3. The data and
+artwork are fake; the real UI and Jellyfin data arrive in M5/M6.
 
 ## Layout
 
 ```
 crates/platform   jellyroll-platform: Platform trait, SDL3 backend, GL loader,
                   counting allocator. The only crate allowed `unsafe`.
+crates/render     jellyroll-render: Renderer trait, Skia backend, text
+                  shaping (cosmic-text) over the bundled fonts.
 crates/app        jellyroll binary (#![forbid(unsafe_code)]): render loop,
                   input normalization + key repeat, perf stats/HUD, systemd.
 dist/             systemd unit, example config
 scripts/          install.sh, dev-cage.sh, bench-startup.sh
-docs/             VERSIONS.md, DECISIONS.md, M1-HARDWARE-CHECKLIST.md
+assets/fonts/     bundled Noto fonts (subset; regenerate with
+                  scripts/subset-fonts.sh)
+docs/             VERSIONS.md, DECISIONS.md, M1/M2 hardware checklists
 ```
 
 ## Building
@@ -41,8 +47,14 @@ cargo build --release                      # links the system libSDL3 (>= 3.2)
 cargo build --release --features build-sdl # builds the pinned SDL 3.4.18 statically
 ```
 
-With `build-sdl` the binary links only libc. SDL `dlopen`s drm/gbm/EGL/GL/udev
-at runtime.
+Skia comes as a prebuilt static library that `skia-safe` downloads from
+GitHub (rust-skia/skia-binaries) during the first build, so that build needs
+network access. Offline builds can point `SKIA_BINARIES_URL` at a local copy
+of the archive (`file://...`).
+
+Besides libc, the binary links `libstdc++` (for Skia). SDL `dlopen`s
+drm/gbm/EGL/GL/udev at runtime. Fonts are compiled in; fontconfig is not
+used.
 
 System packages (runtime, plus headers when using `build-sdl`):
 
@@ -85,6 +97,7 @@ devices are readable. The service user gets the group from `install.sh`.
 |---|---|
 | `--config PATH` | Config file (default `~/.config/jellyroll/config.toml`) |
 | `--dev` | Desktop window instead of KMSDRM. Esc quits |
+| `--window WxH` | Dev window size, e.g. `3840x2160` to check 4K layout |
 | `--hud` | Show the perf HUD (F3 toggles) |
 | `--allow-exit` | Esc/Back quits outside dev mode |
 | `--double-buffer` | Double instead of triple buffering on KMSDRM |

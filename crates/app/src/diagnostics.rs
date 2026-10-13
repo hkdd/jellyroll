@@ -61,6 +61,14 @@ pub fn print(opts: &SdlOptions) -> ExitCode {
             println!("gl.swap_interval: {}", i.swap_interval);
             let (w, h) = p.framebuffer_size();
             println!("framebuffer: {w}x{h} @ {:.3} Hz", p.refresh_hz());
+            let skia = jellyroll_render::skia::SkiaRenderer::new(
+                |name| p.gl_proc_address(name),
+                Default::default(),
+            );
+            match skia {
+                Ok(_) => println!("renderer: skia ok"),
+                Err(e) => println!("renderer.error: {e}"),
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {

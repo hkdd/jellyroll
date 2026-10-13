@@ -1,0 +1,516 @@
+//! Skia (Ganesh/GL) backend for [`Renderer`]. Shares the platform's GL
+//! context; draws straight into the default framebuffer, or into a smaller
+//! offscreen target that is upscaled when `render_scale < 1` (spec 6.4).
+//!
+//! Hot-path rules (spec 6.1): no saveLayer except explicit `push_opacity`,
+//! no per-frame blurs (shadows are baked once into textures), text is
+//! shaped once and cached as a TextBlob.
+
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::ffi::c_void;
+use std::hash::{Hash, Hasher};
+
+use skia_safe as sk;
+use skia_safe::gpu::{self, DirectContext, SurfaceOrigin, gl as skgl};
+
+use crate::text::{FONTS, Shaper};
+use crate::{Color, Gradient, ImageId, Point, Rect, RenderStats, Renderer, TextMetrics, TextStyle};
+
+const GL_RGBA8: u32 = 0x8058;
+/// Text cache size before stale entries are evicted.
+const TEXT_CACHE_CAP: usize = 4096;
+/// Entries unused for this many frames are evicted when the cache is full.
+const TEXT_CACHE_KEEP_FRAMES: u64 = 120;
+/// Shadow textures are baked at sizes rounded up to this step (device px)
+/// and stretched to fit, so animated sizes (focus scale-up) reuse a couple
+/// of textures instead of baking a blur every frame.
+const SHADOW_SIZE_STEP: u32 = 16;
+/// Baked shadow textures kept before the cache is reset.
+const SHADOW_CACHE_CAP: usize = 64;
+
+#[derive(Copy, Clone, Debug)]
+pub struct SkiaOptions {
+    /// UI render scale (0.5..=1.0). Below 1 the UI is drawn offscreen at
+    /// reduced resolution and upscaled.
+    pub render_scale: f32,
+    /// Stencil bits of the default framebuffer.
+    pub stencil_bits: usize,
+}
+
+impl Default for SkiaOptions {
+    fn default() -> Self {
+        Self { render_scale: 1.0, stencil_bits: 8 }
+    }
+}
+
+struct TextEntry {
+    text: Box<str>,
+    style: TextStyle,
+    blob: Option<sk::TextBlob>,
+    metrics: TextMetrics,
+    last_used: u64,
+}
+
+struct ImageEntry {
+    image: sk::Image,
+    bytes: u64,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+struct ShadowKey {
+    w: u32,
+    h: u32,
+    radius: u32,
+    blur: u32,
+    argb: u32,
+}
+
+pub struct SkiaRenderer {
+    ctx: DirectContext,
+    opts: SkiaOptions,
+    fb: (u32, u32),
+    main: Option<sk::Surface>,
+    offscreen: Option<sk::Surface>,
+    /// Device pixels per logical px of the surface being drawn.
+    scale: f32,
+    logical: (f32, f32),
+    shaper: Shaper,
+    typefaces: Vec<sk::Typeface>,
+    text_cache: HashMap<u64, TextEntry>,
+    shadows: HashMap<ShadowKey, sk::Image>,
+    images: Vec<Option<ImageEntry>>,
+    free_images: Vec<u32>,
+    frame: u64,
+    stats: RenderStats,
+}
+
+fn sk_color(c: Color) -> sk::Color4f {
+    sk::Color4f::new(c.r, c.g, c.b, c.a)
+}
+
+fn sk_rect(r: Rect) -> sk::Rect {
+    sk::Rect::from_xywh(r.x, r.y, r.w, r.h)
+}
+
+fn rrect(r: Rect, radius: f32) -> sk::RRect {
+    sk::RRect::new_rect_xy(sk_rect(r), radius, radius)
+}
+
+fn paint(c: Color) -> sk::Paint {
+    let mut p = sk::Paint::new(sk_color(c), None);
+    p.set_anti_alias(true);
+    p
+}
+
+fn text_key(text: &str, style: &TextStyle) -> u64 {
+    let mut h = DefaultHasher::new();
+    text.hash(&mut h);
+    style.size.to_bits().hash(&mut h);
+    style.weight.hash(&mut h);
+    style.max_width.map(f32::to_bits).hash(&mut h);
+    h.finish()
+}
+
+impl SkiaRenderer {
+    /// `load` resolves GL symbols (e.g. SDL_GL_GetProcAddress). The GL
+    /// context must be current.
+    pub fn new(load: impl Fn(&str) -> *const c_void, opts: SkiaOptions) -> Result<Self, String> {
+        let interface = skgl::Interface::new_load_with(|name| {
+            // Skia probes EGL through the same loader; SDL owns EGL, and
+            // resolving it here confuses Skia's GL/GLES detection.
+            if name == "eglGetCurrentDisplay" { std::ptr::null() } else { load(name) }
+        })
+        .ok_or("Skia could not load the GL interface")?;
+        let ctx = gpu::direct_contexts::make_gl(interface, None)
+            .ok_or("Skia could not create a GL context")?;
+
+        let mgr = sk::FontMgr::custom_empty().unwrap_or_default();
+        let mut typefaces = Vec::with_capacity(FONTS.len());
+        for (name, bytes) in FONTS {
+            let tf = mgr
+                .new_from_data(sk::Data::new_copy(bytes), None)
+                .ok_or_else(|| format!("Skia could not load font {name}"))?;
+            typefaces.push(tf);
+        }
+
+        Ok(Self {
+            ctx,
+            opts: SkiaOptions { render_scale: opts.render_scale.clamp(0.5, 1.0), ..opts },
+            fb: (0, 0),
+            main: None,
+            offscreen: None,
+            scale: 1.0,
+            logical: (0.0, 0.0),
+            shaper: Shaper::new(),
+            typefaces,
+            text_cache: HashMap::new(),
+            shadows: HashMap::new(),
+            images: Vec::new(),
+            free_images: Vec::new(),
+            frame: 0,
+            stats: RenderStats::default(),
+        })
+    }
+
+    fn make_surfaces(&mut self, fb: (u32, u32)) -> bool {
+        let (w, h) = (fb.0 as i32, fb.1 as i32);
+        let info = skgl::FramebufferInfo { fboid: 0, format: GL_RGBA8, ..Default::default() };
+        let target = gpu::backend_render_targets::make_gl((w, h), 0, self.opts.stencil_bits, info);
+        self.main = gpu::surfaces::wrap_backend_render_target(
+            &mut self.ctx,
+            &target,
+            SurfaceOrigin::BottomLeft,
+            sk::ColorType::RGBA8888,
+            None,
+            None,
+        );
+        self.offscreen = None;
+        if self.opts.render_scale < 1.0 {
+            let sw = ((w as f32) * self.opts.render_scale).round() as i32;
+            let sh = ((h as f32) * self.opts.render_scale).round() as i32;
+            let ii = sk::ImageInfo::new_n32_premul((sw.max(1), sh.max(1)), None);
+            self.offscreen = gpu::surfaces::render_target(
+                &mut self.ctx,
+                gpu::Budgeted::Yes,
+                &ii,
+                None,
+                SurfaceOrigin::TopLeft,
+                None,
+                false,
+                None,
+            );
+            if self.offscreen.is_none() {
+                tracing::warn!("offscreen UI target failed; rendering at full resolution");
+            }
+        }
+        self.fb = fb;
+        self.main.is_some()
+    }
+
+    /// The surface the UI is drawn into this frame.
+    fn canvas(&mut self) -> &sk::Canvas {
+        let s = match self.offscreen.as_mut() {
+            Some(s) => s,
+            None => self.main.as_mut().expect("begin_frame ensured a surface"),
+        };
+        s.canvas()
+    }
+
+    fn shaped(&mut self, text: &str, style: &TextStyle) -> &TextEntry {
+        let key = text_key(text, style);
+        let hit = self.text_cache.get(&key).is_some_and(|e| &*e.text == text && e.style == *style);
+        if hit {
+            self.stats.text_cache_hits += 1;
+        } else {
+            self.stats.text_cache_misses += 1;
+            if self.text_cache.len() >= TEXT_CACHE_CAP {
+                let frame = self.frame;
+                self.text_cache.retain(|_, e| e.last_used + TEXT_CACHE_KEEP_FRAMES > frame);
+                if self.text_cache.len() >= TEXT_CACHE_CAP {
+                    self.text_cache.clear();
+                }
+            }
+            let shaped = self.shaper.shape(text, style);
+            let blob = build_blob(&self.typefaces, &shaped);
+            let metrics = TextMetrics { width: shaped.width, height: shaped.height };
+            self.text_cache.insert(
+                key,
+                TextEntry { text: text.into(), style: *style, blob, metrics, last_used: 0 },
+            );
+        }
+        let e = self.text_cache.get_mut(&key).expect("present");
+        e.last_used = self.frame;
+        e
+    }
+
+    fn baked_shadow(&mut self, key: ShadowKey) -> Option<sk::Image> {
+        if let Some(img) = self.shadows.get(&key) {
+            return Some(img.clone());
+        }
+        if self.shadows.len() >= SHADOW_CACHE_CAP {
+            self.shadows.clear();
+        }
+        let pad = (key.blur * 2) as f32;
+        let (w, h) = (key.w as f32 + 2.0 * pad, key.h as f32 + 2.0 * pad);
+        let mut surf = sk::surfaces::raster_n32_premul((w.ceil() as i32, h.ceil() as i32))?;
+        let c = surf.canvas();
+        c.clear(sk::Color::TRANSPARENT);
+        let mut p = sk::Paint::default();
+        p.set_anti_alias(true);
+        p.set_color(sk::Color::new(key.argb));
+        p.set_mask_filter(sk::MaskFilter::blur(
+            sk::BlurStyle::Normal,
+            key.blur as f32 / 2.0,
+            false,
+        ));
+        let r = sk::Rect::from_xywh(pad, pad, key.w as f32, key.h as f32);
+        c.draw_rrect(sk::RRect::new_rect_xy(r, key.radius as f32, key.radius as f32), &p);
+        let raster = surf.image_snapshot();
+        let tex = gpu::images::texture_from_image(
+            &mut self.ctx,
+            &raster,
+            gpu::Mipmapped::No,
+            gpu::Budgeted::Yes,
+        )
+        .unwrap_or(raster);
+        self.shadows.insert(key, tex.clone());
+        Some(tex)
+    }
+}
+
+fn build_blob(typefaces: &[sk::Typeface], t: &crate::text::ShapedText) -> Option<sk::TextBlob> {
+    if t.glyphs.is_empty() {
+        return None;
+    }
+    let mut builder = sk::TextBlobBuilder::new();
+    let mut start = 0;
+    while start < t.glyphs.len() {
+        let font_idx = t.glyphs[start].font;
+        let end = t.glyphs[start..]
+            .iter()
+            .position(|g| g.font != font_idx)
+            .map_or(t.glyphs.len(), |n| start + n);
+        let mut font = sk::Font::from_typeface(typefaces[font_idx as usize].clone(), t.size);
+        font.set_edging(sk::font::Edging::AntiAlias);
+        font.set_subpixel(true);
+        font.set_hinting(sk::FontHinting::None);
+        font.set_linear_metrics(true);
+        let (ids, pos) = builder.alloc_run_pos(&font, end - start, None);
+        for (i, g) in t.glyphs[start..end].iter().enumerate() {
+            ids[i] = g.id;
+            pos[i] = sk::Point::new(g.x, g.y);
+        }
+        start = end;
+    }
+    builder.make()
+}
+
+impl Renderer for SkiaRenderer {
+    fn begin_frame(&mut self, fb: (u32, u32)) -> bool {
+        self.frame += 1;
+        if (fb != self.fb || self.main.is_none()) && !self.make_surfaces(fb) {
+            return false;
+        }
+        let device_scale = fb.1 as f32 / 1080.0;
+        self.scale = if self.offscreen.is_some() {
+            device_scale * self.opts.render_scale
+        } else {
+            device_scale
+        };
+        self.logical = (fb.0 as f32 / device_scale, 1080.0);
+        let s = self.scale;
+        let c = self.canvas();
+        c.restore_to_count(1);
+        c.reset_matrix();
+        c.save();
+        c.scale((s, s));
+        true
+    }
+
+    fn end_frame(&mut self) {
+        self.canvas().restore_to_count(1);
+        if let Some(off) = self.offscreen.as_mut() {
+            let img = off.image_snapshot();
+            if let Some(main) = self.main.as_mut() {
+                let (w, h) = (self.fb.0 as f32, self.fb.1 as f32);
+                let mut p = sk::Paint::default();
+                p.set_blend_mode(sk::BlendMode::Src);
+                main.canvas().draw_image_rect_with_sampling_options(
+                    &img,
+                    None,
+                    sk::Rect::from_wh(w, h),
+                    sk::SamplingOptions::new(sk::FilterMode::Linear, sk::MipmapMode::None),
+                    &p,
+                );
+            }
+        }
+        self.ctx.flush_and_submit();
+    }
+
+    fn logical_size(&self) -> (f32, f32) {
+        self.logical
+    }
+
+    fn clear(&mut self, c: Color) {
+        self.canvas().clear(sk_color(c));
+    }
+
+    fn fill_rect(&mut self, r: Rect, c: Color) {
+        let mut p = paint(c);
+        p.set_anti_alias(false);
+        self.canvas().draw_rect(sk_rect(r), &p);
+    }
+
+    fn fill_rrect(&mut self, r: Rect, radius: f32, c: Color) {
+        self.canvas().draw_rrect(rrect(r, radius), &paint(c));
+    }
+
+    fn stroke_rrect(&mut self, r: Rect, radius: f32, width: f32, c: Color) {
+        let mut p = paint(c);
+        p.set_style(sk::PaintStyle::Stroke);
+        p.set_stroke_width(width);
+        self.canvas().draw_rrect(rrect(r, radius), &p);
+    }
+
+    fn fill_gradient(&mut self, r: Rect, radius: f32, g: &Gradient) {
+        let end = if g.vertical { (r.x, r.bottom()) } else { (r.right(), r.y) };
+        let colors = [sk_color(g.from), sk_color(g.to)];
+        let grad = sk::gradient::Gradient::new(
+            sk::gradient::Colors::new_evenly_spaced(&colors, sk::TileMode::Clamp, None),
+            sk::gradient::Interpolation::default(),
+        );
+        let shader = sk::gradient::shaders::linear_gradient(((r.x, r.y), end), &grad, None);
+        let mut p = sk::Paint::default();
+        p.set_anti_alias(radius > 0.0);
+        p.set_shader(shader);
+        if radius > 0.0 {
+            self.canvas().draw_rrect(rrect(r, radius), &p);
+        } else {
+            self.canvas().draw_rect(sk_rect(r), &p);
+        }
+    }
+
+    fn shadow(&mut self, r: Rect, radius: f32, blur: f32, c: Color) {
+        // Bake at device resolution so the texture maps 1:1 on screen.
+        let s = self.scale;
+        let step = |v: f32| ((v * s).max(1.0) as u32).div_ceil(SHADOW_SIZE_STEP) * SHADOW_SIZE_STEP;
+        let key = ShadowKey {
+            w: step(r.w),
+            h: step(r.h),
+            radius: (radius * s).round() as u32,
+            blur: (blur * s).round().max(1.0) as u32,
+            argb: c.to_argb8(),
+        };
+        let Some(img) = self.baked_shadow(key) else { return };
+        let pad = (key.blur * 2) as f32 / s;
+        let dst = Rect::new(r.x - pad, r.y - pad, r.w + 2.0 * pad, r.h + 2.0 * pad);
+        let p = sk::Paint::default();
+        self.canvas().draw_image_rect_with_sampling_options(
+            &img,
+            None,
+            sk_rect(dst),
+            sk::SamplingOptions::new(sk::FilterMode::Linear, sk::MipmapMode::None),
+            &p,
+        );
+    }
+
+    fn image(&mut self, img: ImageId, dst: Rect, radius: f32, opacity: f32) {
+        let Some(Some(entry)) = self.images.get(img.0 as usize) else { return };
+        let image = entry.image.clone();
+        let sampling = sk::SamplingOptions::new(sk::FilterMode::Linear, sk::MipmapMode::None);
+        let mut p = sk::Paint::default();
+        p.set_alpha_f(opacity.clamp(0.0, 1.0));
+        p.set_anti_alias(true);
+        if radius <= 0.0 {
+            self.canvas().draw_image_rect_with_sampling_options(
+                &image,
+                None,
+                sk_rect(dst),
+                sampling,
+                &p,
+            );
+            return;
+        }
+        // Rounded corners via an image shader on a rounded rect: one draw,
+        // no clip or layer.
+        let src = sk::Rect::from_wh(image.width() as f32, image.height() as f32);
+        let m = sk::Matrix::rect_2_rect(src, sk_rect(dst), sk::matrix::ScaleToFit::Fill)
+            .unwrap_or_default();
+        p.set_shader(image.to_shader((sk::TileMode::Clamp, sk::TileMode::Clamp), sampling, &m));
+        self.canvas().draw_rrect(rrect(dst, radius), &p);
+    }
+
+    fn text(&mut self, text: &str, style: &TextStyle, origin: Point, c: Color) -> TextMetrics {
+        let e = self.shaped(text, style);
+        let (blob, metrics) = (e.blob.clone(), e.metrics);
+        if let Some(blob) = blob {
+            self.canvas().draw_text_blob(&blob, (origin.x, origin.y), &paint(c));
+        }
+        metrics
+    }
+
+    fn measure_text(&mut self, text: &str, style: &TextStyle) -> TextMetrics {
+        self.shaped(text, style).metrics
+    }
+
+    fn push_clip(&mut self, r: Rect, radius: f32) {
+        let c = self.canvas();
+        c.save();
+        c.clip_rrect(rrect(r, radius), sk::ClipOp::Intersect, true);
+    }
+
+    fn push_transform(&mut self, translate: Point, scale: f32) {
+        let c = self.canvas();
+        c.save();
+        c.translate((translate.x, translate.y));
+        c.scale((scale, scale));
+    }
+
+    fn push_opacity(&mut self, alpha: f32) {
+        self.canvas().save_layer_alpha_f(None, alpha.clamp(0.0, 1.0));
+    }
+
+    fn pop(&mut self) {
+        let c = self.canvas();
+        if c.save_count() > 2 {
+            c.restore();
+        }
+    }
+
+    fn create_image(&mut self, width: u32, height: u32, rgba: &[u8]) -> Option<ImageId> {
+        let bytes = width as usize * height as usize * 4;
+        if width == 0 || height == 0 || rgba.len() < bytes {
+            return None;
+        }
+        let info = sk::ImageInfo::new(
+            (width as i32, height as i32),
+            sk::ColorType::RGBA8888,
+            sk::AlphaType::Unpremul,
+            None,
+        );
+        let raster = sk::images::raster_from_data(
+            &info,
+            sk::Data::new_copy(&rgba[..bytes]),
+            width as usize * 4,
+        )?;
+        let image = gpu::images::texture_from_image(
+            &mut self.ctx,
+            &raster,
+            gpu::Mipmapped::No,
+            gpu::Budgeted::Yes,
+        )?;
+        let entry = ImageEntry { image, bytes: bytes as u64 };
+        self.stats.texture_bytes += entry.bytes;
+        self.stats.images += 1;
+        let id = match self.free_images.pop() {
+            Some(i) => {
+                self.images[i as usize] = Some(entry);
+                i
+            }
+            None => {
+                self.images.push(Some(entry));
+                (self.images.len() - 1) as u32
+            }
+        };
+        Some(ImageId(id))
+    }
+
+    fn release_image(&mut self, img: ImageId) {
+        if let Some(slot) = self.images.get_mut(img.0 as usize)
+            && let Some(e) = slot.take()
+        {
+            self.stats.texture_bytes -= e.bytes;
+            self.stats.images -= 1;
+            self.free_images.push(img.0);
+        }
+    }
+
+    fn stats(&self) -> RenderStats {
+        RenderStats {
+            text_cache_entries: self.text_cache.len() as u32,
+            shadow_cache_entries: self.shadows.len() as u32,
+            ..self.stats
+        }
+    }
+}

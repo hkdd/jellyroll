@@ -16,6 +16,9 @@ safe_area = 0.025
 # Double instead of triple buffering. Lower latency, higher risk of missed
 # frames; see docs/DECISIONS.md (D10).
 double_buffer = false
+# Render the UI at this fraction of the output resolution and let the GPU
+# upscale it (0.5 - 1.0). Lower it only if a weak GPU misses frames at 4K.
+ui_render_scale = 1.0
 
 [input]
 # Key repeat for held buttons (keyboard, gamepad and remote alike).

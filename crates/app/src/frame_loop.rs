@@ -9,13 +9,13 @@ use std::time::{Duration, Instant};
 
 use jellyroll_platform::alloc_counter;
 use jellyroll_platform::{GpuTimer, Platform, PlatformEvent};
+use jellyroll_render::Renderer;
 
 use crate::args::{Bench, Options};
-use crate::draw::RectBatch;
 use crate::hud::{CPU_BUDGET_MS, GPU_BUDGET_MS, Hud};
 use crate::input::{InputAction, KeyRepeat, map_key};
 use crate::perf::{FrameStats, is_missed_vsync, ms};
-use crate::scene::{Layout, Scene};
+use crate::scene::{Scene, UPLOAD_BUDGET};
 use crate::systemd::Systemd;
 
 /// Frames before steady state (allocation checks and benchmark windows).
@@ -39,7 +39,7 @@ fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
 
 fn make_header(fb: (u32, u32), hz: f32, header: &mut String) {
     header.clear();
-    let _ = write!(header, "JELLYROLL M1   {}X{} @ {:.2}   F3 HUD", fb.0, fb.1, hz);
+    let _ = write!(header, "M2 render benchmark · {}×{} @ {:.2} Hz · F3 HUD", fb.0, fb.1, hz);
 }
 
 /// On-screen notice for config problems (details are in the journal).
@@ -67,8 +67,9 @@ pub fn wait_timeout(
     }
 }
 
-pub fn run<P: Platform>(
+pub fn run<P: Platform, R: Renderer>(
     p: &mut P,
+    r: &mut R,
     opts: &Options,
     config: &crate::config::Loaded,
     notice: &str,
@@ -81,13 +82,11 @@ pub fn run<P: Platform>(
     let mut repeat = KeyRepeat::new(config.config.input.repeat());
     let safe_area = config.config.display.safe_area;
     let mut stats = FrameStats::default();
-    let mut batch = RectBatch::with_capacity(4096);
     let mut events: Vec<PlatformEvent> = Vec::with_capacity(64);
     let mut gpu_timer = GpuTimer::new(p.gl());
 
     let mut fb = p.framebuffer_size();
     let mut refresh_hz = p.refresh_hz();
-    let mut layout = Layout::new(fb.0, fb.1, safe_area);
     let mut header = String::new();
     make_header(fb, refresh_hz, &mut header);
 
@@ -95,7 +94,7 @@ pub fn run<P: Platform>(
         Bench::Pacing(d) | Bench::Idle(d) => start + WARMUP + d,
     });
     if let Some(Bench::Pacing(_)) = opts.bench {
-        scene.sweep = true;
+        scene.bench = true;
     }
     let mut bench_reset_done = false;
     let mut idle_cpu_at_warmup = None;
@@ -127,7 +126,7 @@ pub fn run<P: Platform>(
         let now = Instant::now();
         systemd.tick(now);
         if hud.due(now) {
-            hud.refresh(now, &stats, p.info(), refresh_hz, fb);
+            hud.refresh(now, &stats, &r.stats(), p.info(), refresh_hz, fb);
             dirty = true;
         }
         if !bench_reset_done && now >= start + WARMUP {
@@ -139,7 +138,7 @@ pub fn run<P: Platform>(
         if let Some(end) = bench_end
             && now >= end
         {
-            return finish_bench(opts, &stats, idle_cpu_at_warmup, frames_at_warmup, p);
+            return finish_bench(opts, &stats, idle_cpu_at_warmup, frames_at_warmup, p, r);
         }
 
         // ---- input + update (measured) --------------------------------
@@ -173,7 +172,6 @@ pub fn run<P: Platform>(
                 PlatformEvent::Resized { .. } | PlatformEvent::DisplayChanged => {
                     fb = p.framebuffer_size();
                     refresh_hz = p.refresh_hz();
-                    layout = Layout::new(fb.0, fb.1, safe_area);
                     make_header(fb, refresh_hz, &mut header);
                     tracing::info!(w = fb.0, h = fb.1, refresh_hz, "output changed");
                     repeat.reset();
@@ -185,6 +183,7 @@ pub fn run<P: Platform>(
         if let Some(a) = repeat.tick(now) {
             dirty |= scene.on_action(a, now);
         }
+        scene.update(now);
         if scene.is_animating(now) {
             dirty = true;
         }
@@ -193,16 +192,23 @@ pub fn run<P: Platform>(
         }
 
         // ---- draw ------------------------------------------------------
-        let gl = p.gl();
-        gl.bind_default_framebuffer();
-        gl.viewport(0, 0, fb.0 as i32, fb.1 as i32);
-        let timing = gpu_timer.as_mut().is_some_and(|t| t.begin(gl));
-        batch.clear();
-        scene.draw(&mut batch, fb, &layout, now, &header, notice);
-        hud.draw(&mut batch, &stats, layout.safe_x + layout.safe_w, layout.safe_y, layout.scale);
-        batch.flush(gl, fb.1 as i32);
+        let timing = gpu_timer.as_mut().is_some_and(|t| t.begin(p.gl()));
+        let mut hud_allocs = 0;
+        if r.begin_frame(fb) {
+            if scene.uploads_pending() {
+                scene.pump_uploads(r, fb.1, UPLOAD_BUDGET);
+            }
+            scene.draw(r, now, safe_area, &header, notice);
+            // HUD text changes every refresh and is re-shaped then; keep its
+            // allocations out of the steady-state check.
+            let a0 = alloc_counter::allocations();
+            let (lw, lh) = r.logical_size();
+            hud.draw(r, &stats, lw * (1.0 - safe_area), lh * safe_area);
+            hud_allocs = alloc_counter::allocations() - a0;
+            r.end_frame();
+        }
         if timing && let Some(t) = gpu_timer.as_mut() {
-            t.end(gl);
+            t.end(p.gl());
         }
         let cpu = frame_start.elapsed();
 
@@ -227,7 +233,7 @@ pub fn run<P: Platform>(
             t.collect(p.gl(), |ns| stats.gpu_ms.push(ns as f32 / 1.0e6));
         }
 
-        let allocs = alloc_counter::allocations() - allocs_start;
+        let allocs = alloc_counter::allocations() - allocs_start - hud_allocs;
         stats.allocs_last_frame = allocs;
         if allocs > 0 && bench_reset_done {
             stats.allocating_frames += 1;
@@ -246,12 +252,13 @@ pub fn run<P: Platform>(
     }
 }
 
-fn finish_bench<P: Platform>(
+fn finish_bench<P: Platform, R: Renderer>(
     opts: &Options,
     stats: &FrameStats,
     cpu_at_warmup: Option<Duration>,
     frames: u64,
     p: &P,
+    r: &R,
 ) -> Exit {
     let mut scratch = Box::new([0.0f32; crate::perf::HISTORY]);
     let info = p.info();
@@ -279,6 +286,16 @@ fn finish_bench<P: Platform>(
             );
             println!("missed_vsyncs: {}", stats.missed_vsyncs);
             println!("allocating_frames: {}", stats.allocating_frames);
+            let rs = r.stats();
+            println!(
+                "render: textures {:.1} MB ({} images), text cache {} entries ({} hits / {} misses), shadows {}",
+                rs.texture_bytes as f64 / (1024.0 * 1024.0),
+                rs.images,
+                rs.text_cache_entries,
+                rs.text_cache_hits,
+                rs.text_cache_misses,
+                rs.shadow_cache_entries
+            );
             let mut check = |ok: bool, what: &str| {
                 if !ok {
                     println!("FAIL: {what}");

@@ -19,13 +19,15 @@ pub struct SdlOptions {
     pub double_buffer: bool,
     /// Disable vsync (benchmarking only).
     pub no_vsync: bool,
+    /// Dev window size in pixels (default 1280x720).
+    pub window_size: Option<(u32, u32)>,
 }
 
 pub struct SdlPlatform {
     // Drop order matters: context before window before subsystems.
     _gl_ctx: GLContext,
     window: Window,
-    _video: sdl3::VideoSubsystem,
+    video: sdl3::VideoSubsystem,
     pump: sdl3::EventPump,
     _sdl: sdl3::Sdl,
     gl: Gl,
@@ -88,7 +90,8 @@ impl SdlPlatform {
             attr.set_blue_size(8);
 
             let mut builder = if opts.dev_window {
-                let mut b = video.window("jellyroll (dev)", 1280, 720);
+                let (w, h) = opts.window_size.unwrap_or((1280, 720));
+                let mut b = video.window("jellyroll (dev)", w, h);
                 b.resizable();
                 b
             } else {
@@ -159,7 +162,7 @@ impl SdlPlatform {
                 "GL context ready"
             );
             let pump = sdl.event_pump().map_err(|e| e.to_string())?;
-            return Ok(Self { _gl_ctx: ctx, window, _video: video, pump, _sdl: sdl, gl, info });
+            return Ok(Self { _gl_ctx: ctx, window, video, pump, _sdl: sdl, gl, info });
         }
         Err(format!("no usable GL context: {last_err}"))
     }
@@ -251,6 +254,13 @@ fn convert(ev: Event, window: &Window) -> Option<PlatformEvent> {
 impl Platform for SdlPlatform {
     fn gl(&self) -> &Gl {
         &self.gl
+    }
+
+    fn gl_proc_address(&self, name: &str) -> *const c_void {
+        match self.video.gl_get_proc_address(name) {
+            Some(f) => f as *const c_void,
+            None => std::ptr::null(),
+        }
     }
 
     fn info(&self) -> &PlatformInfo {

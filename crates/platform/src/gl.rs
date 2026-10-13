@@ -1,8 +1,8 @@
 //! Minimal hand-rolled OpenGL loader.
 //!
-//! M1 only needs a handful of entry points (clear, scissor, timer queries), so
-//! this avoids pulling in a generated binding crate. Skia (M2) and mpv (M3)
-//! resolve their own symbols through the same `get_proc_address`.
+//! The app itself only needs context info and GPU timer queries (drawing goes
+//! through Skia), so this avoids a generated binding crate. Skia and mpv
+//! (M3) resolve their own symbols through the platform's `gl_proc_address`.
 //!
 //! Every function here is a thin safe wrapper: the context is guaranteed
 //! current on the render thread for the lifetime of [`Gl`] (it is created by
@@ -15,11 +15,7 @@ pub type GLenum = u32;
 pub type GLuint = u32;
 pub type GLint = i32;
 pub type GLsizei = i32;
-pub type GLbitfield = u32;
-pub type GLfloat = f32;
 
-pub const COLOR_BUFFER_BIT: GLbitfield = 0x0000_4000;
-pub const SCISSOR_TEST: GLenum = 0x0C11;
 const VENDOR: GLenum = 0x1F00;
 const RENDERER: GLenum = 0x1F01;
 const VERSION: GLenum = 0x1F02;
@@ -28,17 +24,9 @@ const TIME_ELAPSED: GLenum = 0x88BF;
 const QUERY_RESULT: GLenum = 0x8866;
 const QUERY_RESULT_AVAILABLE: GLenum = 0x8867;
 const GPU_DISJOINT_EXT: GLenum = 0x8FBB;
-const FRAMEBUFFER: GLenum = 0x8D40;
 
 type FnGetString = unsafe extern "C" fn(GLenum) -> *const u8;
 type FnGetIntegerv = unsafe extern "C" fn(GLenum, *mut GLint);
-type FnViewport = unsafe extern "C" fn(GLint, GLint, GLsizei, GLsizei);
-type FnClearColor = unsafe extern "C" fn(GLfloat, GLfloat, GLfloat, GLfloat);
-type FnClear = unsafe extern "C" fn(GLbitfield);
-type FnEnable = unsafe extern "C" fn(GLenum);
-type FnScissor = unsafe extern "C" fn(GLint, GLint, GLsizei, GLsizei);
-type FnGetError = unsafe extern "C" fn() -> GLenum;
-type FnBindFramebuffer = unsafe extern "C" fn(GLenum, GLuint);
 type FnGenQueries = unsafe extern "C" fn(GLsizei, *mut GLuint);
 type FnDeleteQueries = unsafe extern "C" fn(GLsizei, *const GLuint);
 type FnBeginQuery = unsafe extern "C" fn(GLenum, GLuint);
@@ -61,14 +49,6 @@ struct TimerFns {
 pub struct Gl {
     get_string: FnGetString,
     get_integerv: FnGetIntegerv,
-    viewport: FnViewport,
-    clear_color: FnClearColor,
-    clear: FnClear,
-    enable: FnEnable,
-    disable: FnEnable,
-    scissor: FnScissor,
-    get_error: FnGetError,
-    bind_framebuffer: FnBindFramebuffer,
     timer: Option<TimerFns>,
     pub is_gles: bool,
     // Raw function pointers already make this !Send/!Sync; keep it explicit.
@@ -148,14 +128,6 @@ impl Gl {
         Ok(Self {
             get_string: req!("glGetString"),
             get_integerv: req!("glGetIntegerv"),
-            viewport: req!("glViewport"),
-            clear_color: req!("glClearColor"),
-            clear: req!("glClear"),
-            enable: req!("glEnable"),
-            disable: req!("glDisable"),
-            scissor: req!("glScissor"),
-            get_error: req!("glGetError"),
-            bind_framebuffer: req!("glBindFramebuffer"),
             timer,
             is_gles,
             _not_send: PhantomData,
@@ -189,64 +161,6 @@ impl Gl {
 
     pub fn has_timer_queries(&self) -> bool {
         self.timer.is_some()
-    }
-
-    pub fn bind_default_framebuffer(&self) {
-        // SAFETY: context current; 0 is always a valid framebuffer name.
-        unsafe { (self.bind_framebuffer)(FRAMEBUFFER, 0) }
-    }
-
-    pub fn viewport(&self, x: i32, y: i32, w: i32, h: i32) {
-        // SAFETY: context current; plain value arguments.
-        unsafe { (self.viewport)(x, y, w, h) }
-    }
-
-    /// Clears the whole framebuffer (scissor disabled) to `rgba`.
-    pub fn clear(&self, rgba: [f32; 4]) {
-        // SAFETY: context current; plain value arguments.
-        unsafe {
-            (self.disable)(SCISSOR_TEST);
-            (self.clear_color)(rgba[0], rgba[1], rgba[2], rgba[3]);
-            (self.clear)(COLOR_BUFFER_BIT);
-        }
-    }
-
-    pub fn enable_scissor(&self) {
-        // SAFETY: context current.
-        unsafe { (self.enable)(SCISSOR_TEST) }
-    }
-
-    pub fn disable_scissor(&self) {
-        // SAFETY: context current.
-        unsafe { (self.disable)(SCISSOR_TEST) }
-    }
-
-    /// Fills a rectangle by clearing inside a scissor box. Coordinates are
-    /// top-left origin in pixels; `fb_height` flips to GL's bottom-left origin.
-    /// Caller must have called [`Gl::enable_scissor`].
-    pub fn fill_rect_scissor(
-        &self,
-        fb_height: i32,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        rgba: [f32; 4],
-    ) {
-        if w <= 0 || h <= 0 {
-            return;
-        }
-        // SAFETY: context current; plain value arguments.
-        unsafe {
-            (self.scissor)(x, fb_height - y - h, w, h);
-            (self.clear_color)(rgba[0], rgba[1], rgba[2], rgba[3]);
-            (self.clear)(COLOR_BUFFER_BIT);
-        }
-    }
-
-    pub fn get_error(&self) -> GLenum {
-        // SAFETY: context current.
-        unsafe { (self.get_error)() }
     }
 
     fn disjoint(&self) -> bool {
