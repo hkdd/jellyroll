@@ -10,20 +10,44 @@
 # The RUST_LOG environment variable takes precedence.
 level = "info"
 
+[server]
+# Jellyfin server address. Empty: the last server you signed in to, else
+# the first one found on the local network.
+url = ""
+# PEM file with an extra CA certificate, or your server's self-signed
+# certificate, for https. Empty: the system's trusted roots only.
+ca_file = ""
+
 [display]
 # Fraction of each screen edge kept clear for TV overscan (0.0 - 0.1).
 safe_area = 0.025
 # Double instead of triple buffering. Lower latency, higher risk of missed
 # frames; see docs/DECISIONS.md (D10).
 double_buffer = false
+# Render the UI at this fraction of the output resolution and let the GPU
+# upscale it (0.5 - 1.0). Lower it only if a weak GPU misses frames at 4K.
+ui_render_scale = 1.0
 
 [input]
+# HDMI-CEC: control jellyroll with the TV remote (needs a CEC-capable GPU
+# port or a USB adapter such as Pulse-Eight; see README).
+cec = true
+# Turn the TV on and switch it to this input when jellyroll starts.
+cec_wake_tv = true
+# A specific device such as "/dev/cec0"; empty picks the first available.
+cec_device = ""
 # Key repeat for held buttons (keyboard, gamepad and remote alike).
 repeat_delay_ms = 350
 repeat_interval_ms = 80
 # After holding this long, repeats speed up to repeat_fast_interval_ms.
 repeat_accelerate_after_ms = 1500
 repeat_fast_interval_ms = 40
+
+[cache]
+# Disk space for downloaded artwork (~/.cache/jellyroll/images).
+images_mb = 2048
+# GPU memory for artwork textures; least recently shown are dropped first.
+textures_mb = 512
 
 [debug]
 # Show the perf HUD at startup (F3 toggles).

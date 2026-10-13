@@ -1,12 +1,123 @@
-//! Input normalization (spec 5.4). M1 covers the keyboard; gamepad and CEC
-//! feed the same `InputAction` stream in M4.
+//! Input normalization (spec 5.4): keyboard, gamepad and HDMI-CEC remote
+//! all map to one `InputAction` stream, and one in-app repeat timer drives
+//! held buttons from every source, so behaviour is identical whichever
+//! device is used.
 
 use std::time::{Duration, Instant};
 
-use jellyroll_platform::{Key, Modifiers};
+use jellyroll_platform::{CecKey, Key, Modifiers, PadButton, PlatformEvent};
+
+/// A physical button from any source; identifies what is being held for
+/// repeat and release.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Button {
+    Key(Key),
+    Pad(PadButton),
+    Cec(CecKey),
+}
+
+/// A press or release from any source.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum Input {
+    Press {
+        button: Button,
+        action: Option<InputAction>,
+    },
+    Release(Button),
+    /// A typed character (text fields only; not a held button).
+    Typed(char),
+}
+
+/// Normalizes a platform event into a press/release. OS key auto-repeat is
+/// dropped (repeat is in-app); non-input events return `None`.
+///
+/// In `text_mode` (a text field is active) a physical keyboard types:
+/// printable keys produce only their character (`Typed`, with layout and
+/// Shift applied by the platform), Backspace deletes instead of going back,
+/// and Enter submits. Remote and gamepad behave as always.
+pub fn from_event(ev: &PlatformEvent, text_mode: bool) -> Option<Input> {
+    Some(match *ev {
+        PlatformEvent::KeyDown { repeat: true, .. } => return None,
+        PlatformEvent::KeyDown { key, mods, .. } if text_mode => {
+            let action = match key {
+                Key::Char(_) | Key::Space => None,
+                Key::Backspace => Some(InputAction::Backspace),
+                Key::Enter => Some(InputAction::Submit),
+                _ => map_key(key, mods),
+            };
+            Input::Press { button: Button::Key(key), action }
+        }
+        PlatformEvent::KeyDown { key, mods, .. } => {
+            Input::Press { button: Button::Key(key), action: map_key(key, mods) }
+        }
+        PlatformEvent::Text { ch } if text_mode => Input::Typed(ch),
+        PlatformEvent::KeyUp { key } => Input::Release(Button::Key(key)),
+        PlatformEvent::PadDown { button } => {
+            Input::Press { button: Button::Pad(button), action: map_pad(button) }
+        }
+        PlatformEvent::PadUp { button } => Input::Release(Button::Pad(button)),
+        PlatformEvent::CecDown { key } => {
+            Input::Press { button: Button::Cec(key), action: map_cec(key) }
+        }
+        PlatformEvent::CecUp { key } => Input::Release(Button::Cec(key)),
+        _ => return None,
+    })
+}
+
+/// Gamepad map (positional; South = A on Xbox pads): D-pad and left stick
+/// navigate, A selects, B goes back, X play/pause, Y info, shoulders seek,
+/// triggers previous/next, Start menu, View/Select search, Guide home.
+pub fn map_pad(b: PadButton) -> Option<InputAction> {
+    use InputAction as A;
+    use PadButton as P;
+    Some(match b {
+        P::DPadUp | P::StickUp => A::Up,
+        P::DPadDown | P::StickDown => A::Down,
+        P::DPadLeft | P::StickLeft => A::Left,
+        P::DPadRight | P::StickRight => A::Right,
+        P::South => A::Select,
+        P::East => A::Back,
+        P::West => A::PlayPause,
+        P::North => A::Info,
+        P::LeftShoulder => A::SeekBack,
+        P::RightShoulder => A::SeekFwd,
+        P::LeftTrigger => A::Prev,
+        P::RightTrigger => A::Next,
+        P::Start => A::Menu,
+        P::Back => A::Search,
+        P::Guide => A::Home,
+    })
+}
+
+/// HDMI-CEC TV remote map.
+pub fn map_cec(k: CecKey) -> Option<InputAction> {
+    use CecKey as C;
+    use InputAction as A;
+    Some(match k {
+        C::Up => A::Up,
+        C::Down => A::Down,
+        C::Left => A::Left,
+        C::Right => A::Right,
+        C::Select | C::Enter => A::Select,
+        C::Back => A::Back,
+        C::RootMenu => A::Home,
+        C::SetupMenu | C::ContentsMenu | C::Guide => A::Menu,
+        C::Info => A::Info,
+        C::Play | C::Pause | C::PlayPause => A::PlayPause,
+        C::Stop => A::Stop,
+        C::Rewind => A::SeekBack,
+        C::FastForward => A::SeekFwd,
+        C::SkipForward | C::ChannelUp => A::Next,
+        C::SkipBackward | C::ChannelDown => A::Prev,
+        C::VolumeUp => A::VolUp,
+        C::VolumeDown => A::VolDown,
+        C::Mute => A::Mute,
+        C::Blue => A::Search,
+        C::Number(_) | C::Red | C::Green | C::Yellow | C::Other(_) => return None,
+    })
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // TextInput/Backspace arrive with the on-screen keyboard (M4).
 pub enum InputAction {
     Up,
     Down,
@@ -28,6 +139,8 @@ pub enum InputAction {
     Mute,
     TextInput(char),
     Backspace,
+    /// Enter on a physical keyboard while typing: submit the field.
+    Submit,
     Search,
 }
 
@@ -99,7 +212,7 @@ pub struct KeyRepeat {
 
 #[derive(Copy, Clone)]
 struct Held {
-    key: Key,
+    key: Button,
     action: InputAction,
     since: Instant,
     next: Instant,
@@ -110,7 +223,7 @@ impl KeyRepeat {
         Self { cfg, held: None }
     }
 
-    pub fn press(&mut self, key: Key, action: InputAction, now: Instant) {
+    pub fn press(&mut self, key: Button, action: InputAction, now: Instant) {
         self.held = action.repeats().then_some(Held {
             key,
             action,
@@ -119,7 +232,7 @@ impl KeyRepeat {
         });
     }
 
-    pub fn release(&mut self, key: Key) {
+    pub fn release(&mut self, key: Button) {
         if self.held.is_some_and(|h| h.key == key) {
             self.held = None;
         }
@@ -169,10 +282,88 @@ mod tests {
     }
 
     #[test]
+    fn every_source_navigates_the_same() {
+        let dirs = [InputAction::Up, InputAction::Down, InputAction::Left, InputAction::Right];
+        let keys = [Key::Up, Key::Down, Key::Left, Key::Right];
+        let pads =
+            [PadButton::DPadUp, PadButton::DPadDown, PadButton::DPadLeft, PadButton::DPadRight];
+        let sticks =
+            [PadButton::StickUp, PadButton::StickDown, PadButton::StickLeft, PadButton::StickRight];
+        let cec = [CecKey::Up, CecKey::Down, CecKey::Left, CecKey::Right];
+        for i in 0..4 {
+            assert_eq!(map_key(keys[i], Modifiers::default()), Some(dirs[i]));
+            assert_eq!(map_pad(pads[i]), Some(dirs[i]));
+            assert_eq!(map_pad(sticks[i]), Some(dirs[i]));
+            assert_eq!(map_cec(cec[i]), Some(dirs[i]));
+        }
+        for (k, p, c) in [
+            (Key::Enter, PadButton::South, CecKey::Select),
+            (Key::Escape, PadButton::East, CecKey::Back),
+        ] {
+            assert_eq!(map_key(k, Modifiers::default()), map_pad(p));
+            assert_eq!(map_pad(p), map_cec(c));
+        }
+    }
+
+    #[test]
+    fn events_normalize_and_os_repeat_is_dropped() {
+        let down = PlatformEvent::PadDown { button: PadButton::South };
+        assert_eq!(
+            from_event(&down, false),
+            Some(Input::Press {
+                button: Button::Pad(PadButton::South),
+                action: Some(InputAction::Select)
+            })
+        );
+        let os_repeat =
+            PlatformEvent::KeyDown { key: Key::Up, mods: Modifiers::default(), repeat: true };
+        assert_eq!(from_event(&os_repeat, false), None);
+        assert_eq!(
+            from_event(&PlatformEvent::CecUp { key: CecKey::Up }, false),
+            Some(Input::Release(Button::Cec(CecKey::Up)))
+        );
+        assert_eq!(from_event(&PlatformEvent::Exposed, false), None);
+    }
+
+    #[test]
+    fn text_mode_types_instead_of_shortcuts() {
+        let key = |k| PlatformEvent::KeyDown { key: k, mods: Modifiers::default(), repeat: false };
+        let action = |ev: &PlatformEvent, text| match from_event(ev, text) {
+            Some(Input::Press { action, .. }) => action,
+            other => panic!("{other:?}"),
+        };
+        // 'c' is Menu normally; while typing it only types.
+        assert_eq!(action(&key(Key::Char('c')), false), Some(InputAction::Menu));
+        assert_eq!(action(&key(Key::Char('c')), true), None);
+        assert_eq!(action(&key(Key::Backspace), true), Some(InputAction::Backspace));
+        assert_eq!(action(&key(Key::Backspace), false), Some(InputAction::Back));
+        assert_eq!(action(&key(Key::Enter), true), Some(InputAction::Submit));
+        assert_eq!(action(&key(Key::Escape), true), Some(InputAction::Back));
+        assert_eq!(action(&key(Key::Down), true), Some(InputAction::Down));
+        assert_eq!(from_event(&PlatformEvent::Text { ch: ':' }, true), Some(Input::Typed(':')));
+        assert_eq!(from_event(&PlatformEvent::Text { ch: ':' }, false), None);
+        // Remote and gamepad are unaffected.
+        let ok = PlatformEvent::CecDown { key: CecKey::Select };
+        assert_eq!(action(&ok, true), Some(InputAction::Select));
+    }
+
+    #[test]
+    fn repeat_works_for_any_source() {
+        let t0 = Instant::now();
+        let mut r = KeyRepeat::default();
+        r.press(Button::Cec(CecKey::Down), InputAction::Down, t0);
+        assert_eq!(r.tick(t0 + ms(350)), Some(InputAction::Down));
+        r.release(Button::Key(Key::Down));
+        assert!(r.next_deadline().is_some(), "a different source's release does not stop it");
+        r.release(Button::Cec(CecKey::Down));
+        assert_eq!(r.next_deadline(), None);
+    }
+
+    #[test]
     fn repeat_timing() {
         let t0 = Instant::now();
         let mut r = KeyRepeat::default();
-        r.press(Key::Down, InputAction::Down, t0);
+        r.press(Button::Key(Key::Down), InputAction::Down, t0);
         assert_eq!(r.tick(t0 + ms(100)), None);
         assert_eq!(r.next_deadline(), Some(t0 + ms(350)));
         assert_eq!(r.tick(t0 + ms(350)), Some(InputAction::Down));
@@ -181,7 +372,7 @@ mod tests {
         // Accelerated after 1.5 s.
         assert_eq!(r.tick(t0 + ms(1600)), Some(InputAction::Down));
         assert_eq!(r.next_deadline(), Some(t0 + ms(1640)));
-        r.release(Key::Down);
+        r.release(Button::Key(Key::Down));
         assert_eq!(r.next_deadline(), None);
     }
 
@@ -189,10 +380,10 @@ mod tests {
     fn non_repeating_and_other_key_release() {
         let t0 = Instant::now();
         let mut r = KeyRepeat::default();
-        r.press(Key::Enter, InputAction::Select, t0);
+        r.press(Button::Key(Key::Enter), InputAction::Select, t0);
         assert_eq!(r.next_deadline(), None);
-        r.press(Key::Up, InputAction::Up, t0);
-        r.release(Key::Down);
+        r.press(Button::Key(Key::Up), InputAction::Up, t0);
+        r.release(Button::Key(Key::Down));
         assert!(r.next_deadline().is_some());
     }
 }

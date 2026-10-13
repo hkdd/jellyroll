@@ -8,7 +8,9 @@
 //! The app is generic over `P: Platform` (static dispatch in the render path).
 
 pub mod alloc_counter;
+pub mod cec;
 pub mod gl;
+pub mod pad;
 mod sdl;
 
 use std::time::Duration;
@@ -18,7 +20,7 @@ pub use sdl::{SdlOptions, SdlPlatform, print_sdl_diagnostics};
 
 /// Logical keys the app cares about. Platform keycodes are mapped here so the
 /// app never sees SDL types.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Key {
     Up,
     Down,
@@ -46,6 +48,107 @@ pub enum Key {
     VolumeUp,
     VolumeDown,
     Mute,
+}
+
+/// Gamepad buttons by position (SDL's layout: South is the bottom face
+/// button, A on Xbox pads). The left stick and the triggers are turned
+/// into buttons by [`pad::AnalogState`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum PadButton {
+    South,
+    East,
+    West,
+    North,
+    Back,
+    Guide,
+    Start,
+    LeftShoulder,
+    RightShoulder,
+    LeftTrigger,
+    RightTrigger,
+    DPadUp,
+    DPadDown,
+    DPadLeft,
+    DPadRight,
+    StickUp,
+    StickDown,
+    StickLeft,
+    StickRight,
+}
+
+/// HDMI-CEC remote keys ("UI command" codes, CEC 1.4 / linux/cec.h).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CecKey {
+    Select,
+    Up,
+    Down,
+    Left,
+    Right,
+    RootMenu,
+    SetupMenu,
+    ContentsMenu,
+    Back,
+    Number(u8),
+    Enter,
+    ChannelUp,
+    ChannelDown,
+    Info,
+    Guide,
+    VolumeUp,
+    VolumeDown,
+    Mute,
+    Play,
+    Stop,
+    Pause,
+    Rewind,
+    FastForward,
+    SkipForward,
+    SkipBackward,
+    PlayPause,
+    Blue,
+    Red,
+    Green,
+    Yellow,
+    Other(u8),
+}
+
+impl CecKey {
+    pub fn from_ui_command(code: u8) -> Self {
+        use CecKey as K;
+        match code {
+            0x00 => K::Select,
+            0x01 => K::Up,
+            0x02 => K::Down,
+            0x03 => K::Left,
+            0x04 => K::Right,
+            0x09 => K::RootMenu,
+            0x0a => K::SetupMenu,
+            0x0b => K::ContentsMenu,
+            0x0d => K::Back,
+            0x20..=0x29 => K::Number(code - 0x20),
+            0x2b => K::Enter,
+            0x30 => K::ChannelUp,
+            0x31 => K::ChannelDown,
+            0x35 => K::Info,
+            0x53 => K::Guide,
+            0x41 => K::VolumeUp,
+            0x42 => K::VolumeDown,
+            0x43 => K::Mute,
+            0x44 | 0x60 => K::Play,
+            0x45 | 0x64 => K::Stop,
+            0x46 => K::Pause,
+            0x48 => K::Rewind,
+            0x49 => K::FastForward,
+            0x4b => K::SkipForward,
+            0x4c => K::SkipBackward,
+            0x61 => K::PlayPause,
+            0x71 => K::Blue,
+            0x72 => K::Red,
+            0x73 => K::Green,
+            0x74 => K::Yellow,
+            other => K::Other(other),
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -78,6 +181,30 @@ pub enum PlatformEvent {
     Exposed,
     /// Mode or connector changed; refresh rate may differ.
     DisplayChanged,
+    /// Another thread asked the render loop to wake up (see
+    /// [`Platform::waker`]), e.g. mpv has events or a new video frame.
+    Wake,
+    /// A typed character, with the keyboard layout and Shift applied. Only
+    /// sent while text input is on ([`Platform::set_text_input`]).
+    Text {
+        ch: char,
+    },
+    PadDown {
+        button: PadButton,
+    },
+    PadUp {
+        button: PadButton,
+    },
+    /// CEC key pressed. Repeated "pressed" messages while held are folded
+    /// into one press; release comes from "released" or a hold timeout.
+    CecDown {
+        key: CecKey,
+    },
+    CecUp {
+        key: CecKey,
+    },
+    /// The TV asked all devices to go to standby (spec 5.4: pause playback).
+    CecStandby,
 }
 
 #[derive(Clone, Debug)]
@@ -105,6 +232,12 @@ pub struct PlatformInfo {
 
 pub trait Platform {
     fn gl(&self) -> &Gl;
+    /// Resolves a GL/EGL symbol for the current context (null if missing).
+    /// Used by Skia (and later mpv) to load their own entry points.
+    fn gl_proc_address(&self, name: &str) -> *const std::ffi::c_void;
+    /// An owned GL/EGL symbol resolver usable for the life of the process
+    /// (mpv keeps its loader).
+    fn gl_loader(&self) -> Box<dyn Fn(&str) -> *const std::ffi::c_void>;
     fn info(&self) -> &PlatformInfo;
     /// Drawable size in pixels.
     fn framebuffer_size(&self) -> (u32, u32);
@@ -119,4 +252,16 @@ pub trait Platform {
     fn wait_events(&mut self, timeout: Duration, out: &mut Vec<PlatformEvent>);
     /// Presents the back buffer. With swap interval 1 this paces to vblank.
     fn swap(&mut self);
+    /// A thread-safe handle that makes `wait_events` return with
+    /// [`PlatformEvent::Wake`]. Cheap to call from any thread, including
+    /// C callbacks; it only queues an event.
+    fn waker(&self) -> std::sync::Arc<dyn Fn() + Send + Sync>;
+
+    /// Starts gamepad and HDMI-CEC support. Called once, after the first
+    /// frame, so their setup never delays it (spec 2: first frame < 500 ms).
+    fn start_input_devices(&mut self);
+
+    /// Turns typed-character events ([`PlatformEvent::Text`]) on or off,
+    /// for text fields.
+    fn set_text_input(&mut self, on: bool);
 }

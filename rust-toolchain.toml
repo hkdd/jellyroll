@@ -1,0 +1,7 @@
+# Pinned so local builds, the HTPC and CI use the same compiler and lints.
+# New Rust releases add clippy lints, and CI runs clippy with -D warnings.
+# Bump deliberately (and record it in docs/VERSIONS.md).
+[toolchain]
+channel = "1.99"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

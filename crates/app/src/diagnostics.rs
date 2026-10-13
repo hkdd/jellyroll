@@ -23,10 +23,33 @@ fn list_dir(path: &str, prefix: &str) -> Vec<String> {
 }
 
 pub fn print(opts: &SdlOptions) -> ExitCode {
+    // Read-only: never claim the CEC bus or wake the TV from diagnostics.
+    let cec_device = opts.cec.as_ref().and_then(|c| c.device.clone());
+    let opts = &SdlOptions { cec: None, ..opts.clone() };
     println!("jellyroll: {}", env!("CARGO_PKG_VERSION"));
     println!("kernel: {}", read_trim("/proc/sys/kernel/osrelease").unwrap_or_default());
     println!("dri_devices: {}", list_dir("/dev/dri", "").join(", "));
     println!("cec_devices: {}", list_dir("/dev", "cec").join(", "));
+    match jellyroll_platform::cec::probe(cec_device.as_deref()) {
+        Ok(i) => {
+            println!("cec.device: {} ({}, {})", i.device, i.driver, i.name);
+            let pa = i.physical_address.map(jellyroll_platform::cec::fmt_physical_address);
+            println!(
+                "cec.physical_address: {}",
+                pa.as_deref().unwrap_or("none (TV off or not connected?)")
+            );
+            match i.logical_address {
+                Some(la) => println!("cec.logical_address: {la}"),
+                None => println!("cec.logical_address: none (claimed when jellyroll runs)"),
+            }
+        }
+        Err(e) => println!("cec: {e}"),
+    }
+    let input = crate::input_access::scan(std::path::Path::new("/dev/input"), false);
+    println!("input_devices: {} readable of {}", input.readable, input.devices);
+    if input.blocked() {
+        println!("input_warning: no access; {}", crate::input_access::REMEDY);
+    }
     for var in [
         "XDG_SESSION_TYPE",
         "XDG_SEAT",
@@ -38,6 +61,22 @@ pub fn print(opts: &SdlOptions) -> ExitCode {
         if let Ok(v) = std::env::var(var) {
             println!("env.{var}: {v}");
         }
+    }
+    let (major, minor) = jellyroll_video::client_api_version();
+    println!("mpv.client_api: {major}.{minor}");
+    println!("video.hwdec_order: {}", jellyroll_video::default_hwdec());
+    println!("video.hwdec_interop: {}", jellyroll_video::default_hwdec_interop());
+    match jellyroll_video::va::probe() {
+        Ok(caps) => {
+            println!("vaapi.device: {}", caps.device);
+            println!("vaapi.driver: {}", caps.driver);
+            let names = |v: Vec<jellyroll_video::va::Codec>| {
+                v.iter().map(|c| c.name()).collect::<Vec<_>>().join(", ")
+            };
+            println!("vaapi.decode: {}", names(caps.supported()));
+            println!("vaapi.no_decode: {}", names(caps.unsupported()));
+        }
+        Err(e) => println!("vaapi.error: {e}"),
     }
     if let Err(e) = jellyroll_platform::print_sdl_diagnostics(opts) {
         println!("sdl.error: {e}");
@@ -56,6 +95,14 @@ pub fn print(opts: &SdlOptions) -> ExitCode {
             println!("gl.swap_interval: {}", i.swap_interval);
             let (w, h) = p.framebuffer_size();
             println!("framebuffer: {w}x{h} @ {:.3} Hz", p.refresh_hz());
+            let skia = jellyroll_render::skia::SkiaRenderer::new(
+                |name| p.gl_proc_address(name),
+                Default::default(),
+            );
+            match skia {
+                Ok(_) => println!("renderer: skia ok"),
+                Err(e) => println!("renderer.error: {e}"),
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {

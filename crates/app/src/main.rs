@@ -6,19 +6,25 @@ mod anim;
 mod args;
 mod config;
 mod diagnostics;
-mod draw;
+mod focus;
 mod frame_loop;
+mod home;
 mod hud;
 mod input;
+mod input_access;
 mod logging;
+mod net;
+mod osd;
 mod perf;
+mod playback;
+mod posters;
 mod scene;
 mod systemd;
 
 use std::process::ExitCode;
 use std::time::Instant;
 
-use jellyroll_platform::{SdlOptions, SdlPlatform};
+use jellyroll_platform::{Platform, SdlOptions, SdlPlatform};
 
 #[global_allocator]
 static ALLOC: jellyroll_platform::alloc_counter::CountingAlloc =
@@ -59,12 +65,56 @@ fn main() -> ExitCode {
         dev_window: opts.dev,
         double_buffer: opts.double_buffer,
         no_vsync: opts.no_vsync,
+        window_size: opts.window,
+        cec: loaded.config.input.cec.then(|| jellyroll_platform::cec::CecOptions {
+            device: (!loaded.config.input.cec_device.is_empty())
+                .then(|| loaded.config.input.cec_device.clone().into()),
+            wake_tv: loaded.config.input.cec_wake_tv,
+            ..Default::default()
+        }),
     };
     if opts.print_diagnostics {
         return diagnostics::print(&sdl_opts);
     }
 
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), dev = opts.dev, "starting");
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        dev = opts.dev,
+        ms = process_start.elapsed().as_millis() as u64,
+        "starting"
+    );
+
+    // On KMSDRM, SDL reads input straight from /dev/input. Without access the
+    // screen works but nothing responds, so say so instead of hanging there.
+    // In --dev the compositor delivers input, so the check does not apply.
+    let mut notice = frame_loop::config_notice(loaded.warnings.len());
+    let t_scan = std::time::Instant::now();
+    let access = input_access::scan(std::path::Path::new("/dev/input"), true);
+    tracing::info!(
+        ms = process_start.elapsed().as_millis() as u64,
+        scan_ms = t_scan.elapsed().as_millis() as u64,
+        devices = access.devices,
+        "input access checked"
+    );
+    if !opts.dev && access.blocked() {
+        let msg = format!(
+            "cannot read any of the {} input devices in /dev/input, so keyboard, \
+             remote and gamepad will not work: {}",
+            access.devices,
+            input_access::REMEDY
+        );
+        if std::env::var_os("NOTIFY_SOCKET").is_none() {
+            // Started by hand: refuse rather than take over the screen with
+            // no way to control (or quit) the app.
+            tracing::error!("{msg}");
+            eprintln!("jellyroll: {msg}");
+            return ExitCode::FAILURE;
+        }
+        // Under systemd: keep running and show the problem on screen.
+        tracing::error!("{msg}");
+        notice = "NO INPUT ACCESS: ADD THE SERVICE USER TO THE INPUT GROUP".into();
+    }
+
     let mut platform = match SdlPlatform::new(&sdl_opts) {
         Ok(p) => p,
         Err(e) => {
@@ -74,8 +124,40 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match frame_loop::run(&mut platform, &opts, &loaded, process_start) {
+    let skia_opts = jellyroll_render::skia::SkiaOptions {
+        render_scale: loaded.config.display.ui_render_scale,
+        ..Default::default()
+    };
+    tracing::info!(ms = process_start.elapsed().as_millis() as u64, "platform ready");
+    let mut renderer = match jellyroll_render::skia::SkiaRenderer::new(
+        |name| platform.gl_proc_address(name),
+        skia_opts,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("renderer init failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    tracing::info!(ms = process_start.elapsed().as_millis() as u64, "renderer ready");
+    let c = &loaded.config;
+    let net = net::NetConfig {
+        server_url: c.server.url.clone(),
+        ca_file: (!c.server.ca_file.is_empty()).then(|| c.server.ca_file.clone().into()),
+        image_cache_bytes: c.cache.images_mb << 20,
+        data_dir: net::store::data_dir(),
+        cache_dir: net::store::cache_dir(),
+    };
+    match frame_loop::run(
+        &mut platform,
+        &mut renderer,
+        &opts,
+        &loaded,
+        Some(net),
+        &notice,
+        process_start,
+    ) {
         frame_loop::Exit::Quit | frame_loop::Exit::BenchPassed => ExitCode::SUCCESS,
-        frame_loop::Exit::BenchFailed => ExitCode::FAILURE,
+        frame_loop::Exit::BenchFailed | frame_loop::Exit::Error => ExitCode::FAILURE,
     }
 }

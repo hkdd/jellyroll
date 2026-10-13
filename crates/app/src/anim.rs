@@ -1,4 +1,6 @@
 //! Animation primitives. Time-based (not frame-count), short fixed durations.
+//! There is one animation clock: the render loop samples `Instant::now()` once
+//! per frame and every animation in that frame reads that same timestamp.
 
 use std::time::{Duration, Instant};
 
@@ -36,6 +38,11 @@ impl Tween {
         let t =
             now.saturating_duration_since(self.start).as_secs_f32() / self.duration.as_secs_f32();
         self.from + (self.to - self.from) * ease_out_cubic(t)
+    }
+
+    /// Where the tween is heading (its final value).
+    pub fn target(&self) -> f32 {
+        self.to
     }
 
     pub fn is_animating(&self, now: Instant) -> bool {

@@ -9,7 +9,8 @@ use sdl3::keyboard::{Keycode, Mod};
 use sdl3::video::{GLContext, GLProfile, SwapInterval, Window};
 
 use crate::gl::Gl;
-use crate::{Key, ModeInfo, Modifiers, Platform, PlatformEvent, PlatformInfo};
+use crate::pad::{Analog, AnalogState};
+use crate::{Key, ModeInfo, Modifiers, PadButton, Platform, PlatformEvent, PlatformInfo};
 
 #[derive(Clone, Debug, Default)]
 pub struct SdlOptions {
@@ -19,17 +20,101 @@ pub struct SdlOptions {
     pub double_buffer: bool,
     /// Disable vsync (benchmarking only).
     pub no_vsync: bool,
+    /// Dev window size in pixels (default 1280x720).
+    pub window_size: Option<(u32, u32)>,
+    /// HDMI-CEC remote input; `None` disables it.
+    pub cec: Option<crate::cec::CecOptions>,
+}
+
+/// An open gamepad and its analog-to-button state.
+struct Pad {
+    id: sdl3::joystick::JoystickId,
+    _pad: sdl3::gamepad::Gamepad,
+    analog: AnalogState,
+}
+
+/// Gamepad hotplug and input. Separate from the window so it can be tested
+/// with SDL's virtual gamepads.
+pub(crate) struct Gamepads {
+    sub: sdl3::GamepadSubsystem,
+    pads: Vec<Pad>,
+}
+
+impl Gamepads {
+    pub(crate) fn new(sub: sdl3::GamepadSubsystem) -> Self {
+        Self { sub, pads: Vec::new() }
+    }
+
+    /// Handles gamepad events; returns the event back if it is not one.
+    pub(crate) fn handle(&mut self, ev: Event, out: &mut Vec<PlatformEvent>) -> Option<Event> {
+        match ev {
+            Event::GamepadAdded { which, .. } => {
+                if self.pads.iter().any(|p| p.id == which) {
+                    return None;
+                }
+                match self.sub.open(which) {
+                    Ok(pad) => {
+                        let name = pad.name().unwrap_or_else(|| "unknown".into());
+                        tracing::info!(name, "gamepad connected");
+                        self.pads.push(Pad {
+                            id: which,
+                            _pad: pad,
+                            analog: AnalogState::default(),
+                        });
+                    }
+                    Err(e) => tracing::warn!("cannot open gamepad: {e}"),
+                }
+            }
+            Event::GamepadRemoved { which, .. } => {
+                if let Some(i) = self.pads.iter().position(|p| p.id == which) {
+                    self.pads.swap_remove(i);
+                    tracing::info!("gamepad disconnected");
+                }
+            }
+            Event::GamepadButtonDown { button, .. } => {
+                if let Some(button) = map_pad_button(button) {
+                    out.push(PlatformEvent::PadDown { button });
+                }
+            }
+            Event::GamepadButtonUp { button, .. } => {
+                if let Some(button) = map_pad_button(button) {
+                    out.push(PlatformEvent::PadUp { button });
+                }
+            }
+            Event::GamepadAxisMotion { which, axis, value, .. } => {
+                let (axis, v) = map_analog(axis, value)?;
+                let pad = self.pads.iter_mut().find(|p| p.id == which)?;
+                for (button, down) in pad.analog.update(axis, v).into_iter().flatten() {
+                    out.push(if down {
+                        PlatformEvent::PadDown { button }
+                    } else {
+                        PlatformEvent::PadUp { button }
+                    });
+                }
+            }
+            other => return Some(other),
+        }
+        None
+    }
 }
 
 pub struct SdlPlatform {
     // Drop order matters: context before window before subsystems.
     _gl_ctx: GLContext,
     window: Window,
-    _video: sdl3::VideoSubsystem,
+    video: sdl3::VideoSubsystem,
+    gamepads: Option<Gamepads>,
+    cec: Option<(crate::cec::Cec, std::sync::mpsc::Receiver<PlatformEvent>)>,
+    /// Gamepad/CEC setup waiting for `start_input_devices` (after the
+    /// first frame, so it doesn't delay it).
+    deferred_cec: Option<crate::cec::CecOptions>,
+    deferred_started: bool,
     pump: sdl3::EventPump,
     _sdl: sdl3::Sdl,
     gl: Gl,
     info: PlatformInfo,
+    /// SDL user event type used by the waker.
+    wake_type: u32,
 }
 
 fn mode_info(m: &sdl3::video::DisplayMode) -> ModeInfo {
@@ -58,8 +143,15 @@ fn init(opts: &SdlOptions) -> Result<(sdl3::Sdl, sdl3::VideoSubsystem), String> 
     }
     // We own the whole screen; never let SDL blank it.
     sdl3::hint::set("SDL_VIDEO_ALLOW_SCREENSAVER", "0");
+    let t0 = std::time::Instant::now();
     let sdl = sdl3::init().map_err(|e| format!("SDL_Init: {e}"))?;
+    let t1 = std::time::Instant::now();
     let video = sdl.video().map_err(|e| format!("SDL video init: {e}"))?;
+    tracing::info!(
+        core_ms = (t1 - t0).as_millis() as u64,
+        video_ms = t1.elapsed().as_millis() as u64,
+        "SDL init timing"
+    );
     Ok((sdl, video))
 }
 
@@ -88,7 +180,8 @@ impl SdlPlatform {
             attr.set_blue_size(8);
 
             let mut builder = if opts.dev_window {
-                let mut b = video.window("jellyroll (dev)", 1280, 720);
+                let (w, h) = opts.window_size.unwrap_or((1280, 720));
+                let mut b = video.window("jellyroll (dev)", w, h);
                 b.resizable();
                 b
             } else {
@@ -159,7 +252,25 @@ impl SdlPlatform {
                 "GL context ready"
             );
             let pump = sdl.event_pump().map_err(|e| e.to_string())?;
-            return Ok(Self { _gl_ctx: ctx, window, _video: video, pump, _sdl: sdl, gl, info });
+            // SAFETY: SDL is initialized; registers one user event type.
+            let wake_type = unsafe { sdl3::sys::events::SDL_RegisterEvents(1) };
+            if wake_type == 0 {
+                return Err("SDL_RegisterEvents failed".into());
+            }
+            return Ok(Self {
+                _gl_ctx: ctx,
+                window,
+                video,
+                gamepads: None,
+                cec: None,
+                deferred_cec: opts.cec.clone(),
+                deferred_started: false,
+                pump,
+                _sdl: sdl,
+                gl,
+                info,
+                wake_type,
+            });
         }
         Err(format!("no usable GL context: {last_err}"))
     }
@@ -216,6 +327,60 @@ fn map_key(k: Keycode) -> Option<Key> {
     })
 }
 
+fn map_pad_button(b: sdl3::gamepad::Button) -> Option<PadButton> {
+    use sdl3::gamepad::Button as B;
+    Some(match b {
+        B::South => PadButton::South,
+        B::East => PadButton::East,
+        B::West => PadButton::West,
+        B::North => PadButton::North,
+        B::Back => PadButton::Back,
+        B::Guide => PadButton::Guide,
+        B::Start => PadButton::Start,
+        B::LeftShoulder => PadButton::LeftShoulder,
+        B::RightShoulder => PadButton::RightShoulder,
+        B::DPadUp => PadButton::DPadUp,
+        B::DPadDown => PadButton::DPadDown,
+        B::DPadLeft => PadButton::DPadLeft,
+        B::DPadRight => PadButton::DPadRight,
+        _ => return None,
+    })
+}
+
+fn map_analog(a: sdl3::gamepad::Axis, v: i16) -> Option<(Analog, f32)> {
+    use sdl3::gamepad::Axis as A;
+    let n = (v as f32 / 32767.0).clamp(-1.0, 1.0);
+    Some(match a {
+        A::LeftX => (Analog::LeftX, n),
+        A::LeftY => (Analog::LeftY, n),
+        A::TriggerLeft => (Analog::LeftTrigger, n),
+        A::TriggerRight => (Analog::RightTrigger, n),
+        _ => return None,
+    })
+}
+
+impl SdlPlatform {
+    /// Converts one SDL event, updating gamepad state.
+    fn handle(&mut self, ev: Event, out: &mut Vec<PlatformEvent>) {
+        let ev = match self.gamepads.as_mut() {
+            Some(g) => match g.handle(ev, out) {
+                Some(ev) => ev,
+                None => return,
+            },
+            None => ev,
+        };
+        if let Event::TextInput { text, .. } = &ev {
+            out.extend(
+                text.chars().filter(|c| !c.is_control()).map(|ch| PlatformEvent::Text { ch }),
+            );
+            return;
+        }
+        if let Some(e) = convert(ev, &self.window, self.wake_type) {
+            out.push(e);
+        }
+    }
+}
+
 fn map_mods(m: Mod) -> Modifiers {
     Modifiers {
         ctrl: m.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD),
@@ -224,8 +389,9 @@ fn map_mods(m: Mod) -> Modifiers {
     }
 }
 
-fn convert(ev: Event, window: &Window) -> Option<PlatformEvent> {
+fn convert(ev: Event, window: &Window, wake_type: u32) -> Option<PlatformEvent> {
     Some(match ev {
+        Event::User { type_, .. } if type_ == wake_type => PlatformEvent::Wake,
         Event::Quit { .. } => PlatformEvent::Quit,
         Event::KeyDown { keycode: Some(k), keymod, repeat, .. } => {
             PlatformEvent::KeyDown { key: map_key(k)?, mods: map_mods(keymod), repeat }
@@ -251,6 +417,25 @@ fn convert(ev: Event, window: &Window) -> Option<PlatformEvent> {
 impl Platform for SdlPlatform {
     fn gl(&self) -> &Gl {
         &self.gl
+    }
+
+    fn gl_loader(&self) -> Box<dyn Fn(&str) -> *const c_void> {
+        Box::new(|name: &str| {
+            let Ok(name) = std::ffi::CString::new(name) else { return std::ptr::null() };
+            // SAFETY: SDL video is initialized for the process lifetime of
+            // the platform; SDL_GL_GetProcAddress accepts any name.
+            match unsafe { sdl3::sys::video::SDL_GL_GetProcAddress(name.as_ptr()) } {
+                Some(f) => f as *const c_void,
+                None => std::ptr::null(),
+            }
+        })
+    }
+
+    fn gl_proc_address(&self, name: &str) -> *const c_void {
+        match self.video.gl_get_proc_address(name) {
+            Some(f) => f as *const c_void,
+            None => std::ptr::null(),
+        }
     }
 
     fn info(&self) -> &PlatformInfo {
@@ -280,23 +465,74 @@ impl Platform for SdlPlatform {
 
     fn poll_events(&mut self, out: &mut Vec<PlatformEvent>) {
         while let Some(ev) = self.pump.poll_event() {
-            if let Some(e) = convert(ev, &self.window) {
-                out.push(e);
-            }
+            self.handle(ev, out);
+        }
+        if let Some((_, rx)) = &self.cec {
+            out.extend(rx.try_iter());
         }
     }
 
     fn wait_events(&mut self, timeout: Duration, out: &mut Vec<PlatformEvent>) {
-        if let Some(ev) = self.pump.wait_event_timeout(timeout)
-            && let Some(e) = convert(ev, &self.window)
-        {
-            out.push(e);
+        if let Some(ev) = self.pump.wait_event_timeout(timeout) {
+            self.handle(ev, out);
         }
         self.poll_events(out);
     }
 
     fn swap(&mut self) {
         self.window.gl_swap_window();
+    }
+
+    fn start_input_devices(&mut self) {
+        if std::mem::replace(&mut self.deferred_started, true) {
+            return;
+        }
+        let t0 = std::time::Instant::now();
+        // Gamepads are optional: a missing subsystem only disables them.
+        // Pads already plugged in arrive as hotplug events.
+        self.gamepads = match self._sdl.gamepad() {
+            Ok(g) => Some(Gamepads::new(g)),
+            Err(e) => {
+                tracing::warn!("gamepad support unavailable: {e}");
+                None
+            }
+        };
+        let t1 = std::time::Instant::now();
+        if let Some(cec_opts) = self.deferred_cec.take() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            match crate::cec::start(cec_opts, tx, self.waker()) {
+                Ok(cec) => {
+                    tracing::info!(device = %cec.info.device, driver = %cec.info.driver, "HDMI-CEC enabled");
+                    self.cec = Some((cec, rx));
+                }
+                Err(e) => tracing::info!("HDMI-CEC not available: {e}"),
+            }
+        }
+        tracing::info!(
+            gamepad_ms = (t1 - t0).as_millis() as u64,
+            cec_ms = t1.elapsed().as_millis() as u64,
+            "input devices started"
+        );
+    }
+
+    fn set_text_input(&mut self, on: bool) {
+        let ti = self.video.text_input();
+        if on != ti.is_active(&self.window) {
+            if on { ti.start(&self.window) } else { ti.stop(&self.window) }
+        }
+    }
+
+    fn waker(&self) -> std::sync::Arc<dyn Fn() + Send + Sync> {
+        let wake_type = self.wake_type;
+        std::sync::Arc::new(move || {
+            // SAFETY: SDL_PushEvent is documented thread-safe; the event is
+            // fully initialized (zeroed, then type set) and copied by SDL.
+            unsafe {
+                let mut ev: sdl3::sys::events::SDL_Event = std::mem::zeroed();
+                ev.r#type = wake_type;
+                sdl3::sys::events::SDL_PushEvent(&mut ev);
+            }
+        })
     }
 }
 
@@ -306,8 +542,19 @@ pub fn print_sdl_diagnostics(opts: &SdlOptions) -> Result<(), String> {
     println!("sdl.version: {}", sdl_version());
     let drivers: Vec<&str> = sdl3::video::drivers().collect();
     println!("sdl.video_drivers: {}", drivers.join(", "));
-    let (_sdl, video) = init(opts)?;
+    let (sdl, video) = init(opts)?;
     println!("sdl.current_video_driver: {}", video.current_video_driver());
+    match sdl.gamepad() {
+        Ok(g) => {
+            let ids = g.gamepads().unwrap_or_default();
+            println!("gamepads: {}", ids.len());
+            for id in ids {
+                let name = g.name_for_id(id).unwrap_or_else(|_| "unknown".into());
+                println!("  gamepad: {name}");
+            }
+        }
+        Err(e) => println!("gamepads.error: {e}"),
+    }
     let displays = video.displays().map_err(|e| e.to_string())?;
     for d in displays {
         let name = d.get_name().unwrap_or_default();
@@ -328,4 +575,73 @@ pub fn print_sdl_diagnostics(opts: &SdlOptions) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Drives the real SDL gamepad path with a virtual gamepad: hotplug,
+    /// a face button, and the left stick acting as a D-pad.
+    #[test]
+    fn virtual_gamepad_end_to_end() {
+        let sdl = sdl3::init().expect("SDL_Init");
+        let mut pads = Gamepads::new(sdl.gamepad().expect("gamepad subsystem"));
+        let mut pump = sdl.event_pump().expect("event pump");
+
+        let name = c"jellyroll test pad";
+        let mut desc = sdl3::sys::joystick::SDL_VirtualJoystickDesc::new();
+        desc.r#type = sdl3::sys::joystick::SDL_JOYSTICK_TYPE_GAMEPAD.0 as u16;
+        desc.naxes = 6;
+        desc.nbuttons = 15;
+        desc.name = name.as_ptr();
+        // SAFETY: desc is fully initialized (SDL_INIT_INTERFACE via new());
+        // the name outlives the joystick.
+        let id = unsafe { sdl3::sys::joystick::SDL_AttachVirtualJoystick(&desc) };
+        assert_ne!(id.0, 0, "attach virtual joystick");
+        // SAFETY: id is a valid joystick instance; opened for setting state.
+        let joy = unsafe { sdl3::sys::joystick::SDL_OpenJoystick(id) };
+        assert!(!joy.is_null());
+
+        let mut out = Vec::new();
+        let mut pump_all = |pads: &mut Gamepads, out: &mut Vec<PlatformEvent>| {
+            for _ in 0..10 {
+                // SAFETY: SDL initialized; processes virtual joystick state.
+                unsafe { sdl3::sys::joystick::SDL_UpdateJoysticks() };
+                while let Some(ev) = pump.poll_event() {
+                    let _ = pads.handle(ev, out);
+                }
+            }
+        };
+        pump_all(&mut pads, &mut out);
+        assert_eq!(pads.pads.len(), 1, "virtual gamepad was opened on hotplug");
+
+        // SAFETY: joy is open; button 0 is SDL_GAMEPAD_BUTTON_SOUTH and axis
+        // 0 is SDL_GAMEPAD_AXIS_LEFTX for virtual gamepads.
+        unsafe {
+            sdl3::sys::joystick::SDL_SetJoystickVirtualButton(joy, 0, true);
+        }
+        pump_all(&mut pads, &mut out);
+        unsafe {
+            sdl3::sys::joystick::SDL_SetJoystickVirtualButton(joy, 0, false);
+        }
+        pump_all(&mut pads, &mut out);
+        unsafe {
+            sdl3::sys::joystick::SDL_SetJoystickVirtualAxis(joy, 0, 30000);
+        }
+        pump_all(&mut pads, &mut out);
+        assert_eq!(
+            out,
+            vec![
+                PlatformEvent::PadDown { button: PadButton::South },
+                PlatformEvent::PadUp { button: PadButton::South },
+                PlatformEvent::PadDown { button: PadButton::StickRight },
+            ]
+        );
+        // SAFETY: closes what we opened.
+        unsafe {
+            sdl3::sys::joystick::SDL_CloseJoystick(joy);
+            sdl3::sys::joystick::SDL_DetachVirtualJoystick(id);
+        }
+    }
 }

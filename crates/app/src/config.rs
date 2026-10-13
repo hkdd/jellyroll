@@ -19,9 +19,37 @@ use crate::input::RepeatConfig;
 #[serde(default)]
 pub struct Config {
     pub log: Log,
+    pub server: Server,
     pub display: Display,
     pub input: Input,
+    pub cache: Cache,
     pub debug: Debug,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Server {
+    /// Server address, e.g. "http://192.168.1.10:8096". Empty: the last
+    /// server signed in to, else the first one found on the LAN.
+    pub url: String,
+    /// PEM file with an extra CA or the server's self-signed certificate
+    /// (spec 12). Empty: system roots only.
+    pub ca_file: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Cache {
+    /// Disk cache for downloaded artwork (spec 9).
+    pub images_mb: u64,
+    /// GPU memory for artwork textures (spec 2: hard cap, LRU).
+    pub textures_mb: u64,
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Self { images_mb: 2048, textures_mb: 512 }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -38,11 +66,20 @@ pub struct Display {
     pub safe_area: f32,
     /// Double instead of triple buffering on KMSDRM.
     pub double_buffer: bool,
+    /// Render the UI at this fraction of the output resolution and upscale
+    /// (0.5 - 1.0), for weak GPUs (spec 6.4).
+    pub ui_render_scale: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Input {
+    /// Use an HDMI-CEC adapter (TV remote) when one is present.
+    pub cec: bool,
+    /// Turn the TV on and switch it to this input at startup.
+    pub cec_wake_tv: bool,
+    /// Specific CEC device, e.g. "/dev/cec0"; empty = first available.
+    pub cec_device: String,
     pub repeat_delay_ms: u64,
     pub repeat_interval_ms: u64,
     pub repeat_accelerate_after_ms: u64,
@@ -66,7 +103,11 @@ impl Default for Log {
 
 impl Default for Display {
     fn default() -> Self {
-        Self { safe_area: 0.025, double_buffer: false }
+        Self {
+            safe_area: crate::scene::DEFAULT_SAFE_AREA,
+            double_buffer: false,
+            ui_render_scale: 1.0,
+        }
     }
 }
 
@@ -74,6 +115,9 @@ impl Default for Input {
     fn default() -> Self {
         let r = RepeatConfig::default();
         Self {
+            cec: true,
+            cec_wake_tv: true,
+            cec_device: String::new(),
             repeat_delay_ms: r.initial_delay.as_millis() as u64,
             repeat_interval_ms: r.interval.as_millis() as u64,
             repeat_accelerate_after_ms: r.accelerate_after.as_millis() as u64,
@@ -202,6 +246,12 @@ fn validate(c: &mut Config, out: &mut Vec<String>) {
         c.display.safe_area = Display::default().safe_area;
     }
     clamp(&mut c.display.safe_area, 0.0, 0.1, "display.safe_area", out);
+    if c.display.ui_render_scale.is_nan() {
+        c.display.ui_render_scale = 1.0;
+    }
+    clamp(&mut c.display.ui_render_scale, 0.5, 1.0, "display.ui_render_scale", out);
+    clamp(&mut c.cache.images_mb, 64, 1 << 20, "cache.images_mb", out);
+    clamp(&mut c.cache.textures_mb, 64, 4096, "cache.textures_mb", out);
     let i = &mut c.input;
     clamp(&mut i.repeat_delay_ms, 50, 2000, "input.repeat_delay_ms", out);
     clamp(&mut i.repeat_interval_ms, 10, 1000, "input.repeat_interval_ms", out);
