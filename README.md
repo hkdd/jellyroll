@@ -19,8 +19,9 @@ and verified versions.
 | **M4** Input: keyboard, gamepad, HDMI-CEC; spatial focus graph; key repeat | **Done.** Keyboard verified on the HTPC; gamepad tested end to end with an SDL virtual pad. CEC is built and unit-tested, but the HTPC's DisplayPort-to-HDMI adapter doesn't carry CEC, so the TV remote waits for an adapter that does (`docs/DECISIONS.md` D29) |
 | **M5** Jellyfin client: discovery, Quick Connect, auth, home data, images with caching; mock server | **Done.** On the HTPC against a Jellyfin 12.2 server: real home screen, cached start in ~0.4 s, first frame 393 ms. See `docs/DECISIONS.md` |
 | **M6** Browsing: libraries (10k-item grids), detail pages, search, settings, password sign-in; play from the server | **Built.** On the HTPC: search and series pages verified; scroll benchmark 0 missed vsyncs, 0 allocating frames; native 4K over the CPU/GPU budgets on frames that load artwork (accepted, D44; 1080p upscaled in Settings). Rest of the walkthrough: `docs/M6-HARDWARE-CHECKLIST.md` |
-| **M7** Player UX: OSD, track menus, trickplay, skip segments, next-up, progress reporting, resume | **Built**, awaiting the HTPC checklist (`docs/M7-HARDWARE-CHECKLIST.md`) |
-| M8 to M10 | Not started |
+| **M7** Player UX: OSD, track menus, trickplay, skip segments, next-up, progress reporting, resume | **Done.** On the HTPC: movie and episode flows, resume points and watched state on the server, next-episode autoplay (D49) |
+| **M8** Display features: refresh-rate matching, audio passthrough, hotplug/TV standby, power menu | **Built**, awaiting the HTPC checklist (`docs/M8-HARDWARE-CHECKLIST.md`) |
+| M9, M10 | Not started |
 
 The app connects to your Jellyfin server and shows its home screen: My
 Media, Continue Watching, Next Up, the latest additions to each library and
@@ -35,6 +36,10 @@ from the resume point. The player shows chapters and trickplay previews
 while seeking, lets you pick audio and subtitle tracks, skips intros and
 credits, plays the next episode, and keeps the server's resume points and
 watched state current (even if the server is briefly unreachable).
+While a video plays, the TV runs at the refresh rate that fits it (24 Hz
+for films), and Settings chooses the audio output and passthrough to a
+receiver. Back on the home screen opens the power menu (restart, shut
+down).
 `--demo` still shows the synthetic M2 render benchmark.
 
 ## Layout
@@ -146,10 +151,10 @@ devices are readable. The service user gets the group from `install.sh`.
 | Flag | |
 |---|---|
 | `--config PATH` | Config file (default `~/.config/jellyroll/config.toml`) |
-| `--dev` | Desktop window instead of KMSDRM. Esc quits |
+| `--dev` | Desktop window instead of KMSDRM. Back on the home screen offers "Exit to console" |
 | `--window WxH` | Dev window size, e.g. `3840x2160` to check 4K layout |
 | `--hud` | Show the perf HUD (F3 toggles) |
-| `--allow-exit` | Esc/Back quits outside dev mode |
+| `--allow-exit` | The power menu (Back on the home screen) offers "Exit to console" outside dev mode |
 | `--double-buffer` | Double instead of triple buffering on KMSDRM |
 | `--demo` | Synthetic render benchmark scene instead of the Jellyfin home screen |
 | `--bench-pacing SECS` | Continuous animation. Prints CPU/GPU/present p50/p99, missed vsyncs and allocating frames, and exits 1 if a spec §2 budget is exceeded |

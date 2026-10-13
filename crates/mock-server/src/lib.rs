@@ -322,13 +322,13 @@ fn detail(item: &Value) -> Value {
     }
     v["MediaStreams"] = if n.is_multiple_of(2) {
         json!([
-            { "Type": "Video", "Codec": "hevc", "BitDepth": 10, "Width": 3840, "Height": 2160, "VideoRangeType": "HDR10", "Index": 0 },
+            { "Type": "Video", "Codec": "hevc", "BitDepth": 10, "Width": 3840, "Height": 2160, "VideoRangeType": "HDR10", "Index": 0, "AverageFrameRate": 23.976, "RealFrameRate": 23.976 },
             { "Type": "Audio", "Codec": "truehd", "Channels": 8, "IsDefault": true, "AudioSpatialFormat": "DolbyAtmos", "Index": 1 },
             { "Type": "Subtitle", "Codec": "subrip", "Index": 2 }
         ])
     } else {
         json!([
-            { "Type": "Video", "Codec": "h264", "BitDepth": 8, "Width": 1920, "Height": 1080, "VideoRangeType": "SDR", "Index": 0 },
+            { "Type": "Video", "Codec": "h264", "BitDepth": 8, "Width": 1920, "Height": 1080, "VideoRangeType": "SDR", "Index": 0, "AverageFrameRate": 25.0, "RealFrameRate": 50.0 },
             { "Type": "Audio", "Codec": "eac3", "Channels": 6, "IsDefault": true, "Index": 1 }
         ])
     };
@@ -347,7 +347,7 @@ fn playback_info(item: &Value) -> Value {
             "RunTimeTicks": item["RunTimeTicks"],
             "DefaultAudioStreamIndex": 1, "DefaultSubtitleStreamIndex": -1,
             "MediaStreams": [
-                { "Type": "Video", "Codec": "h264", "Width": 1280, "Height": 720, "Index": 0 },
+                { "Type": "Video", "Codec": "h264", "Width": 1280, "Height": 720, "Index": 0, "AverageFrameRate": 23.976, "RealFrameRate": 23.976 },
                 { "Type": "Audio", "Codec": "aac", "Channels": 2, "Language": "eng",
                   "DisplayTitle": "English - AAC - Stereo - Default", "IsDefault": true, "Index": 1 },
                 { "Type": "Audio", "Codec": "aac", "Channels": 2, "Language": "eng",

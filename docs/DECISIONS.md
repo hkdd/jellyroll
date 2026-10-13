@@ -730,9 +730,57 @@ skipped. Fixes from the run:
 Verified on the HTPC: season select, row wrap, and 0 `INVALID_OPERATION`
 lines in a playback log. M7 is accepted.
 
+**D50: Refresh-rate matching through SDL (spec 5.2, open question 1).**
+SDL 3.4.18's KMSDRM backend switches modes: `SDL_SetWindowFullscreenMode`
+records the mode and the next swap does `drmModeSetCrtc` with it, so no
+native DRM backend is needed for this. The frame rate comes from the
+server's stream info (`AverageFrameRate`, else `RealFrameRate`) before mpv
+starts, so the switch happens first: black frames until the modeset is
+presented, then `display.refresh_switch_delay_ms` (default 0) for slow
+TVs, then mpv. The pick (`refresh::pick`) keeps the current resolution
+and wants a refresh that is a whole multiple of the frame rate: exact
+(< 0.05%) before close (< 0.15%: 24 Hz for 23.976 when there is no
+23.976 Hz mode), then the preferred multiple (film at its own rate, other
+rates at the smallest multiple of at least 47 Hz: 25 to 50, 29.97 to
+59.94). Nothing fits: play at the current mode. The mode is kept when
+the next episode autoplays at the same rate, and the desktop mode comes
+back when the UI does. `video-sync=display-resample` only when the mode
+matches, else `audio` (spec 7.1). On/off is remembered per output
+resolution in `ui.json` (default on, config `display.match_refresh`).
+Not possible in a desktop window (`--dev`).
+
+**D51: Audio output, passthrough, power menu.** mpv lists outputs
+(`audio-device-list`, from a short-lived mpv with no video, probed in the
+background at startup). Settings picks the device, passthrough per
+device (`audio-spdif`, default formats `ac3,eac3,dts-hd,truehd`) and
+channels (`audio-channels`); they apply from the next video. Passthrough
+over PipeWire needs the sink configured for IEC958; an ALSA HDMI device
+(`alsa/hdmi:...`) passes it straight through, at the cost of exclusive
+use. The power menu opens with Back where there is nothing left to go
+back to (it replaces "Back at the top quits", which is now its Exit item
+with `--allow-exit`/`--dev`). It focuses Cancel first. Restart and Shut
+down call logind's `Reboot`/`PowerOff` non-interactively over D-Bus
+(`zbus`, its own short-lived runtime per call so the render thread never
+waits); `CanReboot`/`CanPowerOff` answers of "challenge"/"no" are
+explained on screen. logind's default policy already allows the active
+local session; `docs/polkit-jellyroll.rules` (installed by
+`scripts/install.sh`) also covers "other sessions are open" (SSH).
+
+**D52: Display hotplug.** KMSDRM does not report connector changes, so a
+thread polls `/sys/class/drm/card*-*/status` every second (cached values;
+reading does not probe the TV). All connectors disconnected: playback
+pauses (like CEC standby). Connected again: the current mode is set again
+(`SDL_SetWindowFullscreenMode` with the same mode makes KMSDRM recreate
+its surfaces and modeset on the next swap) and the screen is redrawn.
+Rendering continues while disconnected: the kernel keeps the CRTC
+running, so page flips still complete. To be confirmed on the HTPC with
+a TV power cycle (many TVs keep the hotplug line up in standby, in which
+case nothing changes at all).
+
 ## Dependency approvals
 
 | Crate | Status |
 |---|---|
 | `toml` | Approved 2026-10-13 (D11) |
 | `tokio`, `reqwest` (rustls), `serde_json`, `image`, `fast_image_resize`, `redb` | Listed in spec §3; versions in `docs/VERSIONS.md` (M5) |
+| `zbus` | Listed in spec §3 (logind power actions); version in `docs/VERSIONS.md` (M8) |

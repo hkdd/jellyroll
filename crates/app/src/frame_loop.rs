@@ -782,6 +782,9 @@ fn prepare_play<P: Platform>(
     };
     let mut pending =
         PendingPlay { matched: target.is_some(), needs_present: false, settle, at: now, req };
+    if pending.req.match_refresh && target.is_none() {
+        tracing::info!(fps = pending.req.fps, "no output mode matches this video's frame rate");
+    }
     if unchanged {
         return pending;
     }
@@ -805,9 +808,6 @@ fn prepare_play<P: Platform>(
                 _ => false,
             };
         }
-    }
-    if !pending.matched {
-        tracing::info!(fps = pending.req.fps, "no output mode matches this video's frame rate");
     }
     pending
 }
