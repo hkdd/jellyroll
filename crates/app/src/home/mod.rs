@@ -290,7 +290,9 @@ impl HomeApp {
                         h.offline = true;
                     }
                 }
-                Event::Image { key, w, h, rgba } => self.textures.queue(key, w, h, rgba),
+                Event::Image { key, w, h, rgba, opaque } => {
+                    self.textures.queue(key, w, h, rgba, opaque)
+                }
                 Event::ImageFailed { key } => {
                     self.textures.fail(key);
                     dirty = false;

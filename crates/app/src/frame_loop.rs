@@ -689,11 +689,10 @@ fn finish_bench<P: Platform, R: Renderer>(
             if rs.uploads > 0 {
                 let n = rs.uploads as f64 * 1000.0;
                 println!(
-                    "uploads: {} (per image, us: opaque check {:.0}, copy {:.0}, GPU upload {:.0})",
+                    "uploads: {} (per image, us: get texture {:.0}, write pixels {:.0})",
                     rs.uploads,
-                    rs.upload_scan_ns as f64 / n,
-                    rs.upload_copy_ns as f64 / n,
-                    rs.upload_gpu_ns as f64 / n
+                    rs.upload_texture_ns as f64 / n,
+                    rs.upload_write_ns as f64 / n
                 );
             }
             println!(

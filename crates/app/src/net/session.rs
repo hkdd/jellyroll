@@ -741,7 +741,9 @@ async fn fetch_image(
         },
     };
     match result {
-        Ok(d) => out.send(Event::Image { key, w: d.w, h: d.h, rgba: d.rgba }).await,
+        Ok(d) => {
+            out.send(Event::Image { key, w: d.w, h: d.h, rgba: d.rgba, opaque: d.opaque }).await
+        }
         Err(e) => {
             tracing::debug!(key, "image failed: {e}");
             out.send(Event::ImageFailed { key }).await;

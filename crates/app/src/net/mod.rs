@@ -169,7 +169,9 @@ pub enum Event {
         key: u64,
         w: u32,
         h: u32,
+        /// Premultiplied.
         rgba: Vec<u8>,
+        opaque: bool,
     },
     ImageFailed {
         key: u64,
@@ -344,7 +346,7 @@ mod tests {
         let mut got = Vec::new();
         while got.len() < 2 {
             match next(&mut h, deadline) {
-                Event::Image { key, w, h, rgba } => {
+                Event::Image { key, w, h, rgba, .. } => {
                     assert_eq!(rgba.len(), (w * h * 4) as usize);
                     got.push((key, w, h));
                 }

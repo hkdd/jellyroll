@@ -17,7 +17,7 @@ struct Tex {
 
 pub struct Textures {
     map: HashMap<u64, Tex>,
-    pending: VecDeque<(u64, u32, u32, Vec<u8>)>,
+    pending: VecDeque<(u64, u32, u32, Vec<u8>, bool)>,
     failed: HashSet<u64>,
     bytes: u64,
     cap: u64,
@@ -71,9 +71,10 @@ impl Textures {
         self.map.contains_key(&key)
     }
 
-    pub fn queue(&mut self, key: u64, w: u32, h: u32, rgba: Vec<u8>) {
+    /// Queues premultiplied pixels for upload.
+    pub fn queue(&mut self, key: u64, w: u32, h: u32, rgba: Vec<u8>, opaque: bool) {
         self.failed.remove(&key);
-        self.pending.push_back((key, w, h, rgba));
+        self.pending.push_back((key, w, h, rgba, opaque));
     }
 
     pub fn fail(&mut self, key: u64) {
@@ -102,20 +103,20 @@ impl Textures {
         let mut any = false;
         let budget_ns = budget.as_nanos() as f64;
         let mut first = true;
-        while let Some(&(_, w, h, _)) = self.pending.front() {
+        while let Some(&(_, w, h, _, _)) = self.pending.front() {
             let b = bucket(w as u64 * h as u64 * 4);
             let elapsed = start.elapsed().as_nanos() as f64;
             if !first && elapsed + self.upload_ns[b] > budget_ns {
                 break;
             }
             first = false;
-            let Some((key, w, h, rgba)) = self.pending.pop_front() else { break };
+            let Some((key, w, h, rgba, opaque)) = self.pending.pop_front() else { break };
             let t = Instant::now();
             if let Some(old) = self.map.remove(&key) {
                 r.release_image(old.id);
                 self.bytes -= old.bytes;
             }
-            match r.create_image(w, h, &rgba) {
+            match r.create_image(w, h, &rgba, opaque) {
                 Some(id) => {
                     let bytes = w as u64 * h as u64 * 4;
                     self.bytes += bytes;

@@ -607,6 +607,27 @@ allocating frames, but CPU p99 8-11 ms and GPU p99 7.4-8.4 ms.
   "M2 benchmark results", open question 2): above the 6 ms budget, still
   60 fps with no missed vsyncs.
 
+**D43: Reused textures for artwork.** `--bench-upload` on the HTPC (HD
+530, Mesa iris), mean ms per image:
+
+| | new texture each (old) | write into an existing one | new empty texture |
+|---|---|---|---|
+| poster 320x480 | 1.03 | 0.72 | 0.26 |
+| placeholder 32x48 | 0.07 | 0.07 | 0.02 |
+| backdrop 1920x1080 | 6.1 | 1.1 | 2.6 |
+
+- Artwork of 64 KB or more is drawn from a pool of GPU textures keyed by
+  (width, height, opaque): a released image's texture is kept (up to 48
+  per size) and the next image of that size is written into it. This
+  mostly matters for backdrops (6.1 to ~1.1 ms: a visible hitch whenever
+  focus changed on the home and detail pages) and trims posters ~30%.
+- Whether an image is opaque now comes from the decoding thread
+  (premultiplying already visits every pixel); scanning on the render
+  thread cost 1.8 ms per backdrop.
+- Next: re-run `--bench-scroll`; if loading frames still exceed the CPU
+  budget, choose between rendering the UI at 1080p with artwork sized to
+  match, and documenting the overrun at native 4K.
+
 ## Dependency approvals
 
 | Crate | Status |

@@ -51,7 +51,18 @@ struct TextEntry {
 struct ImageEntry {
     image: sk::Image,
     bytes: u64,
+    /// The pooled texture behind `image`, returned to the pool on release.
+    surface: Option<(PoolKey, sk::Surface)>,
 }
+
+/// Textures are reused by (width, height, opaque) (D43): on the HD 530,
+/// writing into an existing texture took 0.7 ms for a 4K poster and 1.1 ms
+/// for a backdrop, against 1.0 and 6.1 ms for a new texture each time.
+type PoolKey = (i32, i32, bool);
+/// Images smaller than this skip the pool: creating them is as cheap.
+const POOL_MIN_BYTES: usize = 64 << 10;
+/// Spare textures kept per size.
+const POOL_SPARES: usize = 48;
 
 /// Shadows are baked once per (radius, blur, colour) as a small nine-patch:
 /// fixed corners, stretchable edges and a transparent centre. Any card size
@@ -94,6 +105,7 @@ pub struct SkiaRenderer {
     shadows: HashMap<ShadowKey, sk::Image>,
     images: Vec<Option<ImageEntry>>,
     free_images: Vec<u32>,
+    pool: HashMap<PoolKey, Vec<sk::Surface>>,
     frame: u64,
     stats: RenderStats,
 }
@@ -126,6 +138,23 @@ fn text_key(text: &str, style: &TextStyle) -> u64 {
 }
 
 impl SkiaRenderer {
+    /// A spare texture of this size, or a new one.
+    fn pooled_surface(&mut self, key: PoolKey, info: &sk::ImageInfo) -> Option<sk::Surface> {
+        if let Some(s) = self.pool.get_mut(&key).and_then(Vec::pop) {
+            return Some(s);
+        }
+        gpu::surfaces::render_target(
+            &mut self.ctx,
+            gpu::Budgeted::No,
+            info,
+            None,
+            SurfaceOrigin::TopLeft,
+            None,
+            false,
+            None,
+        )
+    }
+
     /// `--bench-upload`: times ways of getting a `w`x`h` RGBA image onto the
     /// GPU, `n` times each, to tell what an upload costs on this driver.
     /// Returns (method, mean ms per call, mean ms of the flush after it).
@@ -221,6 +250,32 @@ impl SkiaRenderer {
         out.push(("C new empty texture, no pixels", op / n as f64, fl / n as f64));
         drop(keep);
         self.ctx.flush_and_submit();
+
+        // D: the app's path (create_image/release_image, pooled when
+        // large), for opaque images (backdrops) and with alpha (posters).
+        for (opaque, name) in [
+            (true, "D the app's path, opaque (backdrops)"),
+            (false, "D the app's path, with alpha (posters)"),
+        ] {
+            let (mut op, mut fl) = (0.0, 0.0);
+            let mut prev = None;
+            for i in 0..n {
+                let t = std::time::Instant::now();
+                let id = self.create_image(w, h, &px[i % 2], opaque);
+                op += ms(t);
+                let t = std::time::Instant::now();
+                self.ctx.flush_and_submit();
+                fl += ms(t);
+                if let Some(p) = prev.take() {
+                    self.release_image(p);
+                }
+                prev = id;
+            }
+            if let Some(p) = prev {
+                self.release_image(p);
+            }
+            out.push((name, op / n as f64, fl / n as f64));
+        }
         out
     }
 
@@ -259,6 +314,7 @@ impl SkiaRenderer {
             shadows: HashMap::new(),
             images: Vec::new(),
             free_images: Vec::new(),
+            pool: HashMap::new(),
             frame: 0,
             stats: RenderStats::default(),
         })
@@ -596,41 +652,55 @@ impl Renderer for SkiaRenderer {
         }
     }
 
-    fn create_image(&mut self, width: u32, height: u32, rgba: &[u8]) -> Option<ImageId> {
+    fn create_image(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        opaque: bool,
+    ) -> Option<ImageId> {
         let bytes = width as usize * height as usize * 4;
         if width == 0 || height == 0 || rgba.len() < bytes {
             return None;
         }
-        let t0 = std::time::Instant::now();
-        // Fully opaque images (posters, backdrops) are tagged as such so
-        // Skia can draw them without blending.
-        let opaque = rgba[..bytes].as_chunks::<4>().0.iter().all(|p| p[3] == 255);
+        // Opaque images (backdrops, blur placeholders) are tagged as such
+        // so Skia can draw them without blending.
         let alpha = if opaque { sk::AlphaType::Opaque } else { sk::AlphaType::Premul };
         let info =
             sk::ImageInfo::new((width as i32, height as i32), sk::ColorType::RGBA8888, alpha, None);
         let t1 = std::time::Instant::now();
-        let raster = sk::images::raster_from_data(
-            &info,
-            sk::Data::new_copy(&rgba[..bytes]),
-            width as usize * 4,
-        )?;
+        let row = width as usize * 4;
+        let key = (width as i32, height as i32, opaque);
+        let pooled = if bytes >= POOL_MIN_BYTES { self.pooled_surface(key, &info) } else { None };
         let t2 = std::time::Instant::now();
-        let image = gpu::images::texture_from_image(
-            &mut self.ctx,
-            &raster,
-            gpu::Mipmapped::No,
-            // Not counted against Skia's cache budget: the app caps its own
-            // artwork (`[cache] textures_mb`, default 512 MB). Counted, it
-            // kept Skia permanently over its 256 MB budget, so Skia purged
-            // and rebuilt its own scratch resources every frame (D42).
-            gpu::Budgeted::No,
-        )?;
+        let (image, surface) = match pooled {
+            Some(mut surf) => {
+                // Written in place: the surface holds no other snapshot.
+                if !surf.canvas().write_pixels(&info, &rgba[..bytes], row, (0, 0)) {
+                    return None;
+                }
+                (surf.image_snapshot(), Some((key, surf)))
+            }
+            None => {
+                let raster =
+                    sk::images::raster_from_data(&info, sk::Data::new_copy(&rgba[..bytes]), row)?;
+                let image = gpu::images::texture_from_image(
+                    &mut self.ctx,
+                    &raster,
+                    gpu::Mipmapped::No,
+                    // Not counted against Skia's cache budget: the app caps
+                    // its own artwork (`[cache] textures_mb`). Counted, it
+                    // kept Skia permanently over its 256 MB budget (D42).
+                    gpu::Budgeted::No,
+                )?;
+                (image, None)
+            }
+        };
         let t3 = std::time::Instant::now();
         self.stats.uploads += 1;
-        self.stats.upload_scan_ns += (t1 - t0).as_nanos() as u64;
-        self.stats.upload_copy_ns += (t2 - t1).as_nanos() as u64;
-        self.stats.upload_gpu_ns += (t3 - t2).as_nanos() as u64;
-        let entry = ImageEntry { image, bytes: bytes as u64 };
+        self.stats.upload_texture_ns += (t2 - t1).as_nanos() as u64;
+        self.stats.upload_write_ns += (t3 - t2).as_nanos() as u64;
+        let entry = ImageEntry { image, bytes: bytes as u64, surface };
         self.stats.texture_bytes += entry.bytes;
         self.stats.images += 1;
         let id = match self.free_images.pop() {
@@ -653,6 +723,15 @@ impl Renderer for SkiaRenderer {
             self.stats.texture_bytes -= e.bytes;
             self.stats.images -= 1;
             self.free_images.push(img.0);
+            let ImageEntry { image, surface, .. } = e;
+            // The snapshot goes first, so the next write needn't copy.
+            drop(image);
+            if let Some((key, surf)) = surface {
+                let spares = self.pool.entry(key).or_default();
+                if spares.len() < POOL_SPARES {
+                    spares.push(surf);
+                }
+            }
         }
     }
 

@@ -147,9 +147,17 @@ fn main() -> ExitCode {
         // Poster and placeholder sizes at 4K, then a 1080p backdrop.
         for (w, h) in [(320, 480), (32, 48), (1920, 1080)] {
             println!("{w}x{h} ({} KB), mean of 60:", w * h * 4 / 1024);
+            let s0 = jellyroll_render::Renderer::stats(&renderer);
             for (name, op, flush) in renderer.bench_uploads(w, h, 60) {
                 println!("  {name}: call {op:.3} ms, flush {flush:.3} ms");
             }
+            let s1 = jellyroll_render::Renderer::stats(&renderer);
+            let n = (s1.uploads - s0.uploads).max(1) as f64 * 1e6;
+            println!(
+                "  D (both) breakdown, ms: get texture {:.3}, write {:.3}",
+                (s1.upload_texture_ns - s0.upload_texture_ns) as f64 / n,
+                (s1.upload_write_ns - s0.upload_write_ns) as f64 / n
+            );
         }
         return ExitCode::SUCCESS;
     }

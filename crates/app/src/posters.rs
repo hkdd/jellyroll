@@ -129,19 +129,23 @@ pub fn apply_scrim(px: &mut [u8], w: u32, h: u32, bg: [u8; 3], left_alpha: f32, 
 /// card can be drawn as a plain image (spec 6.5: card chrome baked into
 /// cached assets). Plain image draws batch in the renderer; rounded-rect
 /// image fills do not.
-/// Premultiplies alpha in place (what `Renderer::create_image` takes).
-/// Only pixels that aren't opaque change, so for posters with rounded
-/// corners this touches the corners only. Done on the decoding thread:
-/// left to Skia, the conversion ran on the render thread during the upload.
-pub fn premultiply(px: &mut [u8]) {
+/// Premultiplies alpha in place (what `Renderer::create_image` takes) and
+/// returns whether every pixel is opaque. Only pixels that aren't opaque
+/// change, so for posters with rounded corners this touches the corners
+/// only. Done on the decoding thread: on the render thread, the opaque
+/// check alone took 1.8 ms for a 4K backdrop (D43).
+pub fn premultiply(px: &mut [u8]) -> bool {
+    let mut opaque = true;
     for p in px.as_chunks_mut::<4>().0 {
         let a = p[3] as u32;
         if a < 255 {
+            opaque = false;
             for c in &mut p[..3] {
                 *c = ((*c as u32 * a + 127) / 255) as u8;
             }
         }
     }
+    opaque
 }
 
 pub fn round_corners(px: &mut [u8], w: u32, h: u32, radius: f32) {
@@ -205,8 +209,9 @@ mod tests {
     #[test]
     fn premultiply_scales_colour_by_alpha() {
         let mut px = [200, 100, 50, 255, 200, 100, 50, 128, 200, 100, 50, 0];
-        premultiply(&mut px);
+        assert!(!premultiply(&mut px));
         assert_eq!(px, [200, 100, 50, 255, 100, 50, 25, 128, 0, 0, 0, 0]);
+        assert!(premultiply(&mut [1, 2, 3, 255]));
     }
 
     #[test]
