@@ -8,7 +8,7 @@ Each entry records where and when it was checked. Pins in `Cargo.toml` use
 
 | Item | Version | Verified |
 |---|---|---|
-| rustc / cargo (stable) | 1.97.0 | `rustc --version`, 2026-10-13 |
+| rustc / cargo | **1.99.0**, pinned in `rust-toolchain.toml` | CI used unpinned `stable`; when 1.99 shipped, its new `chunks_exact_to_as_chunks` lint failed `clippy -D warnings` while local 1.97 passed. Pinned 2026-10-13 so every build uses the same compiler and lints |
 | Edition | 2024 | |
 | MSRV (`rust-version`) | 1.88 | needed for `let` chains |
 

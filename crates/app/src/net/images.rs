@@ -162,8 +162,8 @@ mod tests {
         let hash = format!("00{}", encode83((200 << 16) | (100 << 8) | 50, 4));
         let d = blurhash(&hash, 4, 3).unwrap();
         assert_eq!((d.w, d.h, d.rgba.len()), (4, 3, 48));
-        for p in d.rgba.chunks_exact(4) {
-            assert_eq!(p, [200, 100, 50, 255]);
+        for p in d.rgba.as_chunks::<4>().0 {
+            assert_eq!(*p, [200, 100, 50, 255]);
         }
     }
 

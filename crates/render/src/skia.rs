@@ -505,7 +505,7 @@ impl Renderer for SkiaRenderer {
         }
         // Fully opaque images (posters, backdrops) are tagged as such so
         // Skia can draw them without blending.
-        let opaque = rgba[..bytes].chunks_exact(4).all(|p| p[3] == 255);
+        let opaque = rgba[..bytes].as_chunks::<4>().0.iter().all(|p| p[3] == 255);
         let alpha = if opaque { sk::AlphaType::Opaque } else { sk::AlphaType::Unpremul };
         let info =
             sk::ImageInfo::new((width as i32, height as i32), sk::ColorType::RGBA8888, alpha, None);
