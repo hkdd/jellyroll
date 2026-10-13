@@ -18,6 +18,8 @@ pub enum Open {
     },
     Search,
     Settings,
+    /// Change the UI resolution (Settings).
+    UiResolution(crate::config::UiResolution),
     /// Direct-play an item (D19), from `start_ticks` (resume).
     Play {
         id: String,

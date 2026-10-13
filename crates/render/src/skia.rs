@@ -716,6 +716,17 @@ impl Renderer for SkiaRenderer {
         Some(ImageId(id))
     }
 
+    fn set_render_scale(&mut self, scale: f32) {
+        let scale = scale.clamp(0.5, 1.0);
+        if scale != self.opts.render_scale {
+            self.opts.render_scale = scale;
+            // Rebuilt by the next begin_frame; spare textures were sized
+            // for the old scale.
+            self.main = None;
+            self.pool.clear();
+        }
+    }
+
     fn release_image(&mut self, img: ImageId) {
         if let Some(slot) = self.images.get_mut(img.0 as usize)
             && let Some(e) = slot.take()
@@ -741,6 +752,7 @@ impl Renderer for SkiaRenderer {
             shadow_cache_entries: self.shadows.len() as u32,
             gpu_cache_bytes: self.ctx.resource_cache_usage().resource_bytes as u64,
             gpu_cache_limit: self.ctx.resource_cache_limit() as u64,
+            render_scale_pct: (self.opts.render_scale * 100.0).round() as u32,
             ..self.stats
         }
     }

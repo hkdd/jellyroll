@@ -51,6 +51,11 @@ pub const SIGNED_IN_AS: &str = "Signed in as %s on %s";
 pub const SIGN_OUT: &str = "Sign out";
 pub const CHANGE_SERVER: &str = "Change server";
 pub const ABOUT: &str = "About this device";
+pub const DISPLAY: &str = "Display";
+pub const UI_RES_1080: &str = "Interface: 1080p, upscaled (smoother)";
+pub const UI_RES_NATIVE: &str = "Interface: full resolution (sharpest)";
+pub const UI_RES_HINT: &str =
+    "Select to switch. Video always plays at the display's full resolution.";
 
 pub const SIGN_IN_PASSWORD: &str = "Sign in with password";
 pub const NEW_CODE: &str = "New code";
@@ -120,6 +125,10 @@ pub const ALL: &[&str] = &[
     SIGN_OUT,
     CHANGE_SERVER,
     ABOUT,
+    DISPLAY,
+    UI_RES_1080,
+    UI_RES_NATIVE,
+    UI_RES_HINT,
     SIGN_IN_PASSWORD,
     NEW_CODE,
     USERNAME,

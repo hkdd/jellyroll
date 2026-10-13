@@ -24,9 +24,12 @@ safe_area = 0.025
 # Double instead of triple buffering. Lower latency, higher risk of missed
 # frames; see docs/DECISIONS.md (D10).
 double_buffer = false
-# Render the UI at this fraction of the output resolution and let the GPU
-# upscale it (0.5 - 1.0). Lower it only if a weak GPU misses frames at 4K.
-ui_render_scale = 1.0
+# Resolution the interface is drawn at; video always plays at full
+# resolution. "auto": 1080p upscaled on 4K (and other >1080p) displays,
+# "native": the display's own resolution (sharpest, needs a stronger GPU),
+# "1080p": always 1080p upscaled. The Settings page can change this, and
+# its choice wins over this file.
+ui_resolution = "auto"
 
 [input]
 # HDMI-CEC: control jellyroll with the TV remote (needs a CEC-capable GPU

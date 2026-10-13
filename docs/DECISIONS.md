@@ -628,6 +628,27 @@ allocating frames, but CPU p99 8-11 ms and GPU p99 7.4-8.4 ms.
   budget, choose between rendering the UI at 1080p with artwork sized to
   match, and documenting the overrun at native 4K.
 
+**D44: UI resolution setting; 1080p upscaled by default on 4K.** With
+textures reused (D43), an artwork upload during scrolling still cost
+~2 ms on the HD 530 at native 4K (the driver copies synchronously while
+the GPU is busy), so frames that load new artwork exceed the 4 ms CPU
+budget, and GPU p99 sits at the 6 ms line (5.98 and 6.45 ms in two runs).
+Decided:
+- `[display] ui_resolution = "auto" | "native" | "1080p"` replaces
+  `ui_render_scale`. `auto` (default) draws the UI at 1080p and upscales
+  on outputs taller than 1080 lines, and natively otherwise. Video is
+  unaffected (mpv renders at the output's resolution).
+- Artwork is requested at the size the UI is drawn at, so at 1080p
+  uploads are a quarter of the 4K size.
+- Settings has a Display toggle (shown only above 1080p): "1080p,
+  upscaled (smoother)" / "full resolution (sharpest)". It applies at once
+  (surfaces rebuilt, textures re-requested at the new size) and is saved
+  in `~/.local/share/jellyroll/ui.json`, which wins over config.toml.
+- Native 4K remains available and is a documented deviation from the
+  spec 2 budgets on this GPU. M2 found `ui_render_scale = 0.75` did not
+  lower GPU time (the iGPU clocks down; the upscale pass costs about what
+  it saves), so the GPU effect at 1080p is measured, not assumed.
+
 ## Dependency approvals
 
 | Crate | Status |

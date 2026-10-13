@@ -188,10 +188,14 @@ pub fn run<P: Platform, R: Renderer>(
     let mut view = match net {
         Some(cfg) if !opts.demo && opts.play.is_none() => {
             let cap = config.config.cache.textures_mb << 20;
+            let ui = crate::home::UiSetting {
+                resolution: config.config.display.ui_resolution,
+                save_to: cfg.data_dir.as_deref().map(crate::ui_prefs::path),
+            };
             match NetHandle::start(cfg, p.waker()) {
                 Ok(h) => {
                     let about = about_device(p, fb, refresh_hz);
-                    View::Home(Box::new(HomeApp::new(h, cap, fb, safe_area, about)))
+                    View::Home(Box::new(HomeApp::new(h, cap, fb, safe_area, about, ui)))
                 }
                 Err(e) => {
                     tracing::error!("cannot start the network thread: {e}");
@@ -442,6 +446,13 @@ pub fn run<P: Platform, R: Renderer>(
             dirty |= view.update(now);
             p.set_text_input(view.wants_text());
             if let View::Home(h) = &mut view
+                && let Some(scale) = h.take_render_scale()
+            {
+                r.set_render_scale(scale);
+                h.set_output(fb, safe_area, now);
+                dirty = true;
+            }
+            if let View::Home(h) = &mut view
                 && let Some(req) = h.take_play()
             {
                 let popts = jellyroll_video::PlayerOptions {
@@ -626,6 +637,7 @@ fn finish_bench<P: Platform, R: Renderer>(
     println!("video_driver: {}", info.video_driver);
     let (w, h) = p.framebuffer_size();
     println!("output: {w}x{h} @ {:.3} Hz", p.refresh_hz());
+    println!("ui render scale: {:.2}", r.stats().render_scale_pct as f32 / 100.0);
     let mut pass = true;
     match opts.bench {
         Some(b @ (Bench::Pacing(d) | Bench::Scroll(d))) => {

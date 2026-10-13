@@ -95,6 +95,17 @@ impl Textures {
         !self.pending.is_empty()
     }
 
+    /// Releases every texture and forgets queued and failed images (e.g.
+    /// all artwork is now wanted at another size).
+    pub fn clear<R: Renderer>(&mut self, r: &mut R) {
+        for (_, t) in self.map.drain() {
+            r.release_image(t.id);
+        }
+        self.pending.clear();
+        self.failed.clear();
+        self.bytes = 0;
+    }
+
     /// Uploads queued images while the next one is expected to fit in
     /// `budget` (always at least one per call), then evicts down to the
     /// cap. Returns true if anything new is ready to draw.

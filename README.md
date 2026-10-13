@@ -150,6 +150,7 @@ devices are readable. The service user gets the group from `install.sh`.
 | `--demo` | Synthetic render benchmark scene instead of the Jellyfin home screen |
 | `--bench-pacing SECS` | Continuous animation. Prints CPU/GPU/present p50/p99, missed vsyncs and allocating frames, and exits 1 if a spec §2 budget is exceeded |
 | `--bench-idle SECS` | Static screen. Fails if anything redraws or CPU ≥ 1% |
+| `--bench-upload` | Time the ways of uploading artwork to the GPU on this machine, then exit |
 | `--bench-scroll SECS` | Scroll a 10,000-item library grid (built-in mock server, no account needed) and check the same budgets as `--bench-pacing` |
 | `--print-diagnostics` | SDL/GL/driver/display modes, DRI/CEC/input devices, mpv version, and which codecs the GPU decodes in hardware |
 | `--play FILE_OR_URL` | Play a video (M3 harness). Space pause, ←/→ seek 10 s, ↑/↓ 60 s, `i` decoder diagnostics, Esc stop |

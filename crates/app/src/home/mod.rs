@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 use jellyroll_render::{Point, Renderer, TextStyle, Weight};
 use jellyroll_video::va::DecodeCaps;
 
+use crate::config::UiResolution;
 use crate::input::InputAction;
 use crate::net::{Cmd, Event, Fetch, Fetched, NetHandle, Status};
 use detail::DetailView;
@@ -106,6 +107,18 @@ pub struct HomeApp {
     wants_at: Instant,
     /// Time the last frame spent uploading images (for benchmarks).
     pub last_upload_ms: f32,
+    ui: UiSetting,
+    fb: (u32, u32),
+    /// A new UI render scale for the frame loop to apply.
+    new_render_scale: Option<f32>,
+    /// Drop all textures before the next draw (their size is stale).
+    purge_textures: bool,
+}
+
+/// The UI resolution in effect and where a choice made in Settings is saved.
+pub struct UiSetting {
+    pub resolution: UiResolution,
+    pub save_to: Option<std::path::PathBuf>,
 }
 
 impl HomeApp {
@@ -115,6 +128,7 @@ impl HomeApp {
         fb: (u32, u32),
         safe_area: f32,
         about: Vec<(String, String)>,
+        ui: UiSetting,
     ) -> Self {
         let caps = Arc::new(OnceLock::new());
         let c = caps.clone();
@@ -141,6 +155,10 @@ impl HomeApp {
             uploaded: false,
             wants_at: Instant::now(),
             last_upload_ms: 0.0,
+            ui,
+            fb,
+            new_render_scale: None,
+            purge_textures: false,
         };
         a.set_output(fb, safe_area, Instant::now());
         a
@@ -148,8 +166,11 @@ impl HomeApp {
 
     /// Output size or safe area changed. Logical height is always 1080.
     pub fn set_output(&mut self, fb: (u32, u32), safe_area: f32, now: Instant) {
-        let scale = fb.1.max(1) as f32 / 1080.0;
-        self.vp = Viewport { lw: fb.0 as f32 / scale, safe: safe_area, scale };
+        self.fb = fb;
+        let device = fb.1.max(1) as f32 / 1080.0;
+        // Artwork is sized for the pixels the UI is drawn at.
+        let scale = device * self.ui.resolution.render_scale(fb.1);
+        self.vp = Viewport { lw: fb.0 as f32 / device, safe: safe_area, scale };
         let vp = self.vp;
         if let Some(h) = &mut self.home {
             self.wants_dirty |= h.set_viewport(vp, now);
@@ -209,11 +230,45 @@ impl HomeApp {
                     .as_ref()
                     .map(|h| (h.data.user_name.clone(), h.data.server_name.clone()))
                     .unwrap_or_default();
-                Page::Settings(Box::new(SettingsView::new(vp, &user, &server, self.about())))
+                let res = self.resolution_choice();
+                Page::Settings(Box::new(SettingsView::new(vp, &user, &server, self.about(), res)))
+            }
+            Open::UiResolution(r) => {
+                self.set_resolution(r);
+                return;
             }
         };
         self.stack.push(page);
         self.wants_dirty = true;
+    }
+
+    /// What Settings offers: None on outputs of 1080 lines or fewer (the
+    /// choice makes no difference there).
+    fn resolution_choice(&self) -> Option<UiResolution> {
+        (self.fb.1 > 1080).then(|| match self.ui.resolution.render_scale(self.fb.1) < 1.0 {
+            true => UiResolution::Hd1080,
+            false => UiResolution::Native,
+        })
+    }
+
+    fn set_resolution(&mut self, r: UiResolution) {
+        let before = self.ui.resolution.render_scale(self.fb.1);
+        self.ui.resolution = r;
+        if let Some(p) = &self.ui.save_to {
+            crate::ui_prefs::save(p, &crate::ui_prefs::UiPrefs { ui_resolution: Some(r) });
+        }
+        let after = r.render_scale(self.fb.1);
+        if after != before {
+            tracing::info!(?r, render_scale = after, "UI resolution changed");
+            self.new_render_scale = Some(after);
+            self.purge_textures = true;
+        }
+    }
+
+    /// A UI render scale changed in Settings, for the frame loop to give
+    /// the renderer (then `set_output` to resize the artwork).
+    pub fn take_render_scale(&mut self) -> Option<f32> {
+        self.new_render_scale.take()
     }
 
     fn about(&self) -> Vec<(String, String)> {
@@ -547,6 +602,11 @@ impl HomeApp {
     }
 
     pub fn draw<R: Renderer>(&mut self, r: &mut R, now: Instant, notice: &str) {
+        if std::mem::take(&mut self.purge_textures) {
+            self.textures.clear(r);
+            self.last_wants.clear();
+            self.wants_dirty = true;
+        }
         self.textures.begin_frame();
         self.last_upload_ms = 0.0;
         if self.textures.uploads_pending() {

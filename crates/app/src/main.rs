@@ -21,6 +21,7 @@ mod playback;
 mod posters;
 mod scene;
 mod systemd;
+mod ui_prefs;
 
 use std::process::ExitCode;
 use std::time::Instant;
@@ -46,7 +47,7 @@ fn main() -> ExitCode {
     }
     // Load config before logging (it sets the log level); report its
     // warnings once logging is up.
-    let loaded = match opts.config.clone().or_else(config::default_path) {
+    let mut loaded = match opts.config.clone().or_else(config::default_path) {
         Some(path) => config::load(&path),
         None => config::Loaded {
             config: config::Config::default(),
@@ -125,10 +126,18 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let skia_opts = jellyroll_render::skia::SkiaOptions {
-        render_scale: loaded.config.display.ui_render_scale,
-        ..Default::default()
-    };
+    // A resolution chosen in Settings wins over config.toml (benchmarks
+    // use the config alone).
+    if opts.bench.is_none()
+        && let Some(r) =
+            net::store::data_dir().and_then(|d| ui_prefs::load(&ui_prefs::path(&d)).ui_resolution)
+    {
+        loaded.config.display.ui_resolution = r;
+    }
+    let ui_res = loaded.config.display.ui_resolution;
+    let render_scale = ui_res.render_scale(platform.framebuffer_size().1);
+    tracing::info!(?ui_res, render_scale, "UI resolution");
+    let skia_opts = jellyroll_render::skia::SkiaOptions { render_scale, ..Default::default() };
     tracing::info!(ms = process_start.elapsed().as_millis() as u64, "platform ready");
     let mut renderer = match jellyroll_render::skia::SkiaRenderer::new(
         |name| platform.gl_proc_address(name),

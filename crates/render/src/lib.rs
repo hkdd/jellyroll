@@ -145,6 +145,8 @@ pub struct RenderStats {
     /// Skia's own GPU resource cache: in use and its budget.
     pub gpu_cache_bytes: u64,
     pub gpu_cache_limit: u64,
+    /// The UI's render scale, percent (100: native resolution).
+    pub render_scale_pct: u32,
     /// Image uploads so far and the time spent in each step (ns): getting
     /// a texture (pooled or new) and writing the pixels into it.
     pub uploads: u64,
@@ -198,6 +200,10 @@ pub trait Renderer {
         rgba: &[u8],
         opaque: bool,
     ) -> Option<ImageId>;
+
+    /// Draws the UI at this fraction of the output resolution from the next
+    /// frame on (0.5..=1.0; below 1 it is upscaled).
+    fn set_render_scale(&mut self, scale: f32);
     fn release_image(&mut self, img: ImageId);
 
     fn stats(&self) -> RenderStats;
