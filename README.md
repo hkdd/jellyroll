@@ -69,6 +69,16 @@ System packages (runtime, plus headers when using `build-sdl`):
 
 libmpv, PipeWire and libcec come in at M3/M4.
 
+**Hardware video decode on Fedora (Intel):** Fedora's own
+`libva-intel-media-driver` leaves out H.264 and HEVC. Install the full
+driver from RPM Fusion nonfree (enable RPM Fusion per
+https://rpmfusion.org/Configuration first):
+
+```sh
+sudo dnf swap libva-intel-media-driver intel-media-driver --allowerasing
+vainfo   # (libva-utils) should list VAProfileH264* and VAProfileHEVCMain
+```
+
 ## Running
 
 ```sh
