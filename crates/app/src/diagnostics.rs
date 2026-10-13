@@ -45,7 +45,7 @@ pub fn print(opts: &SdlOptions) -> ExitCode {
         }
         Err(e) => println!("cec: {e}"),
     }
-    let input = crate::input_access::scan(std::path::Path::new("/dev/input"));
+    let input = crate::input_access::scan(std::path::Path::new("/dev/input"), false);
     println!("input_devices: {} readable of {}", input.readable, input.devices);
     if input.blocked() {
         println!("input_warning: no access; {}", crate::input_access::REMEDY);

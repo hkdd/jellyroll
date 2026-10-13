@@ -19,8 +19,11 @@ impl InputAccess {
 }
 
 /// Opens each `event*` node read-only and closes it again. Opening does not
-/// grab the device or consume events.
-pub fn scan(dir: &Path) -> InputAccess {
+/// grab the device or consume events. With `stop_at_first`, stops opening
+/// once one device is readable (startup only needs to know access works,
+/// and opening a device can wake it from USB autosuspend); `readable` is
+/// then at most 1.
+pub fn scan(dir: &Path, stop_at_first: bool) -> InputAccess {
     let mut a = InputAccess::default();
     let Ok(entries) = std::fs::read_dir(dir) else { return a };
     for e in entries.flatten() {
@@ -28,7 +31,7 @@ pub fn scan(dir: &Path) -> InputAccess {
             continue;
         }
         a.devices += 1;
-        if std::fs::File::open(e.path()).is_ok() {
+        if (!stop_at_first || a.readable == 0) && std::fs::File::open(e.path()).is_ok() {
             a.readable += 1;
         }
     }
@@ -49,15 +52,17 @@ mod tests {
         std::fs::write(dir.join("event0"), b"").unwrap();
         std::fs::write(dir.join("event1"), b"").unwrap();
         std::fs::write(dir.join("mice"), b"").unwrap();
-        let a = scan(&dir);
+        let a = scan(&dir, false);
+        let first = scan(&dir, true);
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(a, InputAccess { devices: 2, readable: 2 });
-        assert!(!a.blocked());
+        assert_eq!(first, InputAccess { devices: 2, readable: 1 });
+        assert!(!a.blocked() && !first.blocked());
     }
 
     #[test]
     fn blocked_only_when_devices_exist() {
-        assert!(!scan(Path::new("/nonexistent")).blocked());
+        assert!(!scan(Path::new("/nonexistent"), true).blocked());
         assert!(InputAccess { devices: 3, readable: 0 }.blocked());
         assert!(!InputAccess { devices: 3, readable: 1 }.blocked());
     }

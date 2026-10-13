@@ -77,13 +77,25 @@ fn main() -> ExitCode {
         return diagnostics::print(&sdl_opts);
     }
 
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), dev = opts.dev, "starting");
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        dev = opts.dev,
+        ms = process_start.elapsed().as_millis() as u64,
+        "starting"
+    );
 
     // On KMSDRM, SDL reads input straight from /dev/input. Without access the
     // screen works but nothing responds, so say so instead of hanging there.
     // In --dev the compositor delivers input, so the check does not apply.
     let mut notice = frame_loop::config_notice(loaded.warnings.len());
-    let access = input_access::scan(std::path::Path::new("/dev/input"));
+    let t_scan = std::time::Instant::now();
+    let access = input_access::scan(std::path::Path::new("/dev/input"), true);
+    tracing::info!(
+        ms = process_start.elapsed().as_millis() as u64,
+        scan_ms = t_scan.elapsed().as_millis() as u64,
+        devices = access.devices,
+        "input access checked"
+    );
     if !opts.dev && access.blocked() {
         let msg = format!(
             "cannot read any of the {} input devices in /dev/input, so keyboard, \
