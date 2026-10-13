@@ -84,6 +84,13 @@ pub struct FrameStats {
     /// Frames that loaded something new (requests, uploads, new text);
     /// their allocations are not counted above (D40).
     pub loading_frames: u64,
+    /// `cpu_ms` split by frame kind (benchmarks report both).
+    pub steady_cpu_ms: Ring<HISTORY>,
+    pub loading_cpu_ms: Ring<HISTORY>,
+    /// Per frame that uploaded images: time spent uploading.
+    pub upload_ms: Ring<HISTORY>,
+    /// Per frame that shaped new text: how many strings.
+    pub new_text: Ring<HISTORY>,
 }
 
 impl FrameStats {

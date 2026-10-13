@@ -520,6 +520,15 @@ pub fn run<P: Platform, R: Renderer>(
                     let uploading = !h.settled();
                     let misses = r.stats().text_cache_misses;
                     h.draw(r, now, notice);
+                    let shaped = r.stats().text_cache_misses - misses;
+                    if bench_reset_done {
+                        if h.last_upload_ms > 0.0 {
+                            stats.upload_ms.push(h.last_upload_ms);
+                        }
+                        if shaped > 0 {
+                            stats.new_text.push(shaped as f32);
+                        }
+                    }
                     if uploading || r.stats().text_cache_misses != misses {
                         let n = alloc_counter::allocations() - a0;
                         loading |= n > 0;
@@ -569,6 +578,13 @@ pub fn run<P: Platform, R: Renderer>(
 
         let allocs = alloc_counter::allocations() - allocs_start - hud_allocs;
         stats.allocs_last_frame = allocs;
+        if bench_reset_done {
+            if loading {
+                stats.loading_cpu_ms.push(ms(cpu));
+            } else {
+                stats.steady_cpu_ms.push(ms(cpu));
+            }
+        }
         if loading && bench_reset_done {
             stats.loading_frames += 1;
         } else if allocs > 0 && bench_reset_done {
@@ -638,6 +654,14 @@ fn finish_bench<P: Platform, R: Renderer>(
                 "loading_frames: {} (not steady state; not counted above)",
                 stats.loading_frames
             );
+            let mut pct = |ring: &crate::perf::Ring<{ crate::perf::HISTORY }>| {
+                let q = ring.percentiles(&mut scratch);
+                format!("p50 {:.3} p99 {:.3} max {:.3}", q.p50, q.p99, q.max)
+            };
+            println!("  cpu_ms, steady frames: {}", pct(&stats.steady_cpu_ms));
+            println!("  cpu_ms, loading frames: {}", pct(&stats.loading_cpu_ms));
+            println!("  upload_ms, frames that uploaded: {}", pct(&stats.upload_ms));
+            println!("  strings shaped, frames that shaped: {}", pct(&stats.new_text));
             let rs = r.stats();
             println!(
                 "render: textures {:.1} MB ({} images), text cache {} entries ({} hits / {} misses), shadows {}",

@@ -102,6 +102,8 @@ pub struct HomeApp {
     /// at most every `WANTS_AFTER_UPLOAD` (input rebuilds them at once).
     uploaded: bool,
     wants_at: Instant,
+    /// Time the last frame spent uploading images (for benchmarks).
+    pub last_upload_ms: f32,
 }
 
 impl HomeApp {
@@ -136,6 +138,7 @@ impl HomeApp {
             load_work: 0,
             uploaded: false,
             wants_at: Instant::now(),
+            last_upload_ms: 0.0,
         };
         a.set_output(fb, safe_area, Instant::now());
         a
@@ -536,9 +539,14 @@ impl HomeApp {
 
     pub fn draw<R: Renderer>(&mut self, r: &mut R, now: Instant, notice: &str) {
         self.textures.begin_frame();
-        if self.textures.uploads_pending() && self.textures.pump(r, UPLOAD_BUDGET) {
-            // Newly loaded (or evicted) images change what to request.
-            self.uploaded = true;
+        self.last_upload_ms = 0.0;
+        if self.textures.uploads_pending() {
+            let t = Instant::now();
+            if self.textures.pump(r, UPLOAD_BUDGET) {
+                // Newly loaded (or evicted) images change what to request.
+                self.uploaded = true;
+            }
+            self.last_upload_ms = t.elapsed().as_secs_f32() * 1000.0;
         }
         let safe = self.vp.safe;
         let (sx, sy) = (self.vp.sx(), self.vp.sy());

@@ -428,11 +428,8 @@ impl LibraryView {
         let cols = self.cols();
         let rows = self.visible_rows();
         let range = (rows.start * cols)..((rows.end + 1) * cols).min(self.items.len());
-        let focused = match self.focus {
-            Focus::Grid(i) => self.items.get(i).and_then(|c| c.as_ref()),
-            _ => None,
-        };
-        w.backdrop(focused.and_then(|c| c.backdrop.as_ref()));
+        // No backdrop: the grid doesn't show one, and at 4K each is a
+        // 1920x1080 upload per step.
         for c in self.items[range.clone()].iter().flatten() {
             w.blur(c, self.shape, &widgets::card_keys(c, self.shape, &self.vp));
         }
