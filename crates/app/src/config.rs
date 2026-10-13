@@ -21,6 +21,7 @@ pub struct Config {
     pub log: Log,
     pub server: Server,
     pub display: Display,
+    pub audio: Audio,
     pub input: Input,
     pub cache: Cache,
     pub debug: Debug,
@@ -69,6 +70,41 @@ pub struct Display {
     /// Resolution the UI is drawn at (spec 6.4). Video always plays at the
     /// output's full resolution. A choice made in Settings overrides this.
     pub ui_resolution: UiResolution,
+    /// Switch the output to the video's frame rate while playing (spec
+    /// 5.2). Settings can turn it off per output resolution.
+    pub match_refresh: bool,
+    /// Wait after a refresh switch before playback starts, for TVs that
+    /// take a while to show the new mode (the start would be missed).
+    pub refresh_switch_delay_ms: u64,
+}
+
+/// Audio output (spec 7.1). Settings choices win over these.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Audio {
+    /// mpv audio device ("pipewire", "alsa/hdmi:CARD=PCH,DEV=0", ...);
+    /// "auto" = mpv's default.
+    pub device: String,
+    /// Send compressed audio to the receiver (bitstream) instead of
+    /// decoding it, on every device unless Settings says otherwise.
+    pub passthrough: bool,
+    /// Formats sent as bitstream when passthrough is on (mpv
+    /// `audio-spdif`); "dts-hd" covers DTS too.
+    pub passthrough_codecs: String,
+    /// Decoded output channels: "auto", "stereo", "5.1", "7.1"...
+    /// (mpv `audio-channels`; "auto" uses what the device reports).
+    pub channels: String,
+}
+
+impl Default for Audio {
+    fn default() -> Self {
+        Self {
+            device: "auto".into(),
+            passthrough: false,
+            passthrough_codecs: "ac3,eac3,dts-hd,truehd".into(),
+            channels: "auto".into(),
+        }
+    }
 }
 
 /// UI drawing resolution (D44).
@@ -135,6 +171,8 @@ impl Default for Display {
             safe_area: crate::scene::DEFAULT_SAFE_AREA,
             double_buffer: false,
             ui_resolution: UiResolution::Native,
+            match_refresh: true,
+            refresh_switch_delay_ms: 0,
         }
     }
 }
@@ -274,6 +312,13 @@ fn validate(c: &mut Config, out: &mut Vec<String>) {
         c.display.safe_area = Display::default().safe_area;
     }
     clamp(&mut c.display.safe_area, 0.0, 0.1, "display.safe_area", out);
+    clamp(
+        &mut c.display.refresh_switch_delay_ms,
+        0,
+        10_000,
+        "display.refresh_switch_delay_ms",
+        out,
+    );
     clamp(&mut c.cache.images_mb, 64, 1 << 20, "cache.images_mb", out);
     clamp(&mut c.cache.textures_mb, 64, 4096, "cache.textures_mb", out);
     let i = &mut c.input;

@@ -78,6 +78,14 @@ pub fn print(opts: &SdlOptions) -> ExitCode {
         }
         Err(e) => println!("vaapi.error: {e}"),
     }
+    match crate::audio::devices() {
+        Ok(v) => {
+            for d in v {
+                println!("audio.device: {} ({})", d.name, d.label());
+            }
+        }
+        Err(e) => println!("audio.error: {e}"),
+    }
     if let Err(e) = jellyroll_platform::print_sdl_diagnostics(opts) {
         println!("sdl.error: {e}");
     }

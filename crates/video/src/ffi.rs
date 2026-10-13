@@ -123,6 +123,8 @@ unsafe extern "C" {
     pub fn mpv_create() -> *mut mpv_handle;
     pub fn mpv_initialize(ctx: *mut mpv_handle) -> c_int;
     pub fn mpv_terminate_destroy(ctx: *mut mpv_handle);
+    pub fn mpv_get_property_string(ctx: *mut mpv_handle, name: *const c_char) -> *mut c_char;
+    pub fn mpv_free(data: *mut c_void);
     pub fn mpv_set_option_string(
         ctx: *mut mpv_handle,
         name: *const c_char,

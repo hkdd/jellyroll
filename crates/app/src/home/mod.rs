@@ -34,7 +34,7 @@ use crate::input::InputAction;
 use crate::net::{Cmd, Event, Fetch, Fetched, NetHandle, Status};
 use detail::DetailView;
 use library::LibraryView;
-use pages::{Ctx, Open};
+use pages::{Change, Ctx, Open};
 use search::SearchView;
 use server_entry::ServerEntry;
 use settings::SettingsView;
@@ -81,6 +81,22 @@ pub struct PlayRequest {
     /// Initial mpv `aid`/`sid` (from the server's default tracks).
     pub audio_track: Option<String>,
     pub sub_track: Option<String>,
+    /// Video frame rate, for refresh-rate matching.
+    pub fps: Option<f64>,
+    /// Filled from settings when the request is taken (`take_play`).
+    pub match_refresh: bool,
+    pub audio: AudioOut,
+}
+
+/// Audio output settings for a playback (config, then Settings).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AudioOut {
+    /// mpv `audio-device`; None: mpv's default.
+    pub device: Option<String>,
+    /// mpv `audio-spdif` (bitstream formats); None: decode everything.
+    pub spdif: Option<String>,
+    /// mpv `audio-channels`; None: mpv's default.
+    pub channels: Option<String>,
 }
 
 pub struct HomeApp {
@@ -97,6 +113,8 @@ pub struct HomeApp {
     next_id: u64,
     /// What the GPU decodes (probed once in the background).
     caps: Arc<OnceLock<Option<DecodeCaps>>>,
+    /// mpv's audio outputs (probed once in the background).
+    audio_devices: Arc<OnceLock<Vec<crate::audio::AudioDevice>>>,
     /// Device facts for Settings (versions, GPU, display).
     about: Vec<(String, String)>,
     /// Play fetch in flight (request id).
@@ -127,10 +145,49 @@ pub struct HomeApp {
     purge_textures: bool,
 }
 
-/// The UI resolution in effect and where a choice made in Settings is saved.
+/// The UI resolution in effect, the other choices made in Settings, the
+/// config defaults they override, and where the choices are saved.
 pub struct UiSetting {
     pub resolution: UiResolution,
+    pub prefs: crate::ui_prefs::UiPrefs,
+    pub display: crate::config::Display,
+    pub audio: crate::config::Audio,
     pub save_to: Option<std::path::PathBuf>,
+}
+
+impl UiSetting {
+    fn save(&self) {
+        if let Some(p) = &self.save_to {
+            crate::ui_prefs::save(p, &self.prefs);
+        }
+    }
+
+    /// Refresh-rate matching at an output resolution ("3840x2160").
+    pub fn match_refresh(&self, res: &str) -> bool {
+        self.prefs.match_refresh.get(res).copied().unwrap_or(self.display.match_refresh)
+    }
+
+    pub fn audio_device(&self) -> String {
+        self.prefs.audio_device.clone().unwrap_or_else(|| self.audio.device.clone())
+    }
+
+    pub fn passthrough(&self, device: &str) -> bool {
+        self.prefs.passthrough.get(device).copied().unwrap_or(self.audio.passthrough)
+    }
+
+    pub fn audio_channels(&self) -> String {
+        self.prefs.audio_channels.clone().unwrap_or_else(|| self.audio.channels.clone())
+    }
+
+    pub fn audio_out(&self) -> AudioOut {
+        let device = self.audio_device();
+        let some = |v: String| (!v.is_empty() && v != "auto").then_some(v);
+        AudioOut {
+            spdif: self.passthrough(&device).then(|| self.audio.passthrough_codecs.clone()),
+            channels: some(self.audio_channels()),
+            device: some(device),
+        }
+    }
 }
 
 impl HomeApp {
@@ -147,6 +204,17 @@ impl HomeApp {
         let _ = std::thread::Builder::new().name("va-probe".into()).spawn(move || {
             let _ = c.set(jellyroll_video::va::probe().ok());
         });
+        // mpv's audio outputs, for Settings (probing takes a moment).
+        let audio_devices = Arc::new(OnceLock::new());
+        let d = audio_devices.clone();
+        let _ = std::thread::Builder::new().name("audio-probe".into()).spawn(move || {
+            let list = crate::audio::devices().unwrap_or_else(|e| {
+                tracing::warn!("{e}");
+                Vec::new()
+            });
+            tracing::info!(n = list.len(), "audio outputs found");
+            let _ = d.set(list);
+        });
         let mut a = Self {
             net,
             screen: Screen::Blank,
@@ -159,6 +227,7 @@ impl HomeApp {
             last_wants: Vec::new(),
             next_id: 0,
             caps,
+            audio_devices,
             about,
             play_req: None,
             player: None,
@@ -244,11 +313,19 @@ impl HomeApp {
                     .as_ref()
                     .map(|h| (h.data.user_name.clone(), h.data.server_name.clone()))
                     .unwrap_or_default();
-                let res = self.resolution_choice();
-                Page::Settings(Box::new(SettingsView::new(vp, &user, &server, self.about(), res)))
+                let devices = self.audio_devices.get().cloned().unwrap_or_default();
+                let values = self.settings_values();
+                Page::Settings(Box::new(SettingsView::new(
+                    vp,
+                    &user,
+                    &server,
+                    self.about(),
+                    values,
+                    devices,
+                )))
             }
-            Open::UiResolution(r) => {
-                self.set_resolution(r);
+            Open::Setting(c) => {
+                self.apply_setting(c);
                 return;
             }
         };
@@ -265,12 +342,45 @@ impl HomeApp {
         })
     }
 
+    /// What Settings shows.
+    fn settings_values(&self) -> settings::Values {
+        let device = self.ui.audio_device();
+        settings::Values {
+            resolution: self.resolution_choice(),
+            match_refresh: self.ui.match_refresh(&self.output_key()),
+            output: self.output_key(),
+            passthrough: self.ui.passthrough(&device),
+            audio_device: device,
+            channels: self.ui.audio_channels(),
+        }
+    }
+
+    fn apply_setting(&mut self, c: Change) {
+        tracing::info!(?c, "setting changed");
+        match c {
+            Change::UiResolution(r) => self.set_resolution(r),
+            Change::MatchRefresh(on) => {
+                let key = self.output_key();
+                self.ui.prefs.match_refresh.insert(key, on);
+            }
+            Change::AudioDevice(d) => self.ui.prefs.audio_device = Some(d),
+            Change::Passthrough(on) => {
+                let d = self.ui.audio_device();
+                self.ui.prefs.passthrough.insert(d, on);
+            }
+            Change::Channels(ch) => self.ui.prefs.audio_channels = Some(ch),
+        }
+        self.ui.save();
+        let values = self.settings_values();
+        if let Some(Page::Settings(v)) = self.stack.last_mut() {
+            v.set_values(values);
+        }
+    }
+
     fn set_resolution(&mut self, r: UiResolution) {
         let before = self.ui.resolution.render_scale(self.fb.1);
         self.ui.resolution = r;
-        if let Some(p) = &self.ui.save_to {
-            crate::ui_prefs::save(p, &crate::ui_prefs::UiPrefs { ui_resolution: Some(r) });
-        }
+        self.ui.prefs.ui_resolution = Some(r);
         let after = r.render_scale(self.fb.1);
         if after != before {
             tracing::info!(?r, render_scale = after, "UI resolution changed");
@@ -424,7 +534,15 @@ impl HomeApp {
 
     /// A playback request for the frame loop, once its stream URL is known.
     pub fn take_play(&mut self) -> Option<PlayRequest> {
-        self.play.take()
+        let mut req = self.play.take()?;
+        req.match_refresh = self.ui.match_refresh(&self.output_key());
+        req.audio = self.ui.audio_out();
+        Some(req)
+    }
+
+    /// The output resolution, as refresh-matching choices are keyed.
+    fn output_key(&self) -> String {
+        format!("{}x{}", self.fb.0, self.fb.1)
     }
 
     /// Something is playing through the player UI.
@@ -621,11 +739,21 @@ impl HomeApp {
             return false;
         }
         let tex = &self.textures;
-        let mut dirty = match self.stack.last_mut() {
-            Some(Page::Detail(v)) => v.update(now, tex),
-            Some(_) => false,
-            None => self.home.as_mut().is_some_and(|h| h.update(now, tex)),
-        };
+        let mut devices_arrived = false;
+        if let (Some(Page::Settings(v)), Some(list)) =
+            (self.stack.last_mut(), self.audio_devices.get())
+            && !v.has_devices()
+            && !list.is_empty()
+        {
+            v.set_devices(list.clone());
+            devices_arrived = true;
+        }
+        let mut dirty = devices_arrived
+            || match self.stack.last_mut() {
+                Some(Page::Detail(v)) => v.update(now, tex),
+                Some(_) => false,
+                None => self.home.as_mut().is_some_and(|h| h.update(now, tex)),
+            };
         dirty |= self.with_ctx(now, |me, ctx| match me.stack.last_mut() {
             Some(Page::Search(v)) => v.update(now, ctx),
             _ => false,

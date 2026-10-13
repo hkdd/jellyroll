@@ -13,7 +13,7 @@ use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 use jellyroll_platform::alloc_counter;
-use jellyroll_platform::{GpuTimer, Platform, PlatformEvent};
+use jellyroll_platform::{GpuTimer, ModeInfo, Platform, PlatformEvent};
 use jellyroll_render::Renderer;
 
 use crate::args::{Bench, Options};
@@ -189,9 +189,13 @@ pub fn run<P: Platform, R: Renderer>(
     let mut view = match net {
         Some(cfg) if !opts.demo && opts.play.is_none() => {
             let cap = config.config.cache.textures_mb << 20;
+            let save_to = cfg.data_dir.as_deref().map(crate::ui_prefs::path);
             let ui = crate::home::UiSetting {
                 resolution: config.config.display.ui_resolution,
-                save_to: cfg.data_dir.as_deref().map(crate::ui_prefs::path),
+                prefs: save_to.as_deref().map(crate::ui_prefs::load).unwrap_or_default(),
+                display: config.config.display.clone(),
+                audio: config.config.audio.clone(),
+                save_to,
             };
             match NetHandle::start(cfg, p.waker()) {
                 Ok(h) => {
@@ -243,6 +247,12 @@ pub fn run<P: Platform, R: Renderer>(
     // (with --play, the app exits instead).
     let browsing = opts.play.is_none() && matches!(view, View::Home(_));
     let mut stop_playback = false;
+    // Refresh-rate matching (spec 5.2): the mode set for playback (None:
+    // the desktop mode), and a play request waiting for a mode switch to
+    // be presented (and the TV given time) before mpv starts.
+    let mut playing_mode: Option<ModeInfo> = None;
+    let mut pending_play: Option<PendingPlay> = None;
+    let switch_delay = Duration::from_millis(config.config.display.refresh_switch_delay_ms);
     let mut last_present: Option<Instant> = None;
     let mut alloc_warned = false;
 
@@ -254,6 +264,7 @@ pub fn run<P: Platform, R: Renderer>(
             earliest(systemd.next_deadline(), bench_end),
         );
         let deadline = earliest(deadline, script.as_ref().and_then(|s| s.next_deadline()));
+        let deadline = earliest(deadline, pending_play.as_ref().map(|pp| pp.at));
         let (deadline, animating) = match (&playback, &view) {
             (Some(pb), View::Home(h)) if h.has_player() => {
                 (earliest(deadline, h.player_deadline(now)), pb.playing())
@@ -370,6 +381,9 @@ pub fn run<P: Platform, R: Renderer>(
                             dirty |= view.on_action(InputAction::TextInput(c), now);
                         }
                     }
+                    // Keys wait while the output switches modes for a video
+                    // (a moment; the player is not running yet).
+                    Some(Input::Press { .. }) if pending_play.is_some() => {}
                     Some(Input::Press { button, action: Some(a) }) => {
                         repeat.press(button, a, now);
                         if let (Some(pb), View::Home(h)) = (playback.as_mut(), &mut view)
@@ -497,10 +511,7 @@ pub fn run<P: Platform, R: Renderer>(
             if let View::Home(h) = &mut view
                 && let Some(req) = h.take_play()
             {
-                playback = start_play(p, req, now);
-                if playback.is_none() {
-                    h.playback_finished(now);
-                }
+                pending_play = Some(prepare_play(p, req, &mut playing_mode, switch_delay, now));
                 overlay_shown = false;
                 repeat.reset();
                 dirty = true;
@@ -524,16 +535,27 @@ pub fn run<P: Platform, R: Renderer>(
             if let View::Home(h) = &mut view
                 && let Some(req) = h.take_play()
             {
-                playback = start_play(p, req, now);
-                if playback.is_none() {
-                    h.playback_finished(now);
-                }
+                pending_play = Some(prepare_play(p, req, &mut playing_mode, switch_delay, now));
             }
             overlay_shown = false;
             dirty = true;
         }
+        // Start a waiting request once its mode switch is on screen.
+        if pending_play.as_ref().is_some_and(|pp| !pp.needs_present && now >= pp.at)
+            && let Some(pp) = pending_play.take()
+        {
+            playback = start_play(p, pp.req, pp.matched, now);
+            if playback.is_none() {
+                restore_mode(p, &mut playing_mode);
+                if let View::Home(h) = &mut view {
+                    h.playback_finished(now);
+                }
+            }
+            dirty = true;
+        }
         if std::mem::take(&mut stop_playback) {
             playback = None;
+            restore_mode(p, &mut playing_mode);
             // mpv changed GL state; Skia must not trust its cache.
             r.reset_gl_state();
             repeat.reset();
@@ -580,6 +602,12 @@ pub fn run<P: Platform, R: Renderer>(
                 r.end_frame();
             }
             stats.submit_ms.push(ms(submit_start.elapsed()));
+        } else if pending_play.is_some() {
+            // The output is switching modes for the video: black frames.
+            if r.begin_frame(fb) {
+                r.clear(jellyroll_render::Color::BLACK);
+                r.end_frame();
+            }
         } else if r.begin_frame(fb) {
             match &mut view {
                 View::Demo(scene) => {
@@ -635,6 +663,13 @@ pub fn run<P: Platform, R: Renderer>(
         // ---- present -----------------------------------------------------
         p.swap();
         let presented = Instant::now();
+        if let Some(pp) = pending_play.as_mut()
+            && pp.needs_present
+        {
+            // The modeset happened in that swap; now give the TV its time.
+            pp.needs_present = false;
+            pp.at = presented + pp.settle;
+        }
         if let Some(pb) = playback.as_mut() {
             pb.player.report_swap();
         }
@@ -686,12 +721,101 @@ pub fn run<P: Platform, R: Renderer>(
 }
 
 /// Starts mpv for a request from the browsing UI.
-fn start_play<P: Platform>(p: &P, req: crate::home::PlayRequest, now: Instant) -> Option<Playback> {
+/// A play request waiting for the output mode to change.
+struct PendingPlay {
+    req: crate::home::PlayRequest,
+    /// The output now runs at a mode matching the video.
+    matched: bool,
+    /// A mode switch was requested: it happens at the next swap.
+    needs_present: bool,
+    /// After the switch is presented: wait this long (TV resync).
+    settle: Duration,
+    /// Start no earlier than this.
+    at: Instant,
+}
+
+/// Picks the output mode for a request (spec 5.2) and asks for it.
+/// Playback starts once the switch has been presented (`PendingPlay`);
+/// consecutive videos at the same rate keep the mode without a switch.
+fn prepare_play<P: Platform>(
+    p: &mut P,
+    req: crate::home::PlayRequest,
+    playing_mode: &mut Option<ModeInfo>,
+    settle: Duration,
+    now: Instant,
+) -> PendingPlay {
+    let desktop = p.desktop_mode();
+    let target = match (req.match_refresh, req.fps, &desktop) {
+        (true, Some(fps), Some(d)) => crate::refresh::pick(&p.display_modes(), d, fps).cloned(),
+        _ => None,
+    };
+    // None: the desktop mode.
+    let want =
+        target.clone().filter(|t| !desktop.as_ref().is_some_and(|d| crate::refresh::same(t, d)));
+    let unchanged = match (&want, &*playing_mode) {
+        (None, None) => true,
+        (Some(a), Some(b)) => crate::refresh::same(a, b),
+        _ => false,
+    };
+    let mut pending =
+        PendingPlay { matched: target.is_some(), needs_present: false, settle, at: now, req };
+    if unchanged {
+        return pending;
+    }
+    match p.set_mode(want.as_ref()) {
+        Ok(()) => {
+            let to = want.as_ref().or(desktop.as_ref());
+            tracing::info!(
+                fps = pending.req.fps,
+                hz = to.map(crate::refresh::hz),
+                mode = ?to,
+                "output mode for playback"
+            );
+            *playing_mode = want;
+            pending.needs_present = true;
+        }
+        Err(e) => {
+            tracing::warn!("refresh-rate switch failed: {e}");
+            // Still at the previous mode: matched only if that fits.
+            pending.matched = match (&target, &*playing_mode, &desktop) {
+                (Some(t), Some(m), _) | (Some(t), None, Some(m)) => crate::refresh::same(t, m),
+                _ => false,
+            };
+        }
+    }
+    if !pending.matched {
+        tracing::info!(fps = pending.req.fps, "no output mode matches this video's frame rate");
+    }
+    pending
+}
+
+/// Back to the desktop mode after playback, if it was changed.
+fn restore_mode<P: Platform>(p: &mut P, playing_mode: &mut Option<ModeInfo>) {
+    if playing_mode.take().is_some() {
+        match p.set_mode(None) {
+            Ok(()) => tracing::info!("output mode restored"),
+            Err(e) => tracing::warn!("restoring the output mode failed: {e}"),
+        }
+    }
+}
+
+/// Starts mpv for a request from the browsing UI. `matched`: the output
+/// refresh fits the video, so mpv can resample to the display (spec 7.1).
+fn start_play<P: Platform>(
+    p: &P,
+    req: crate::home::PlayRequest,
+    matched: bool,
+    now: Instant,
+) -> Option<Playback> {
     let popts = jellyroll_video::PlayerOptions {
         http_header: Some(format!("Authorization: {}", req.authorization)),
         start_secs: Some(req.start_secs),
         audio_track: req.audio_track,
         sub_track: req.sub_track,
+        video_sync: if matched { "display-resample" } else { "audio" }.into(),
+        audio_device: req.audio.device,
+        audio_spdif: req.audio.spdif,
+        audio_channels: req.audio.channels,
         ..Default::default()
     };
     match Playback::start_with(p, &req.url, &req.title, popts, now) {

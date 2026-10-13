@@ -231,6 +231,10 @@ pub struct MediaStream {
     pub is_text_subtitle_stream: Option<bool>,
     #[serde(rename = "SupportsExternalStream", skip_serializing_if = "Option::is_none")]
     pub supports_external_stream: Option<bool>,
+    #[serde(rename = "RealFrameRate", skip_serializing_if = "Option::is_none")]
+    pub real_frame_rate: Option<f32>,
+    #[serde(rename = "AverageFrameRate", skip_serializing_if = "Option::is_none")]
+    pub average_frame_rate: Option<f32>,
 }
 
 /// Class ChapterInfo.

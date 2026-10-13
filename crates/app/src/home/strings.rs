@@ -54,8 +54,19 @@ pub const ABOUT: &str = "About this device";
 pub const DISPLAY: &str = "Display";
 pub const UI_RES_1080: &str = "Interface: 1080p, upscaled (smoother)";
 pub const UI_RES_NATIVE: &str = "Interface: full resolution (sharpest)";
-pub const UI_RES_HINT: &str =
-    "Select to switch. Video always plays at the display's full resolution.";
+pub const ON: &str = "on";
+pub const OFF: &str = "off";
+pub const MATCH_REFRESH: &str = "Match refresh rate: %s";
+pub const DISPLAY_HINT: &str = "Select to change. Video always plays at full resolution; \
+     matching switches the TV to the video's frame rate (films at 24 Hz), remembered for %s.";
+pub const AUDIO_OUTPUT: &str = "Output: %s";
+pub const AUDIO_AUTO: &str = "automatic";
+pub const PASSTHROUGH: &str = "Passthrough: %s";
+pub const CHANNELS_LABEL: &str = "Channels: %s";
+pub const CHANNELS_AUTO: &str = "auto";
+pub const CHANNELS_STEREO: &str = "stereo";
+pub const AUDIO_HINT: &str = "Passthrough (set per output) sends Dolby and DTS audio undecoded, \
+     for a receiver that decodes them. Applies from the next video.";
 
 pub const SIGN_IN_PASSWORD: &str = "Sign in with password";
 pub const NEW_CODE: &str = "New code";
@@ -147,7 +158,17 @@ pub const ALL: &[&str] = &[
     DISPLAY,
     UI_RES_1080,
     UI_RES_NATIVE,
-    UI_RES_HINT,
+    ON,
+    OFF,
+    MATCH_REFRESH,
+    DISPLAY_HINT,
+    AUDIO_OUTPUT,
+    AUDIO_AUTO,
+    PASSTHROUGH,
+    CHANNELS_LABEL,
+    CHANNELS_AUTO,
+    CHANNELS_STEREO,
+    AUDIO_HINT,
     SIGN_IN_PASSWORD,
     NEW_CODE,
     USERNAME,

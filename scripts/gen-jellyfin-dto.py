@@ -65,7 +65,9 @@ SELECT = {
                     "Index",
                     # M7: track menus, external subtitles.
                     "IsForced", "IsHearingImpaired", "DeliveryMethod", "DeliveryUrl",
-                    "IsTextSubtitleStream", "SupportsExternalStream"],
+                    "IsTextSubtitleStream", "SupportsExternalStream",
+                    # M8: refresh-rate matching.
+                    "RealFrameRate", "AverageFrameRate"],
     # M7: player.
     "ChapterInfo": ["StartPositionTicks", "Name"],
     "TrickplayInfoDto": ["Width", "Height", "TileWidth", "TileHeight", "ThumbnailCount",

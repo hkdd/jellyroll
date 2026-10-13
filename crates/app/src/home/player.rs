@@ -146,6 +146,9 @@ impl PlayerUi {
                 audio.and_then(|t| t.mpv_id).map_or("auto".into(), |n| n.to_string()),
             ),
             sub_track: Some(sub.and_then(|t| t.mpv_id).map_or("no".into(), |n| n.to_string())),
+            fps: i.fps,
+            match_refresh: false,
+            audio: Default::default(),
         };
         let next_at = i.next.as_ref().map(|_| {
             let credits = i.segments.iter().find(|s| s.kind == SegmentKind::Credits);
@@ -906,6 +909,7 @@ mod tests {
                 interval: 10.0,
             }),
             next: None,
+            fps: None,
         }
     }
 

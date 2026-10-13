@@ -243,7 +243,15 @@ pub trait Platform {
     fn framebuffer_size(&self) -> (u32, u32);
     /// Refresh rate of the current output mode (Hz), 0.0 if unknown.
     fn refresh_hz(&self) -> f32;
+    /// The output mode now: one set with [`Platform::set_mode`], else the
+    /// desktop mode.
     fn current_mode(&self) -> Option<ModeInfo>;
+    /// The mode the output had at startup (the TV's preferred mode).
+    fn desktop_mode(&self) -> Option<ModeInfo>;
+    /// Switches the output to `mode` (one of [`Platform::display_modes`]),
+    /// or back to the desktop mode with None. Takes effect at the next
+    /// swap. Fails in a desktop window.
+    fn set_mode(&mut self, mode: Option<&ModeInfo>) -> Result<(), String>;
     fn display_modes(&self) -> Vec<ModeInfo>;
     /// Appends all pending events without blocking.
     fn poll_events(&mut self, out: &mut Vec<PlatformEvent>);

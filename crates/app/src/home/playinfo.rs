@@ -96,6 +96,9 @@ pub struct PlayInfo {
     pub segments: Vec<Segment>,
     pub trickplay: Option<Trickplay>,
     pub next: Option<Card>,
+    /// Video frame rate from the server's stream info, for refresh-rate
+    /// matching (None when unknown).
+    pub fps: Option<f64>,
 }
 
 fn label(s: &MediaStream) -> String {
@@ -235,7 +238,17 @@ pub fn build(
         segments,
         trickplay: trickplay(item, &source_id),
         next: next.and_then(|n| model::card(n, Shape::Landscape)),
+        fps: frame_rate(streams),
     })
+}
+
+/// The video's frame rate: the average rate (what the frames actually
+/// are), else the base rate, which for interlaced or variable-rate video
+/// can be twice the frame rate.
+fn frame_rate(streams: &[MediaStream]) -> Option<f64> {
+    let v = streams.iter().find(|s| s.r#type == Some(MediaStreamType::Video))?;
+    let sane = |r: Option<f32>| r.map(f64::from).filter(|r| (10.0..=121.0).contains(r));
+    sane(v.average_frame_rate).or(sane(v.real_frame_rate))
 }
 
 #[cfg(test)]
