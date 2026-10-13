@@ -196,6 +196,7 @@ pub fn run<P: Platform, R: Renderer>(
                 display: config.config.display.clone(),
                 audio: config.config.audio.clone(),
                 save_to,
+                allow_exit: opts.allow_exit,
             };
             match NetHandle::start(cfg, p.waker()) {
                 Ok(h) => {
@@ -516,6 +517,12 @@ pub fn run<P: Platform, R: Renderer>(
                 }
             }
             dirty |= view.update(now);
+            if let View::Home(h) = &mut view
+                && h.take_exit()
+            {
+                systemd.stopping();
+                return Exit::Quit;
+            }
             p.set_text_input(view.wants_text());
             if let View::Home(h) = &mut view
                 && let Some(scale) = h.take_render_scale()

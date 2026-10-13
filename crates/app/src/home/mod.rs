@@ -12,6 +12,7 @@ mod osk;
 mod pages;
 pub mod player;
 pub mod playinfo;
+mod power_menu;
 mod search;
 mod server_entry;
 mod settings;
@@ -125,6 +126,10 @@ pub struct HomeApp {
     player_wants: Vec<u64>,
     /// A short message over the page (e.g. why something won't play).
     toast: Option<(String, Instant)>,
+    /// Open over everything else (spec 5.5).
+    power: Option<power_menu::PowerMenu>,
+    /// Exit chosen in the power menu, for the frame loop.
+    exit_requested: bool,
     play: Option<PlayRequest>,
     /// The Quick Connect screen the password form came from.
     qc: Option<Status>,
@@ -153,6 +158,8 @@ pub struct UiSetting {
     pub display: crate::config::Display,
     pub audio: crate::config::Audio,
     pub save_to: Option<std::path::PathBuf>,
+    /// The power menu offers exiting to the console (dev, --allow-exit).
+    pub allow_exit: bool,
 }
 
 impl UiSetting {
@@ -233,6 +240,8 @@ impl HomeApp {
             player: None,
             player_wants: Vec::new(),
             toast: None,
+            power: None,
+            exit_requested: false,
             play: None,
             qc: None,
             load_work: 0,
@@ -654,6 +663,29 @@ impl HomeApp {
     /// Applies an action. Returns true if it was used (a redraw is due and
     /// Back must not quit the app).
     pub fn on_action(&mut self, a: InputAction, now: Instant) -> bool {
+        if let Some(m) = &mut self.power {
+            match m.on_action(a) {
+                power_menu::Outcome::Stay => {}
+                power_menu::Outcome::Close => self.power = None,
+                power_menu::Outcome::Exit => self.exit_requested = true,
+            }
+            return true;
+        }
+        let used = self.screen_action(a, now);
+        // Back with nothing left to go back to: the power menu.
+        if !used && a == InputAction::Back {
+            self.power = Some(power_menu::PowerMenu::new(self.ui.allow_exit));
+            return true;
+        }
+        used
+    }
+
+    /// Exit to the console was chosen (dev only).
+    pub fn take_exit(&mut self) -> bool {
+        std::mem::take(&mut self.exit_requested)
+    }
+
+    fn screen_action(&mut self, a: InputAction, now: Instant) -> bool {
         match &mut self.screen {
             Screen::Entry(e) => {
                 let (used, cmd) = e.on_action(a);
@@ -739,7 +771,7 @@ impl HomeApp {
             return false;
         }
         let tex = &self.textures;
-        let mut devices_arrived = false;
+        let mut devices_arrived = self.power.as_mut().is_some_and(|m| m.update());
         if let (Some(Page::Settings(v)), Some(list)) =
             (self.stack.last_mut(), self.audio_devices.get())
             && !v.has_devices()
@@ -811,8 +843,14 @@ impl HomeApp {
             Some(Page::Search(v)) if matches!(self.screen, Screen::Browse) => v.next_deadline(),
             _ => None,
         };
-        // The toast's end needs a redraw too.
+        // The toast's end needs a redraw too, as does a power request's
+        // answer.
+        let now = Instant::now();
         let toast = self.toast.as_ref().map(|t| t.1);
+        let toast = match (toast, self.power.as_ref().and_then(|m| m.next_deadline(now))) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         match (page, toast) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
@@ -905,6 +943,9 @@ impl HomeApp {
             } else {
                 self.toast = None;
             }
+        }
+        if let Some(m) = &self.power {
+            m.draw(r);
         }
     }
 }

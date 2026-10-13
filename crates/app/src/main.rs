@@ -20,6 +20,7 @@ mod osd;
 mod perf;
 mod playback;
 mod posters;
+mod power;
 mod refresh;
 mod scene;
 mod systemd;

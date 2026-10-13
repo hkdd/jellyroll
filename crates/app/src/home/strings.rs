@@ -57,8 +57,7 @@ pub const UI_RES_NATIVE: &str = "Interface: full resolution (sharpest)";
 pub const ON: &str = "on";
 pub const OFF: &str = "off";
 pub const MATCH_REFRESH: &str = "Match refresh rate: %s";
-pub const DISPLAY_HINT: &str = "Select to change. Video always plays at full resolution; \
-     matching switches the TV to the video's frame rate (films at 24 Hz), remembered for %s.";
+pub const DISPLAY_HINT: &str = "Select to change. Matching plays each video at its own frame rate (films at 24 Hz); set for %s.";
 pub const AUDIO_OUTPUT: &str = "Output: %s";
 pub const AUDIO_AUTO: &str = "automatic";
 pub const PASSTHROUGH: &str = "Passthrough: %s";
@@ -67,6 +66,17 @@ pub const CHANNELS_AUTO: &str = "auto";
 pub const CHANNELS_STEREO: &str = "stereo";
 pub const AUDIO_HINT: &str = "Passthrough (set per output) sends Dolby and DTS audio undecoded, \
      for a receiver that decodes them. Applies from the next video.";
+
+pub const POWER_TITLE: &str = "Power";
+pub const EXIT_APP: &str = "Exit to console";
+pub const REBOOT: &str = "Restart";
+pub const POWER_OFF: &str = "Shut down";
+pub const CANCEL: &str = "Cancel";
+pub const RESTARTING: &str = "Restarting…";
+pub const SHUTTING_DOWN: &str = "Shutting down…";
+pub const POWER_NOT_ALLOWED: &str =
+    "This user may not do that. Install the polkit rule from docs/polkit-jellyroll.rules.";
+pub const POWER_FAILED: &str = "That didn't work: %s";
 
 pub const SIGN_IN_PASSWORD: &str = "Sign in with password";
 pub const NEW_CODE: &str = "New code";
@@ -169,6 +179,15 @@ pub const ALL: &[&str] = &[
     CHANNELS_AUTO,
     CHANNELS_STEREO,
     AUDIO_HINT,
+    POWER_TITLE,
+    EXIT_APP,
+    REBOOT,
+    POWER_OFF,
+    CANCEL,
+    RESTARTING,
+    SHUTTING_DOWN,
+    POWER_NOT_ALLOWED,
+    POWER_FAILED,
     SIGN_IN_PASSWORD,
     NEW_CODE,
     USERNAME,

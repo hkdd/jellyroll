@@ -54,6 +54,19 @@ else
   fi
 fi
 
+# 2b. Power menu: let the user restart/shut down without a password
+#     (logind via polkit; spec 5.5).
+if [[ -d /etc/polkit-1/rules.d || $DRY -eq 1 ]]; then
+  echo "+ install polkit rule for $APP_USER"
+  if [[ $DRY -eq 0 ]]; then
+    sed "s/subject.user == \"jellyroll\"/subject.user == \"$APP_USER\"/" \
+      "$HERE/docs/polkit-jellyroll.rules" > /etc/polkit-1/rules.d/50-jellyroll.rules
+    chmod 644 /etc/polkit-1/rules.d/50-jellyroll.rules
+  fi
+else
+  echo "polkit rules.d not found; power menu may ask for authorization (see docs/polkit-jellyroll.rules)"
+fi
+
 # 3. Example config, only if the user has none (never overwrite edits).
 APP_HOME="$(getent passwd "$APP_USER" | cut -d: -f6 || true)"
 APP_HOME="${APP_HOME:-/home/$APP_USER}"

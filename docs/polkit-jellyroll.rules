@@ -1,0 +1,19 @@
+// Lets the jellyroll user restart and shut down the HTPC from the power
+// menu without a password (spec 5.5). jellyroll asks logind
+// non-interactively; with no rule, logind allows this only while the
+// user's session is the only one (an SSH login makes it ask for an admin
+// password, which a remote can't type).
+//
+// scripts/install.sh installs this as /etc/polkit-1/rules.d/50-jellyroll.rules
+// (with the service user's name). By hand:
+//   sudo install -m 644 docs/polkit-jellyroll.rules /etc/polkit-1/rules.d/50-jellyroll.rules
+// and change "jellyroll" below if the service runs as another user.
+polkit.addRule(function(action, subject) {
+    if ((action.id == "org.freedesktop.login1.reboot" ||
+         action.id == "org.freedesktop.login1.reboot-multiple-sessions" ||
+         action.id == "org.freedesktop.login1.power-off" ||
+         action.id == "org.freedesktop.login1.power-off-multiple-sessions") &&
+        subject.user == "jellyroll") {
+        return polkit.Result.YES;
+    }
+});
