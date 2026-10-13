@@ -18,7 +18,7 @@ and verified versions.
 | **M3** libmpv playback: hwdec, GL handoff with the overlay, audio | **Done.** On the HTPC: 4K H.264 and HEVC 8-bit via VA-API at ~11-12% CPU with 0 dropped frames; HEVC 10-bit (unsupported on this GPU) is flagged, never silently degraded. See `docs/DECISIONS.md` |
 | **M4** Input: keyboard, gamepad, HDMI-CEC; spatial focus graph; key repeat | **Done.** Keyboard verified on the HTPC; gamepad tested end to end with an SDL virtual pad. CEC is built and unit-tested, but the HTPC's DisplayPort-to-HDMI adapter doesn't carry CEC, so the TV remote waits for an adapter that does (`docs/DECISIONS.md` D29) |
 | **M5** Jellyfin client: discovery, Quick Connect, auth, home data, images with caching; mock server | **Done.** On the HTPC against a Jellyfin 12.2 server: real home screen, cached start in ~0.4 s, first frame 393 ms. See `docs/DECISIONS.md` |
-| **M6** Browsing: libraries (10k-item grids), detail pages, search, settings, password sign-in; play from the server | **Built**, awaiting the HTPC checklist (`docs/M6-HARDWARE-CHECKLIST.md`) |
+| **M6** Browsing: libraries (10k-item grids), detail pages, search, settings, password sign-in; play from the server | **Built.** On the HTPC: search and series pages verified; scroll benchmark 0 missed vsyncs, 0 allocating frames; native 4K over the CPU/GPU budgets on frames that load artwork (accepted, D44; 1080p upscaled in Settings). Rest of the walkthrough: `docs/M6-HARDWARE-CHECKLIST.md` |
 | M7 to M10 | Not started |
 
 The app connects to your Jellyfin server and shows its home screen: My
