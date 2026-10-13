@@ -46,6 +46,12 @@ pub struct Display {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Input {
+    /// Use an HDMI-CEC adapter (TV remote) when one is present.
+    pub cec: bool,
+    /// Turn the TV on and switch it to this input at startup.
+    pub cec_wake_tv: bool,
+    /// Specific CEC device, e.g. "/dev/cec0"; empty = first available.
+    pub cec_device: String,
     pub repeat_delay_ms: u64,
     pub repeat_interval_ms: u64,
     pub repeat_accelerate_after_ms: u64,
@@ -81,6 +87,9 @@ impl Default for Input {
     fn default() -> Self {
         let r = RepeatConfig::default();
         Self {
+            cec: true,
+            cec_wake_tv: true,
+            cec_device: String::new(),
             repeat_delay_ms: r.initial_delay.as_millis() as u64,
             repeat_interval_ms: r.interval.as_millis() as u64,
             repeat_accelerate_after_ms: r.accelerate_after.as_millis() as u64,

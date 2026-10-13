@@ -23,10 +23,28 @@ fn list_dir(path: &str, prefix: &str) -> Vec<String> {
 }
 
 pub fn print(opts: &SdlOptions) -> ExitCode {
+    // Read-only: never claim the CEC bus or wake the TV from diagnostics.
+    let cec_device = opts.cec.as_ref().and_then(|c| c.device.clone());
+    let opts = &SdlOptions { cec: None, ..opts.clone() };
     println!("jellyroll: {}", env!("CARGO_PKG_VERSION"));
     println!("kernel: {}", read_trim("/proc/sys/kernel/osrelease").unwrap_or_default());
     println!("dri_devices: {}", list_dir("/dev/dri", "").join(", "));
     println!("cec_devices: {}", list_dir("/dev", "cec").join(", "));
+    match jellyroll_platform::cec::probe(cec_device.as_deref()) {
+        Ok(i) => {
+            println!("cec.device: {} ({}, {})", i.device, i.driver, i.name);
+            let pa = i.physical_address.map(jellyroll_platform::cec::fmt_physical_address);
+            println!(
+                "cec.physical_address: {}",
+                pa.as_deref().unwrap_or("none (TV off or not connected?)")
+            );
+            match i.logical_address {
+                Some(la) => println!("cec.logical_address: {la}"),
+                None => println!("cec.logical_address: none (claimed when jellyroll runs)"),
+            }
+        }
+        Err(e) => println!("cec: {e}"),
+    }
     let input = crate::input_access::scan(std::path::Path::new("/dev/input"));
     println!("input_devices: {} readable of {}", input.readable, input.devices);
     if input.blocked() {

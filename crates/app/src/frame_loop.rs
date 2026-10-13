@@ -18,7 +18,7 @@ use jellyroll_render::Renderer;
 
 use crate::args::{Bench, Options};
 use crate::hud::{CPU_BUDGET_MS, GPU_BUDGET_MS, Hud};
-use crate::input::{InputAction, KeyRepeat, map_key};
+use crate::input::{self, Input, InputAction, KeyRepeat};
 use crate::perf::{FrameStats, is_missed_vsync, ms};
 use crate::playback::{Outcome, Playback};
 use crate::scene::{Scene, UPLOAD_BUDGET};
@@ -199,17 +199,36 @@ pub fn run<P: Platform, R: Renderer>(
                     systemd.stopping();
                     return Exit::Quit;
                 }
-                PlatformEvent::KeyDown { key, mods, repeat: os_repeat } => {
-                    if os_repeat {
-                        continue; // in-app repeat only (spec 5.4)
+                PlatformEvent::KeyDown {
+                    key: jellyroll_platform::Key::F(3),
+                    repeat: false,
+                    ..
+                } => {
+                    hud.toggle(now);
+                    dirty = true;
+                }
+                PlatformEvent::CecStandby => {
+                    // The TV is going to standby: pause playback (spec 5.4).
+                    if let Some(pb) = playback.as_mut()
+                        && !pb.player.state.paused
+                    {
+                        pb.player.toggle_pause();
                     }
-                    if key == jellyroll_platform::Key::F(3) {
-                        hud.toggle(now);
-                        dirty = true;
-                        continue;
-                    }
-                    if let Some(a) = map_key(key, mods) {
-                        repeat.press(key, a, now);
+                }
+                PlatformEvent::Resized { .. } | PlatformEvent::DisplayChanged => {
+                    fb = p.framebuffer_size();
+                    refresh_hz = p.refresh_hz();
+                    make_header(fb, refresh_hz, &mut header);
+                    tracing::info!(w = fb.0, h = fb.1, refresh_hz, "output changed");
+                    repeat.reset();
+                    dirty = true;
+                }
+                PlatformEvent::Exposed => dirty = true,
+                PlatformEvent::Wake => {}
+                ref other => match input::from_event(other) {
+                    Some(Input::Release(b)) => repeat.release(b),
+                    Some(Input::Press { button, action: Some(a) }) => {
+                        repeat.press(button, a, now);
                         if let Some(pb) = playback.as_mut() {
                             match pb.on_action(a, now) {
                                 Outcome::Exit => {
@@ -226,18 +245,8 @@ pub fn run<P: Platform, R: Renderer>(
                         }
                         dirty |= scene.on_action(a, now);
                     }
-                }
-                PlatformEvent::KeyUp { key } => repeat.release(key),
-                PlatformEvent::Resized { .. } | PlatformEvent::DisplayChanged => {
-                    fb = p.framebuffer_size();
-                    refresh_hz = p.refresh_hz();
-                    make_header(fb, refresh_hz, &mut header);
-                    tracing::info!(w = fb.0, h = fb.1, refresh_hz, "output changed");
-                    repeat.reset();
-                    dirty = true;
-                }
-                PlatformEvent::Exposed => dirty = true,
-                PlatformEvent::Wake => {}
+                    Some(Input::Press { action: None, .. }) | None => {}
+                },
             }
         }
         if let Some(pb) = playback.as_mut() {
@@ -311,6 +320,7 @@ pub fn run<P: Platform, R: Renderer>(
             if scene.uploads_pending() {
                 scene.pump_uploads(r, fb.1, UPLOAD_BUDGET);
             }
+            scene.set_viewport(r.logical_size().0, safe_area);
             scene.draw(r, now, safe_area, &header, notice);
             // HUD text changes every refresh and is re-shaped then; keep its
             // allocations out of the steady-state check.

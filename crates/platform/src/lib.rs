@@ -8,7 +8,9 @@
 //! The app is generic over `P: Platform` (static dispatch in the render path).
 
 pub mod alloc_counter;
+pub mod cec;
 pub mod gl;
+pub mod pad;
 mod sdl;
 
 use std::time::Duration;
@@ -18,7 +20,7 @@ pub use sdl::{SdlOptions, SdlPlatform, print_sdl_diagnostics};
 
 /// Logical keys the app cares about. Platform keycodes are mapped here so the
 /// app never sees SDL types.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Key {
     Up,
     Down,
@@ -46,6 +48,107 @@ pub enum Key {
     VolumeUp,
     VolumeDown,
     Mute,
+}
+
+/// Gamepad buttons by position (SDL's layout: South is the bottom face
+/// button, A on Xbox pads). The left stick and the triggers are turned
+/// into buttons by [`pad::AnalogState`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum PadButton {
+    South,
+    East,
+    West,
+    North,
+    Back,
+    Guide,
+    Start,
+    LeftShoulder,
+    RightShoulder,
+    LeftTrigger,
+    RightTrigger,
+    DPadUp,
+    DPadDown,
+    DPadLeft,
+    DPadRight,
+    StickUp,
+    StickDown,
+    StickLeft,
+    StickRight,
+}
+
+/// HDMI-CEC remote keys ("UI command" codes, CEC 1.4 / linux/cec.h).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CecKey {
+    Select,
+    Up,
+    Down,
+    Left,
+    Right,
+    RootMenu,
+    SetupMenu,
+    ContentsMenu,
+    Back,
+    Number(u8),
+    Enter,
+    ChannelUp,
+    ChannelDown,
+    Info,
+    Guide,
+    VolumeUp,
+    VolumeDown,
+    Mute,
+    Play,
+    Stop,
+    Pause,
+    Rewind,
+    FastForward,
+    SkipForward,
+    SkipBackward,
+    PlayPause,
+    Blue,
+    Red,
+    Green,
+    Yellow,
+    Other(u8),
+}
+
+impl CecKey {
+    pub fn from_ui_command(code: u8) -> Self {
+        use CecKey as K;
+        match code {
+            0x00 => K::Select,
+            0x01 => K::Up,
+            0x02 => K::Down,
+            0x03 => K::Left,
+            0x04 => K::Right,
+            0x09 => K::RootMenu,
+            0x0a => K::SetupMenu,
+            0x0b => K::ContentsMenu,
+            0x0d => K::Back,
+            0x20..=0x29 => K::Number(code - 0x20),
+            0x2b => K::Enter,
+            0x30 => K::ChannelUp,
+            0x31 => K::ChannelDown,
+            0x35 => K::Info,
+            0x53 => K::Guide,
+            0x41 => K::VolumeUp,
+            0x42 => K::VolumeDown,
+            0x43 => K::Mute,
+            0x44 | 0x60 => K::Play,
+            0x45 | 0x64 => K::Stop,
+            0x46 => K::Pause,
+            0x48 => K::Rewind,
+            0x49 => K::FastForward,
+            0x4b => K::SkipForward,
+            0x4c => K::SkipBackward,
+            0x61 => K::PlayPause,
+            0x71 => K::Blue,
+            0x72 => K::Red,
+            0x73 => K::Green,
+            0x74 => K::Yellow,
+            other => K::Other(other),
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -81,6 +184,22 @@ pub enum PlatformEvent {
     /// Another thread asked the render loop to wake up (see
     /// [`Platform::waker`]), e.g. mpv has events or a new video frame.
     Wake,
+    PadDown {
+        button: PadButton,
+    },
+    PadUp {
+        button: PadButton,
+    },
+    /// CEC key pressed. Repeated "pressed" messages while held are folded
+    /// into one press; release comes from "released" or a hold timeout.
+    CecDown {
+        key: CecKey,
+    },
+    CecUp {
+        key: CecKey,
+    },
+    /// The TV asked all devices to go to standby (spec 5.4: pause playback).
+    CecStandby,
 }
 
 #[derive(Clone, Debug)]

@@ -21,6 +21,13 @@ double_buffer = false
 ui_render_scale = 1.0
 
 [input]
+# HDMI-CEC: control jellyroll with the TV remote (needs a CEC-capable GPU
+# port or a USB adapter such as Pulse-Eight; see README).
+cec = true
+# Turn the TV on and switch it to this input when jellyroll starts.
+cec_wake_tv = true
+# A specific device such as "/dev/cec0"; empty picks the first available.
+cec_device = ""
 # Key repeat for held buttons (keyboard, gamepad and remote alike).
 repeat_delay_ms = 350
 repeat_interval_ms = 80

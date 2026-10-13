@@ -16,11 +16,13 @@ and verified versions.
 | **M1** Skeleton: SDL3 KMSDRM, GL context, vsync loop, dirty redraw, perf HUD, systemd unit, dev mode | **Done.** Ran on the HTPC: boots to the test screen on a text console, input works, idle CPU near zero. Pacing numbers not yet recorded |
 | **M2** Renderer trait + Skia: rects, rounded rects, gradients, text (incl. CJK), images, animation clock | **Done.** On the HTPC (Intel HD 530, 4K): steady 60 fps, 0 missed vsyncs; Skia kept. The spec's p99 budgets are not met on this GPU at native 4K (GPU ~8 ms, CPU ~3.3 ms p50); see `docs/DECISIONS.md` |
 | **M3** libmpv playback: hwdec, GL handoff with the overlay, audio | **Done.** On the HTPC: 4K H.264 and HEVC 8-bit via VA-API at ~11-12% CPU with 0 dropped frames; HEVC 10-bit (unsupported on this GPU) is flagged, never silently degraded. See `docs/DECISIONS.md` |
-| M4 to M10 | Not started |
+| **M4** Input: keyboard, gamepad, HDMI-CEC; spatial focus graph; key repeat | **Built**, awaiting hardware validation ([`docs/M4-HARDWARE-CHECKLIST.md`](docs/M4-HARDWARE-CHECKLIST.md)). Gamepad tested end to end with an SDL virtual pad; CEC protocol handling unit-tested |
+| M5 to M10 | Not started |
 
 The app currently shows the M2 render benchmark: a home-screen-like layout
-with a backdrop, 60 poster cards with shadows and titles, Japanese and
-Cyrillic text, a focus animation, and a perf HUD on F3. The data and
+with a backdrop, a nav bar, 60 poster cards with shadows and titles,
+Japanese and Cyrillic text, a focus animation, and a perf HUD on F3. Focus
+moves spatially, and each row remembers where you left it. The data and
 artwork are fake; the real UI and Jellyfin data arrive in M5/M6.
 
 ## Layout
@@ -141,9 +143,47 @@ defaults. Command-line flags override the file. Mistakes in the file never
 stop the app: it uses defaults for anything it can't read, logs why, and
 shows a one-line notice on screen.
 
-Keyboard (Kodi-like): arrows, Enter = select, Esc/Backspace = back,
-Space = play/pause, `i` info, `c` menu, `f`/`r` seek, `+`/`-` volume, `m` mute,
-`/` search, F3 HUD.
+### Controls
+
+All three sources drive the same actions, and holding any direction
+repeats at the same rate.
+
+| Action | Keyboard (Kodi-like) | Gamepad | TV remote (CEC) |
+|---|---|---|---|
+| Move | arrows | D-pad, left stick | arrows |
+| Select | Enter | A / Cross | OK / Select |
+| Back | Esc, Backspace | B / Circle | Back / Return |
+| Play/pause | Space, `p` | X / Square | Play, Pause |
+| Info | `i` | Y / Triangle | Info |
+| Menu | `c` | Start | Setup / Contents menu, Guide |
+| Home | Home | Guide | Root menu / Home |
+| Seek back / forward | `r` / `f` | LB / RB | Rewind / Fast-forward |
+| Previous / next | `,` / `.` | LT / RT | Skip back / forward, Channel −/+ |
+| Search | `/` | Back / Select | Blue |
+| Volume, mute | `+` `-` `m` | | Volume, Mute (if the TV forwards them) |
+| Perf HUD | F3 | | |
+
+### HDMI-CEC (TV remote)
+
+jellyroll talks to the kernel's CEC devices (`/dev/cec0`, ...) directly. On
+start it turns the TV on and switches it to this input, and when the TV
+goes to standby it pauses playback. `--print-diagnostics` lists the CEC
+devices and their addresses. Settings: `cec`, `cec_wake_tv` and
+`cec_device` under `[input]` in the config.
+
+- Many PCs have **no CEC on their HDMI port**. Intel's integrated graphics
+  never expose it on native HDMI. Use a Pulse-Eight USB-CEC adapter, or a
+  DisplayPort-to-HDMI adapter with CEC support.
+- **Pulse-Eight USB adapter:** the kernel driver is `pulse8-cec`, but it
+  must be attached to the serial port first:
+  `sudo inputattach --pulse8-cec /dev/ttyACM0 &` (Fedora package
+  `linuxconsoletools`). A udev rule or a small systemd unit can make that
+  permanent.
+- `/dev/cec*` belongs to the `video` group. The service user gets it from
+  `install.sh`; to run by hand, `sudo usermod -aG video "$USER"`, then log
+  out and back in.
+- Some TVs need CEC switched on in their own menus (Anynet+, Bravia Sync,
+  SimpLink, ...).
 
 ## Installing as the boot-to-app session
 

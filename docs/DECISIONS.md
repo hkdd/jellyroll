@@ -272,6 +272,77 @@ failed)"). Known noise: mpv logs `after creating texture: OpenGL error
 INVALID_OPERATION` twice at video start on this driver; playback is
 unaffected.
 
+## Decisions made in M4
+
+**D24: One input pipeline for every source.** Keyboard, gamepad and
+HDMI-CEC events are normalized in `crates/app/src/input.rs` into a
+`Button` (which physical control: key, pad button or remote key) plus the
+`InputAction` it maps to. Auto-repeat is done by the app (spec 5.4) and is
+keyed by `Button`, so holding a D-pad, a stick, a remote arrow or a
+keyboard arrow repeats at the same rate with the same acceleration. OS key
+repeats are dropped. Releasing the button that is repeating stops it,
+whatever the source.
+
+**D25: Gamepad via the SDL gamepad API.** SDL's controller database gives
+one layout for Xbox, PlayStation, Switch Pro and generic pads. Map:
+D-pad/left stick move, South (A/Cross) select, East (B/Circle) back, West
+play/pause, North info, shoulders seek, triggers previous/next, Start menu,
+Back/Select search, Guide home. The stick and triggers become digital
+buttons with hysteresis (press at 60%, release below 35%), which works as
+the spec's deadzone and keeps a stick resting near the threshold from
+chattering; they then repeat like any other button. Hotplug is handled.
+The SDL path is tested end to end with an SDL virtual gamepad
+(`sdl::tests::virtual_gamepad_end_to_end`), so no hardware is needed in CI.
+
+**D26: HDMI-CEC through the kernel CEC API, not libcec.** The spec allows
+either. The kernel API (`/dev/cecN`, `linux/cec.h`) is a handful of ioctls
+and needs no extra library. It covers the adapters a PC is likely to have:
+the Pulse-Eight USB adapter (`pulse8-cec`, attached with `inputattach`),
+DisplayPort-to-HDMI adapters that tunnel CEC over DP AUX (i915, amdgpu,
+nouveau), and Chromebox/NUC-class onboard CEC. libcec would add a C++
+dependency licensed GPL-2.0-or-later. The kernel handles the CEC protocol
+basics (address polling, retries, abort replies). jellyroll:
+- claims a Playback logical address if none is configured (OSD name
+  "Jellyroll");
+- once it has a physical address, sends Image View On (turns the TV on,
+  `cec_wake_tv`) and Active Source (switches the TV's input), and again
+  whenever the address changes (cable replugged, TV power cycled);
+- answers Give Device Power Status ("on") and Menu Request ("active");
+- turns User Control Pressed/Released into press/release, with a 550 ms
+  hold timeout in case a release is lost (the CEC spec has remotes repeat
+  presses every 200–500 ms);
+- treats Standby from the TV as "pause playback" (spec 5.4). Powering the
+  TV off on shutdown comes with the power menu in M8.
+`--print-diagnostics` only reads the device (capabilities, addresses) and
+never claims an address or wakes the TV. CEC needs read-write access to
+`/dev/cecN`, which belongs to the `video` group.
+
+Native HDMI ports on Intel iGPUs (including the HTPC's HD 530) have no CEC
+support in the i915 driver; such machines need one of the adapters above.
+
+**D27: Spatial focus graph.** `crates/app/src/focus.rs`. Every focusable
+node gives an id, a container (row, grid, nav bar) and its layout rect;
+the scene rebuilds the graph when the layout changes (logical width,
+safe area), keeping focus and memory for ids that still exist. Moving in a
+direction:
+1. an explicit override for (node, direction) wins;
+2. otherwise candidates are nodes lying in that direction; those
+   overlapping the current node on the cross axis ("in the beam") beat
+   those that don't, then the lowest `13·major² + minor²` wins (major =
+   gap along the direction, minor = center offset across it; the weighting
+   Android's focus finder uses);
+3. if the winner is in another container that has been focused before, the
+   last focused node there is restored instead (spec 10.2: returning to a
+   row restores its position).
+The graph is the only record of focus: the scene asks it what is focused
+and keeps no copy. Unit-tested on grids, rows of different sizes (nav
+pills above cards), overrides and relayout.
+
+**D28: Play and Pause both toggle for now.** Remotes and keyboards have
+separate Play and Pause keys, but the M4 action set has only `PlayPause`,
+so pressing Play while playing pauses. M7 (player UX) adds explicit play
+and pause actions.
+
 ## Dependency approvals
 
 | Crate | Status |

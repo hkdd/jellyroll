@@ -6,6 +6,7 @@ mod anim;
 mod args;
 mod config;
 mod diagnostics;
+mod focus;
 mod frame_loop;
 mod hud;
 mod input;
@@ -63,6 +64,12 @@ fn main() -> ExitCode {
         double_buffer: opts.double_buffer,
         no_vsync: opts.no_vsync,
         window_size: opts.window,
+        cec: loaded.config.input.cec.then(|| jellyroll_platform::cec::CecOptions {
+            device: (!loaded.config.input.cec_device.is_empty())
+                .then(|| loaded.config.input.cec_device.clone().into()),
+            wake_tv: loaded.config.input.cec_wake_tv,
+            ..Default::default()
+        }),
     };
     if opts.print_diagnostics {
         return diagnostics::print(&sdl_opts);

@@ -4,6 +4,9 @@
 //! cards with baked shadows, rounded artwork and ellipsized titles, a
 //! focus scale-up, and Latin/Japanese/Cyrillic text.
 //!
+//! Navigation (M4) goes through the spatial focus graph: a nav bar of pills
+//! above the rows, and each row remembers its last focused card.
+//!
 //! The data is fake and the strings are fixtures; the real home screen and
 //! string table arrive in M5/M6. In bench mode the focus walks the grid and
 //! the rows sway, so every frame moves everything.
@@ -13,6 +16,7 @@ use std::time::{Duration, Instant};
 use jellyroll_render::{Color, ImageId, Point, Rect, Renderer, TextStyle, Weight};
 
 use crate::anim::Tween;
+use crate::focus::{Dir, FocusGraph, NodeId};
 use crate::input::InputAction;
 use crate::posters;
 
@@ -42,6 +46,15 @@ pub const UPLOAD_BUDGET: Duration = Duration::from_millis(2);
 
 /// Fraction of each edge kept clear for TV overscan (spec 10.2).
 pub const DEFAULT_SAFE_AREA: f32 = 0.025;
+
+const NAV: [&str; 6] = ["Home", "映画", "テレビ番組", "Фильмы", "Search", "Settings"];
+/// Focus ids: cards are 0..CARDS, nav pills follow.
+const NAV_ID: usize = CARDS;
+const NAV_CONTAINER: u32 = 100;
+const PILL_W: f32 = 150.0;
+const PILL_H: f32 = 36.0;
+const PILL_GAP: f32 = 12.0;
+const PILL_Y: f32 = 56.0;
 
 const ROW_LABELS: [&str; ROWS] =
     ["Continue Watching", "Next Up", "Latest Movies", "最近追加された映画"];
@@ -76,7 +89,12 @@ const BG_RGB: [u8; 3] = [12, 14, 20];
 const BG: Color = Color::rgb(BG_RGB[0], BG_RGB[1], BG_RGB[2]);
 
 pub struct Scene {
-    focus: usize,
+    graph: FocusGraph,
+    /// Layout the graph was built for: (logical width, safe area).
+    layout: (f32, f32),
+    /// Selected nav section.
+    nav: usize,
+    /// Previously focused node, for the focus-out animation.
     prev_focus: usize,
     focus_anim: Tween,
     backdrop: usize,
@@ -94,8 +112,10 @@ pub struct Scene {
 
 impl Scene {
     pub fn new(now: Instant) -> Self {
-        Self {
-            focus: 0,
+        let mut s = Self {
+            graph: FocusGraph::new(),
+            layout: (0.0, 0.0),
+            nav: 0,
             prev_focus: 0,
             focus_anim: Tween::settled(1.0, now),
             backdrop: 0,
@@ -108,7 +128,35 @@ impl Scene {
             bench: false,
             bench_next: now,
             start: now,
+        };
+        s.set_viewport(1920.0, DEFAULT_SAFE_AREA);
+        s
+    }
+
+    fn card_rect(row: usize, col: usize, sx: f32, sy: f32) -> Rect {
+        let y = sy + HEADER_H + row as f32 * ROW_H + ROW_LABEL_H;
+        Rect::new(sx + col as f32 * (CARD_W + CARD_GAP), y, CARD_W, CARD_H)
+    }
+
+    fn pill_rect(k: usize, sx: f32, sy: f32) -> Rect {
+        Rect::new(sx + k as f32 * (PILL_W + PILL_GAP), sy + PILL_Y, PILL_W, PILL_H)
+    }
+
+    /// Rebuilds the focus graph when the logical width or safe area
+    /// changes. Focus and per-row memory are kept.
+    pub fn set_viewport(&mut self, logical_w: f32, safe_area: f32) {
+        if self.layout == (logical_w, safe_area) {
+            return;
         }
+        self.layout = (logical_w, safe_area);
+        let (sx, sy) = (logical_w * safe_area, 1080.0 * safe_area);
+        let cards = (0..CARDS).map(|i| {
+            let (r, c) = (i / COLS, i % COLS);
+            (i as NodeId, r as u32, Self::card_rect(r, c, sx, sy))
+        });
+        let pills = (0..NAV.len())
+            .map(|k| ((NAV_ID + k) as NodeId, NAV_CONTAINER, Self::pill_rect(k, sx, sy)));
+        self.graph.set_nodes(cards.chain(pills));
     }
 
     pub fn uploads_pending(&self) -> bool {
@@ -146,42 +194,59 @@ impl Scene {
         any
     }
 
+    /// The focused node: the graph is the single source of truth.
+    fn focus(&self) -> usize {
+        self.graph.focused().unwrap_or(0) as usize
+    }
+
+    fn is_focused(&self, i: usize) -> bool {
+        self.graph.is_focused(i as NodeId)
+    }
+
     fn set_focus(&mut self, next: usize, now: Instant) -> bool {
-        if next == self.focus {
+        let prev = self.focus();
+        if !self.graph.focus(next as NodeId) {
             return false;
         }
-        self.prev_focus = self.focus;
-        self.focus = next;
+        self.focus_moved(prev, next, now);
+        true
+    }
+
+    /// Starts the focus and backdrop animations for a move.
+    fn focus_moved(&mut self, prev: usize, next: usize, now: Instant) {
+        self.prev_focus = prev;
         self.focus_anim = Tween::settled(0.0, now);
         self.focus_anim.retarget(1.0, now, FOCUS_ANIM);
         let row_backdrop = (next / COLS + next % COLS) % BACKDROPS;
-        if row_backdrop != self.backdrop {
+        if next < CARDS && row_backdrop != self.backdrop {
             self.prev_backdrop = self.backdrop;
             self.backdrop = row_backdrop;
             self.fade = Tween::settled(0.0, now);
             self.fade.retarget(1.0, now, BACKDROP_FADE);
         }
-        true
     }
 
     /// Applies an action; returns true if anything visible changed.
     pub fn on_action(&mut self, a: InputAction, now: Instant) -> bool {
-        let (r, c) = (self.focus / COLS, self.focus % COLS);
-        let next = match a {
-            InputAction::Left => (r, c.saturating_sub(1)),
-            InputAction::Right => (r, (c + 1).min(COLS - 1)),
-            InputAction::Up => (r.saturating_sub(1), c),
-            InputAction::Down => ((r + 1).min(ROWS - 1), c),
-            _ => return false,
-        };
-        self.set_focus(next.0 * COLS + next.1, now)
+        if let Some(dir) = Dir::from_action(a) {
+            let prev = self.focus();
+            let Some(next) = self.graph.navigate(dir) else { return false };
+            self.focus_moved(prev, next as usize, now);
+            return true;
+        }
+        let focus = self.focus();
+        if a == InputAction::Select && focus >= NAV_ID && focus - NAV_ID != self.nav {
+            self.nav = focus - NAV_ID;
+            return true;
+        }
+        false
     }
 
     /// Advances bench-mode animation; call once per frame.
     pub fn update(&mut self, now: Instant) {
         if self.bench && now >= self.bench_next {
             self.bench_next = now + BENCH_STEP;
-            self.set_focus((self.focus + 1) % CARDS, now);
+            self.set_focus((self.focus() + 1) % CARDS, now);
         }
     }
 
@@ -194,7 +259,7 @@ impl Scene {
 
     fn card_scale(&self, i: usize, now: Instant) -> f32 {
         let t = self.focus_anim.value(now);
-        if i == self.focus {
+        if self.is_focused(i) {
             1.0 + FOCUS_SCALE * t
         } else if i == self.prev_focus {
             1.0 + FOCUS_SCALE * (1.0 - t)
@@ -236,12 +301,25 @@ impl Scene {
         }
 
         r.text("Jellyroll", &TextStyle::new(44.0, Weight::Bold), Point::new(sx, sy), TEXT);
-        r.text(
-            "ホーム · 映画 · テレビ番組 · Фильмы · Search · Settings",
-            &TextStyle::new(22.0, Weight::Regular),
-            Point::new(sx, sy + 58.0),
-            TEXT_DIM,
-        );
+        let pill_style = TextStyle::new(20.0, Weight::Bold).max_width(PILL_W - 16.0);
+        for (k, label) in NAV.iter().enumerate() {
+            let rect = Self::pill_rect(k, sx, sy);
+            let focused = self.is_focused(NAV_ID + k);
+            let (bg, fg) = if focused {
+                (Color::WHITE, BG)
+            } else if k == self.nav {
+                (Color::rgba(255, 255, 255, 60), TEXT)
+            } else {
+                (Color::rgba(255, 255, 255, 18), TEXT_DIM)
+            };
+            r.fill_rrect(rect, PILL_H / 2.0, bg);
+            let m = r.measure_text(label, &pill_style);
+            let at = Point::new(
+                (rect.x + (rect.w - m.width) / 2.0).round(),
+                (rect.y + (rect.h - m.height) / 2.0).round(),
+            );
+            r.text(label, &pill_style, at, fg);
+        }
         r.text(
             header,
             &TextStyle::new(16.0, Weight::Regular),
@@ -258,8 +336,8 @@ impl Scene {
             let sway = if self.bench { (t * 1.6 + row as f32).sin() * 60.0 } else { 0.0 };
             for col in 0..COLS {
                 let i = row * COLS + col;
-                let x = sx + sway + col as f32 * (CARD_W + CARD_GAP);
-                let base = Rect::new(x, y + ROW_LABEL_H, CARD_W, CARD_H);
+                let mut base = Self::card_rect(row, col, sx, sy);
+                base.x += sway;
                 // Row virtualization: skip anything off screen.
                 if !base.intersects(&screen) {
                     continue;
@@ -287,7 +365,7 @@ impl Scene {
                     );
                 }
                 let title = TITLES[(i * 7 + row) % TITLES.len()];
-                let color = if i == self.focus { TEXT } else { TEXT_DIM };
+                let color = if self.is_focused(i) { TEXT } else { TEXT_DIM };
                 // The title slides down with the focused card's growth and
                 // border so they never overlap.
                 let ty = card.bottom().max(base.bottom()) + 3.0 * focus.max(0.0) + TITLE_GAP;
@@ -315,19 +393,55 @@ mod tests {
         let t0 = Instant::now();
         let mut s = Scene::new(t0);
         assert!(!s.on_action(InputAction::Left, t0));
-        assert!(!s.on_action(InputAction::Up, t0));
         assert!(s.on_action(InputAction::Right, t0));
-        assert_eq!(s.focus, 1);
+        assert_eq!(s.focus(), 1);
         assert!(s.focus_anim.is_animating(t0 + Duration::from_millis(10)));
         for _ in 0..30 {
             s.on_action(InputAction::Right, t0);
         }
-        assert_eq!(s.focus, COLS - 1);
+        assert_eq!(s.focus(), COLS - 1);
         for _ in 0..10 {
             s.on_action(InputAction::Down, t0);
         }
-        assert_eq!(s.focus, CARDS - 1);
+        assert_eq!(s.focus(), CARDS - 1);
         assert!(!s.on_action(InputAction::Select, t0));
+    }
+
+    #[test]
+    fn nav_bar_and_row_memory() {
+        let t0 = Instant::now();
+        let mut s = Scene::new(t0);
+        // Up from the first card reaches the nav bar; Select picks a section.
+        assert!(s.on_action(InputAction::Up, t0));
+        assert_eq!(s.focus(), NAV_ID);
+        assert!(!s.on_action(InputAction::Up, t0), "top edge");
+        s.on_action(InputAction::Right, t0);
+        assert!(s.on_action(InputAction::Select, t0));
+        assert_eq!(s.nav, 1);
+        // Down returns to the remembered card in row 0.
+        s.on_action(InputAction::Down, t0);
+        assert_eq!(s.focus(), 0);
+        // Row 1 remembers column 5 after a detour through row 0.
+        for _ in 0..5 {
+            s.on_action(InputAction::Right, t0);
+        }
+        s.on_action(InputAction::Down, t0);
+        assert_eq!(s.focus(), COLS + 5);
+        s.on_action(InputAction::Up, t0);
+        s.on_action(InputAction::Left, t0);
+        s.on_action(InputAction::Down, t0);
+        assert_eq!(s.focus(), COLS + 5);
+    }
+
+    #[test]
+    fn relayout_keeps_focus() {
+        let t0 = Instant::now();
+        let mut s = Scene::new(t0);
+        s.on_action(InputAction::Down, t0);
+        s.set_viewport(2560.0, 0.05);
+        assert_eq!(s.graph.focused(), Some(COLS as NodeId));
+        assert!(s.on_action(InputAction::Right, t0));
+        assert_eq!(s.focus(), COLS + 1);
     }
 
     #[test]
