@@ -27,7 +27,7 @@ crates/platform   jellyroll-platform: Platform trait, SDL3 backend, GL loader,
                   counting allocator. The only crate allowed `unsafe`.
 crates/app        jellyroll binary (#![forbid(unsafe_code)]): render loop,
                   input normalization + key repeat, perf stats/HUD, systemd.
-dist/             systemd unit
+dist/             systemd unit, example config
 scripts/          install.sh, dev-cage.sh, bench-startup.sh
 docs/             VERSIONS.md, DECISIONS.md, M1-HARDWARE-CHECKLIST.md
 ```
@@ -70,6 +70,7 @@ target/release/jellyroll
 
 | Flag | |
 |---|---|
+| `--config PATH` | Config file (default `~/.config/jellyroll/config.toml`) |
 | `--dev` | Desktop window instead of KMSDRM. Esc quits |
 | `--hud` | Show the perf HUD (F3 toggles) |
 | `--allow-exit` | Esc/Back quits outside dev mode |
@@ -77,6 +78,12 @@ target/release/jellyroll
 | `--bench-pacing SECS` | Continuous animation. Prints CPU/GPU/present p50/p99, missed vsyncs and allocating frames, and exits 1 if a spec §2 budget is exceeded |
 | `--bench-idle SECS` | Static screen. Fails if anything redraws or CPU ≥ 1% |
 | `--print-diagnostics` | SDL/GL/driver/display-mode/DRI/CEC info, for support over SSH |
+
+Settings live in `~/.config/jellyroll/config.toml`. Every key is optional;
+see [`dist/config.example.toml`](dist/config.example.toml) for all keys and
+defaults. Command-line flags override the file. Mistakes in the file never
+stop the app: it uses defaults for anything it can't read, logs why, and
+shows a one-line notice on screen.
 
 Keyboard (Kodi-like): arrows, Enter = select, Esc/Backspace = back,
 Space = play/pause, `i` info, `c` menu, `f`/`r` seek, `+`/`-` volume, `m` mute,
@@ -96,6 +103,8 @@ The script is idempotent. It:
 - creates an `jellyroll` user (`video`/`render`/`input` as a fallback to logind
   ACLs)
 - installs `/usr/local/bin/jellyroll` and `jellyroll.service`
+- copies the example config to `~jellyroll/.config/jellyroll/config.toml`
+  (only if there isn't one already)
 - sets the default target to **`multi-user.target`**
 - masks any display manager
 

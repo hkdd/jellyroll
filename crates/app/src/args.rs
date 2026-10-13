@@ -7,6 +7,7 @@ jellyroll: boot-to-app Jellyfin HTPC client
 
 USAGE: jellyroll [OPTIONS]
 
+  --config PATH          Config file (default: ~/.config/jellyroll/config.toml)
   --dev                  Run in a desktop window (Wayland/X11/cage) instead of KMSDRM
   --hud                  Show the perf HUD at startup (toggle: F3, or Info x3 later)
   --allow-exit           Let Esc/Back on the top level quit (always on with --dev)
@@ -22,6 +23,7 @@ USAGE: jellyroll [OPTIONS]
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Options {
+    pub config: Option<std::path::PathBuf>,
     pub dev: bool,
     pub hud: bool,
     pub allow_exit: bool,
@@ -52,6 +54,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
     let mut it = args.into_iter();
     while let Some(a) = it.next() {
         match a.as_str() {
+            "--config" => {
+                o.config = Some(it.next().ok_or("--config needs a path")?.into());
+            }
             "--dev" => o.dev = true,
             "--hud" => o.hud = true,
             "--allow-exit" => o.allow_exit = true,
@@ -68,6 +73,15 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
         o.allow_exit = true;
     }
     Ok(o)
+}
+
+impl Options {
+    /// Config file values that the command line can only switch on.
+    pub fn merge_config(&mut self, c: &crate::config::Config) {
+        self.hud |= c.debug.hud;
+        self.allow_exit |= c.debug.allow_exit;
+        self.double_buffer |= c.display.double_buffer;
+    }
 }
 
 #[cfg(test)]
@@ -98,6 +112,17 @@ mod tests {
         assert!(p(&["--bench-idle"]).is_err());
         assert!(p(&["--bench-idle", "-1"]).is_err());
         assert!(p(&["--bench-idle", "x"]).is_err());
+    }
+
+    #[test]
+    fn config_path_and_merge() {
+        let mut o = p(&["--config", "/tmp/x.toml"]).unwrap();
+        assert_eq!(o.config.as_deref(), Some(std::path::Path::new("/tmp/x.toml")));
+        assert!(p(&["--config"]).is_err());
+        let mut c = crate::config::Config::default();
+        c.debug.hud = true;
+        o.merge_config(&c);
+        assert!(o.hud && !o.allow_exit && !o.double_buffer);
     }
 
     #[test]

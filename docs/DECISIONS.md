@@ -61,8 +61,27 @@ SDL KMSDRM's triple buffering; `--double-buffer` switches. Compare
 input-to-photon latency and missed vsyncs on hardware and record the result
 here.
 
-## Dependency approvals needed (spec §0: ask before adding)
+**D11: Config file uses the `toml` crate (approved 2026-10-13).** Options
+considered: `toml`, `basic-toml`, a hand-written TOML subset, JSON via
+`serde_json`, or deferring. Chosen: `toml` with only the `std`, `serde` and
+`parse` features (no writer). It is the most widely used, tracks the TOML
+spec, and reports errors with line and column. `serde` (already in the
+approved stack) comes in at the same time. Rules:
+- The app only reads `~/.config/jellyroll/config.toml`. Settings changed in
+  the UI will go to the state store, so user comments are never overwritten.
+- Loading never fails. A missing file or key uses defaults. Unknown keys and
+  out-of-range values (clamped) are warned about. A file that does not parse
+  or has a wrong type falls back to all defaults with a warning. Warnings go
+  to the journal and a one-line notice is shown on screen.
+- Precedence: defaults < config file < command line. RUST_LOG beats
+  `log.level`.
+- Unknown-key detection compares against the serialized defaults, so it
+  cannot drift from the structs. `dist/config.example.toml` is checked by a
+  unit test to parse cleanly and equal the defaults.
+- New settings are added only when the feature that uses them exists.
 
-- **`toml`.** Needed for `~/.config/jellyroll/config.toml` (spec §11), which is
-  not in the stack table. Until it is approved, M1 is configured through CLI
-  flags and environment variables only.
+## Dependency approvals
+
+| Crate | Status |
+|---|---|
+| `toml` | Approved 2026-10-13 (D11) |

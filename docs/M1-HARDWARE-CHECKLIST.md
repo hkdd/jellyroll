@@ -44,5 +44,12 @@ results into this file or a PR.
 9. **Input:** arrow keys move the focus frame with a short glide. Holding an
    arrow repeats after 350 ms and speeds up after 1.5 s. Enter toggles a tile.
 
+10. **Config:** set `hud = true` under `[debug]` in
+    `~jellyroll/.config/jellyroll/config.toml` and run
+    `sudo systemctl restart jellyroll`. The HUD should be on at startup. Then
+    add a typo key (e.g. `hudd = true`) and restart again. Expect an orange
+    "CONFIG: 1 WARNING" line on screen, with the detail in
+    `journalctl -u jellyroll`.
+
 Fill in the reference hardware (spec §17) and the verified Mesa/kernel
 versions in `docs/VERSIONS.md`.

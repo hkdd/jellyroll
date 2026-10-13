@@ -25,6 +25,8 @@ All versions are the newest non-yanked release in the crates.io sparse index
 | `tracing` | 0.1.44 | |
 | `tracing-subscriber` | 0.3.23 | `default-features = false`, features `fmt`, `std`, `ansi` (no `env-filter`/regex) |
 | `tracing-journald` | 0.3.2 | Used when `JOURNAL_STREAM` is set |
+| `serde` | 1.0.229 | `derive` feature; config structs (and Jellyfin DTOs from M5) |
+| `toml` | 0.9.8 | `default-features = false`, features `std`, `serde`, `parse` (read-only). Pulls in `toml_parser` 1.1.5, `winnow` 0.7.15, `serde_spanned` 1.1.2, `toml_datetime` 0.7.5 |
 
 ## System libraries
 
@@ -45,7 +47,7 @@ core). **The reference HTPC hardware still has to be filled in (spec §17).**
 | `cosmic-text` or `parley` | M2 |
 | libmpv (render API, `hwdec`, `tone-mapping` option names) and a binding approach | M3 |
 | libcec, or the kernel CEC uAPI | M4 |
-| `tokio`, `reqwest` (rustls), `serde`, `serde_json`, image crates, `fast_image_resize` | M5 |
+| `tokio`, `reqwest` (rustls), `serde_json`, image crates, `fast_image_resize` | M5 |
 | Jellyfin server version, OpenAPI spec, OpenAPI generator | M5 |
 | `redb` vs `rusqlite` | M5 (benchmark) |
 | `zbus` | M8 |

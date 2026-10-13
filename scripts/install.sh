@@ -54,7 +54,16 @@ else
   fi
 fi
 
-# 3. Text-mode boot with no display manager.
+# 3. Example config, only if the user has none (never overwrite edits).
+APP_HOME="$(getent passwd "$APP_USER" | cut -d: -f6 || true)"
+APP_HOME="${APP_HOME:-/home/$APP_USER}"
+CFG_DIR="$APP_HOME/.config/jellyroll"
+if [[ ! -e "$CFG_DIR/config.toml" ]]; then
+  run install -d -m 755 -o "$APP_USER" -g "$APP_USER" "$APP_HOME/.config" "$CFG_DIR"
+  run install -m 644 -o "$APP_USER" -g "$APP_USER" "$HERE/dist/config.example.toml" "$CFG_DIR/config.toml"
+fi
+
+# 4. Text-mode boot with no display manager.
 run systemctl daemon-reload
 run systemctl set-default multi-user.target
 for dm in gdm gdm3 sddm lightdm lxdm xdm greetd ly; do
@@ -67,5 +76,6 @@ run systemctl enable jellyroll.service
 
 echo
 echo "Installed. Reboot, or start now with: systemctl start jellyroll"
+echo "Config: $CFG_DIR/config.toml"
 echo "Logs: journalctl -u jellyroll -f"
 echo "To get a login prompt back: systemctl stop jellyroll && systemctl start getty@tty1"

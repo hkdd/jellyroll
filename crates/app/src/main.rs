@@ -4,6 +4,7 @@
 
 mod anim;
 mod args;
+mod config;
 mod diagnostics;
 mod draw;
 mod frame_loop;
@@ -25,7 +26,7 @@ static ALLOC: jellyroll_platform::alloc_counter::CountingAlloc =
 
 fn main() -> ExitCode {
     let process_start = Instant::now();
-    let opts = match args::parse(std::env::args().skip(1)) {
+    let mut opts = match args::parse(std::env::args().skip(1)) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("jellyroll: {e}");
@@ -36,8 +37,23 @@ fn main() -> ExitCode {
         print!("{}", args::USAGE);
         return ExitCode::SUCCESS;
     }
-    logging::init();
+    // Load config before logging (it sets the log level); report its
+    // warnings once logging is up.
+    let loaded = match opts.config.clone().or_else(config::default_path) {
+        Some(path) => config::load(&path),
+        None => config::Loaded {
+            config: config::Config::default(),
+            path: Default::default(),
+            warnings: vec!["no $HOME or $XDG_CONFIG_HOME; using default config".into()],
+        },
+    };
+    logging::init(&loaded.config.log.level);
     logging::install_panic_hook();
+    tracing::info!(path = %loaded.path.display(), "config");
+    for w in &loaded.warnings {
+        tracing::warn!("config: {w}");
+    }
+    opts.merge_config(&loaded.config);
 
     let sdl_opts = SdlOptions {
         dev_window: opts.dev,
@@ -58,7 +74,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match frame_loop::run(&mut platform, &opts, process_start) {
+    match frame_loop::run(&mut platform, &opts, &loaded, process_start) {
         frame_loop::Exit::Quit | frame_loop::Exit::BenchPassed => ExitCode::SUCCESS,
         frame_loop::Exit::BenchFailed => ExitCode::FAILURE,
     }

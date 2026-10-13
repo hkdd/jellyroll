@@ -18,9 +18,7 @@ const SAFE: Color = rgb(40, 48, 70);
 const FOCUS: Color = rgb(240, 240, 240);
 const SWEEP: Color = rgb(250, 250, 250);
 const HEADER: Color = rgb(200, 205, 220);
-
-/// Fraction of each edge kept clear for TV overscan (spec 10.2).
-pub const SAFE_AREA: f32 = 0.025;
+const NOTICE: Color = rgb(240, 180, 60);
 
 pub struct Scene {
     focus: (i32, i32),
@@ -43,10 +41,12 @@ pub struct Layout {
 
 impl Layout {
     /// Logical units: 1080 logical px = output height (spec 6.4).
-    pub fn new(w: u32, h: u32) -> Self {
+    /// `safe_area`: fraction of each edge kept clear for TV overscan
+    /// (spec 10.2, from config).
+    pub fn new(w: u32, h: u32, safe_area: f32) -> Self {
         let scale = h as f32 / 1080.0;
-        let safe_x = (w as f32 * SAFE_AREA) as i32;
-        let safe_y = (h as f32 * SAFE_AREA) as i32;
+        let safe_x = (w as f32 * safe_area) as i32;
+        let safe_y = (h as f32 * safe_area) as i32;
         Self { scale, safe_x, safe_y, safe_w: w as i32 - 2 * safe_x, safe_h: h as i32 - 2 * safe_y }
     }
 }
@@ -106,14 +106,23 @@ impl Scene {
         self.sweep || self.fx.is_animating(now) || self.fy.is_animating(now)
     }
 
-    pub fn draw(&self, b: &mut RectBatch, fb: (u32, u32), l: &Layout, now: Instant, header: &str) {
+    pub fn draw(
+        &self,
+        b: &mut RectBatch,
+        fb: (u32, u32),
+        l: &Layout,
+        now: Instant,
+        header: &str,
+        notice: &str,
+    ) {
         let (w, h) = (fb.0 as i32, fb.1 as i32);
         let s = l.scale;
         b.rect(0, 0, w, h, BG);
         b.frame(l.safe_x, l.safe_y, l.safe_w, l.safe_h, (2.0 * s).max(1.0) as i32, SAFE);
 
         let text_px = (4.0 * s).round().max(1.0) as i32;
-        b.text(l.safe_x + (40.0 * s) as i32, l.safe_y + (40.0 * s) as i32, text_px, HEADER, header);
+        let text_x = l.safe_x + (40.0 * s) as i32;
+        b.text(text_x, l.safe_y + (40.0 * s) as i32, text_px, HEADER, header);
 
         // Poster-like 2:3 tiles, centered in the safe area.
         let gap = (32.0 * s) as i32;
@@ -155,6 +164,12 @@ impl Scene {
             let x = (t * (w - bar_w) as f32) as i32;
             b.rect(x, 0, bar_w, h, SWEEP);
         }
+
+        // Drawn last so nothing covers it; bottom-left of the safe area.
+        if !notice.is_empty() {
+            let y = l.safe_y + l.safe_h - (40.0 * s) as i32 - 5 * text_px;
+            b.text(text_x, y, text_px, NOTICE, notice);
+        }
     }
 }
 
@@ -183,7 +198,7 @@ mod tests {
 
     #[test]
     fn layout_scale() {
-        let l = Layout::new(3840, 2160);
+        let l = Layout::new(3840, 2160, 0.025);
         assert_eq!(l.scale, 2.0);
         assert_eq!(l.safe_x, 96);
         assert_eq!(l.safe_y, 54);
@@ -195,7 +210,7 @@ mod tests {
         let s = Scene::new(t0);
         for (w, h) in [(1920u32, 1080u32), (3840, 2160), (1280, 720)] {
             let mut b = RectBatch::with_capacity(256);
-            s.draw(&mut b, (w, h), &Layout::new(w, h), t0, "TEST");
+            s.draw(&mut b, (w, h), &Layout::new(w, h, 0.1), t0, "TEST", "NOTICE");
             for (r, _) in b.items() {
                 assert!(r.x >= 0 && r.y >= 0, "{r:?}");
                 assert!(r.x + r.w <= w as i32 && r.y + r.h <= h as i32, "{r:?} in {w}x{h}");

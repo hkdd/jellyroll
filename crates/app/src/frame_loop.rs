@@ -42,6 +42,15 @@ fn make_header(fb: (u32, u32), hz: f32, header: &mut String) {
     let _ = write!(header, "JELLYROLL M1   {}X{} @ {:.2}   F3 HUD", fb.0, fb.1, hz);
 }
 
+/// On-screen notice for config problems (details are in the journal).
+fn config_notice(warnings: usize) -> String {
+    match warnings {
+        0 => String::new(),
+        1 => "CONFIG: 1 WARNING, SEE JOURNALCTL -U JELLYROLL".into(),
+        n => format!("CONFIG: {n} WARNINGS, SEE JOURNALCTL -U JELLYROLL"),
+    }
+}
+
 /// How long the loop may sleep. Zero means render/poll immediately.
 pub fn wait_timeout(
     dirty: bool,
@@ -58,12 +67,19 @@ pub fn wait_timeout(
     }
 }
 
-pub fn run<P: Platform>(p: &mut P, opts: &Options, process_start: Instant) -> Exit {
+pub fn run<P: Platform>(
+    p: &mut P,
+    opts: &Options,
+    config: &crate::config::Loaded,
+    process_start: Instant,
+) -> Exit {
     let start = Instant::now();
     let mut systemd = Systemd::new(start);
     let mut scene = Scene::new(start);
     let mut hud = Hud::new(opts.hud, start);
-    let mut repeat = KeyRepeat::default();
+    let mut repeat = KeyRepeat::new(config.config.input.repeat());
+    let safe_area = config.config.display.safe_area;
+    let notice = config_notice(config.warnings.len());
     let mut stats = FrameStats::default();
     let mut batch = RectBatch::with_capacity(4096);
     let mut events: Vec<PlatformEvent> = Vec::with_capacity(64);
@@ -71,7 +87,7 @@ pub fn run<P: Platform>(p: &mut P, opts: &Options, process_start: Instant) -> Ex
 
     let mut fb = p.framebuffer_size();
     let mut refresh_hz = p.refresh_hz();
-    let mut layout = Layout::new(fb.0, fb.1);
+    let mut layout = Layout::new(fb.0, fb.1, safe_area);
     let mut header = String::new();
     make_header(fb, refresh_hz, &mut header);
 
@@ -157,7 +173,7 @@ pub fn run<P: Platform>(p: &mut P, opts: &Options, process_start: Instant) -> Ex
                 PlatformEvent::Resized { .. } | PlatformEvent::DisplayChanged => {
                     fb = p.framebuffer_size();
                     refresh_hz = p.refresh_hz();
-                    layout = Layout::new(fb.0, fb.1);
+                    layout = Layout::new(fb.0, fb.1, safe_area);
                     make_header(fb, refresh_hz, &mut header);
                     tracing::info!(w = fb.0, h = fb.1, refresh_hz, "output changed");
                     repeat.reset();
@@ -182,7 +198,7 @@ pub fn run<P: Platform>(p: &mut P, opts: &Options, process_start: Instant) -> Ex
         gl.viewport(0, 0, fb.0 as i32, fb.1 as i32);
         let timing = gpu_timer.as_mut().is_some_and(|t| t.begin(gl));
         batch.clear();
-        scene.draw(&mut batch, fb, &layout, now, &header);
+        scene.draw(&mut batch, fb, &layout, now, &header, &notice);
         hud.draw(&mut batch, &stats, layout.safe_x + layout.safe_w, layout.safe_y, layout.scale);
         batch.flush(gl, fb.1 as i32);
         if timing && let Some(t) = gpu_timer.as_mut() {

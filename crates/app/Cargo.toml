@@ -7,6 +7,8 @@ license.workspace = true
 [dependencies]
 jellyroll-platform = { path = "../platform" }
 sd-notify = "=0.5.0"
+serde = { version = "=1.0.229", features = ["derive"] }
+toml = { version = "=0.9.8", default-features = false, features = ["std", "serde", "parse"] }
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["fmt", "std", "ansi"] }
 tracing-journald = "=0.3.2"

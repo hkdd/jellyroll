@@ -106,6 +106,10 @@ struct Held {
 }
 
 impl KeyRepeat {
+    pub fn new(cfg: RepeatConfig) -> Self {
+        Self { cfg, held: None }
+    }
+
     pub fn press(&mut self, key: Key, action: InputAction, now: Instant) {
         self.held = action.repeats().then_some(Held {
             key,
