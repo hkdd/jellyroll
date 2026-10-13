@@ -1,4 +1,4 @@
-# jellyroll (`jf-htpc`)
+# Jellyroll
 
 A boot-to-app Jellyfin client for a Linux PC connected to a TV. It renders
 straight to the GPU through KMS/DRM with no X11, no Wayland compositor and no
@@ -23,9 +23,9 @@ safe-area outline, and a perf HUD on F3. The real UI starts in M2/M6.
 ## Layout
 
 ```
-crates/platform   jf-platform: Platform trait, SDL3 backend, GL loader,
+crates/platform   jellyroll-platform: Platform trait, SDL3 backend, GL loader,
                   counting allocator. The only crate allowed `unsafe`.
-crates/app        jf-htpc binary (#![forbid(unsafe_code)]): render loop,
+crates/app        jellyroll binary (#![forbid(unsafe_code)]): render loop,
                   input normalization + key repeat, perf stats/HUD, systemd.
 dist/             systemd unit
 scripts/          install.sh, dev-cage.sh, bench-startup.sh
@@ -59,13 +59,13 @@ libmpv, PipeWire and libcec come in at M3/M4.
 
 ```sh
 # Development, in a window on your desktop (Wayland or X11):
-target/release/jf-htpc --dev --hud
+target/release/jellyroll --dev --hud
 
 # Development under cage (a kiosk Wayland compositor), e.g. from a spare VT:
 scripts/dev-cage.sh --hud
 
 # Production path (KMSDRM), from a text console with the service stopped:
-target/release/jf-htpc
+target/release/jellyroll
 ```
 
 | Flag | |
@@ -93,9 +93,9 @@ sudo reboot
 
 The script is idempotent. It:
 
-- creates an `htpc` user (`video`/`render`/`input` as a fallback to logind
+- creates an `jellyroll` user (`video`/`render`/`input` as a fallback to logind
   ACLs)
-- installs `/usr/local/bin/jf-htpc` and `jf-htpc.service`
+- installs `/usr/local/bin/jellyroll` and `jellyroll.service`
 - sets the default target to **`multi-user.target`**
 - masks any display manager
 
@@ -108,8 +108,8 @@ grants DRM master and input access. It sends `READY=1` after the first frame
 and pings `WATCHDOG=1` from the render loop (`WatchdogSec=20`), with
 `Restart=always`.
 
-To get a console back: `sudo systemctl stop jf-htpc && sudo systemctl start getty@tty1`.
-Logs: `journalctl -u jf-htpc -f`.
+To get a console back: `sudo systemctl stop jellyroll && sudo systemctl start getty@tty1`.
+Logs: `journalctl -u jellyroll -f`.
 
 ## Testing
 
@@ -117,8 +117,8 @@ Logs: `journalctl -u jf-htpc -f`.
 cargo fmt --check
 cargo clippy --features build-sdl --all-targets -- -D warnings
 cargo test --features build-sdl
-xvfb-run -a target/release/jf-htpc --dev --bench-idle 3
-xvfb-run -a env BIN=target/release/jf-htpc scripts/bench-startup.sh 5 --dev
+xvfb-run -a target/release/jellyroll --dev --bench-idle 3
+xvfb-run -a env BIN=target/release/jellyroll scripts/bench-startup.sh 5 --dev
 ```
 
 CI runs all of the above. Frame-time budgets only mean something on the

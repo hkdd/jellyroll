@@ -4,7 +4,7 @@
 use std::fmt::Write;
 use std::time::{Duration, Instant};
 
-use jf_platform::PlatformInfo;
+use jellyroll_platform::PlatformInfo;
 
 use crate::draw::{Color, LINE_HEIGHT, Line, RectBatch, rgb};
 use crate::perf::{FrameStats, HISTORY};

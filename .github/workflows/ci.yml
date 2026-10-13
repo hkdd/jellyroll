@@ -50,15 +50,15 @@ jobs:
 
       - name: binary size (< 40 MB, spec 2)
         run: |
-          size=$(stat -c %s target/release/jf-htpc)
-          echo "jf-htpc: $size bytes"
+          size=$(stat -c %s target/release/jellyroll)
+          echo "jellyroll: $size bytes"
           test "$size" -lt $((40 * 1024 * 1024))
 
       # Smoke test on Mesa llvmpipe: the idle budget (no redraws, < 1% CPU) is
       # meaningful in software; frame-time budgets are not, so the pacing
       # bench only runs on real hardware.
       - name: idle bench (Xvfb)
-        run: xvfb-run -a -s "-screen 0 1920x1080x24" target/release/jf-htpc --dev --bench-idle 3
+        run: xvfb-run -a -s "-screen 0 1920x1080x24" target/release/jellyroll --dev --bench-idle 3
 
       - name: startup bench (Xvfb)
-        run: xvfb-run -a -s "-screen 0 1920x1080x24" env BIN=target/release/jf-htpc scripts/bench-startup.sh 5 --dev
+        run: xvfb-run -a -s "-screen 0 1920x1080x24" env BIN=target/release/jellyroll scripts/bench-startup.sh 5 --dev

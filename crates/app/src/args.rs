@@ -3,9 +3,9 @@
 use std::time::Duration;
 
 pub const USAGE: &str = "\
-jf-htpc: boot-to-app Jellyfin HTPC client
+jellyroll: boot-to-app Jellyfin HTPC client
 
-USAGE: jf-htpc [OPTIONS]
+USAGE: jellyroll [OPTIONS]
 
   --dev                  Run in a desktop window (Wayland/X11/cage) instead of KMSDRM
   --hud                  Show the perf HUD at startup (toggle: F3, or Info x3 later)

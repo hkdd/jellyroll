@@ -4,7 +4,7 @@
 //! This is replaced by the `Renderer` trait + Skia backend in M2; it exists
 //! so the render loop, pacing and perf HUD can be validated on hardware first.
 
-use jf_platform::Gl;
+use jellyroll_platform::Gl;
 
 pub type Color = [f32; 4];
 

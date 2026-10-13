@@ -20,7 +20,7 @@ pub fn init() {
     if std::env::var_os("JOURNAL_STREAM").is_some()
         && let Ok(layer) = tracing_journald::layer()
     {
-        registry.with(layer.with_syslog_identifier("jf-htpc".into())).init();
+        registry.with(layer.with_syslog_identifier("jellyroll".into())).init();
         return;
     }
     registry

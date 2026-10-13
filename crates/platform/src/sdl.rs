@@ -88,11 +88,11 @@ impl SdlPlatform {
             attr.set_blue_size(8);
 
             let mut builder = if opts.dev_window {
-                let mut b = video.window("jf-htpc (dev)", 1280, 720);
+                let mut b = video.window("jellyroll (dev)", 1280, 720);
                 b.resizable();
                 b
             } else {
-                let mut b = video.window("jf-htpc", desktop.w as u32, desktop.h as u32);
+                let mut b = video.window("jellyroll", desktop.w as u32, desktop.h as u32);
                 b.fullscreen();
                 b
             };

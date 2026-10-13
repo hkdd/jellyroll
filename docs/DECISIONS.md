@@ -29,7 +29,7 @@ yet, as spec §0 requires: prove the loop first. The HUD uses a 3x5 bitmap
 font with horizontal run-merging. All of this goes away when the `Renderer`
 trait arrives in M2.
 
-**D4: `unsafe` is confined to `jf-platform`.** The app crate is
+**D4: `unsafe` is confined to `jellyroll-platform`.** The app crate is
 `#![forbid(unsafe_code)]`. The counting global allocator, which needs
 `unsafe impl GlobalAlloc`, lives in the platform crate.
 
@@ -63,6 +63,6 @@ here.
 
 ## Dependency approvals needed (spec §0: ask before adding)
 
-- **`toml`.** Needed for `~/.config/jf-htpc/config.toml` (spec §11), which is
+- **`toml`.** Needed for `~/.config/jellyroll/config.toml` (spec §11), which is
   not in the stack table. Until it is approved, M1 is configured through CLI
   flags and environment variables only.

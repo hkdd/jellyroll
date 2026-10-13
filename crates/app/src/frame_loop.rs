@@ -7,8 +7,8 @@
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
-use jf_platform::alloc_counter;
-use jf_platform::{GpuTimer, Platform, PlatformEvent};
+use jellyroll_platform::alloc_counter;
+use jellyroll_platform::{GpuTimer, Platform, PlatformEvent};
 
 use crate::args::{Bench, Options};
 use crate::draw::RectBatch;
@@ -39,7 +39,7 @@ fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
 
 fn make_header(fb: (u32, u32), hz: f32, header: &mut String) {
     header.clear();
-    let _ = write!(header, "JF-HTPC M1   {}X{} @ {:.2}   F3 HUD", fb.0, fb.1, hz);
+    let _ = write!(header, "JELLYROLL M1   {}X{} @ {:.2}   F3 HUD", fb.0, fb.1, hz);
 }
 
 /// How long the loop may sleep. Zero means render/poll immediately.
@@ -139,7 +139,7 @@ pub fn run<P: Platform>(p: &mut P, opts: &Options, process_start: Instant) -> Ex
                     if os_repeat {
                         continue; // in-app repeat only (spec 5.4)
                     }
-                    if key == jf_platform::Key::F(3) {
+                    if key == jellyroll_platform::Key::F(3) {
                         hud.toggle(now);
                         dirty = true;
                         continue;

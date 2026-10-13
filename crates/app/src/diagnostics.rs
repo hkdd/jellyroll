@@ -3,7 +3,7 @@
 
 use std::process::ExitCode;
 
-use jf_platform::{Platform, SdlOptions, SdlPlatform};
+use jellyroll_platform::{Platform, SdlOptions, SdlPlatform};
 
 fn read_trim(path: &str) -> Option<String> {
     std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
@@ -23,7 +23,7 @@ fn list_dir(path: &str, prefix: &str) -> Vec<String> {
 }
 
 pub fn print(opts: &SdlOptions) -> ExitCode {
-    println!("jf-htpc: {}", env!("CARGO_PKG_VERSION"));
+    println!("jellyroll: {}", env!("CARGO_PKG_VERSION"));
     println!("kernel: {}", read_trim("/proc/sys/kernel/osrelease").unwrap_or_default());
     println!("dri_devices: {}", list_dir("/dev/dri", "").join(", "));
     println!("cec_devices: {}", list_dir("/dev", "cec").join(", "));
@@ -39,7 +39,7 @@ pub fn print(opts: &SdlOptions) -> ExitCode {
             println!("env.{var}: {v}");
         }
     }
-    if let Err(e) = jf_platform::print_sdl_diagnostics(opts) {
+    if let Err(e) = jellyroll_platform::print_sdl_diagnostics(opts) {
         println!("sdl.error: {e}");
     }
     // Creating a context needs DRM master on KMSDRM; if the service is

@@ -1,15 +1,15 @@
-# Jellyfin HTPC client: the only graphical process on the machine.
+# Jellyroll: the only graphical process on the machine.
 # Installed by scripts/install.sh. Boot target is multi-user.target with no
 # display manager (NOT rescue.target, which starts no networking).
 [Unit]
-Description=Jellyfin HTPC Client
+Description=Jellyroll (Jellyfin HTPC client)
 After=systemd-user-sessions.service systemd-logind.service network-online.target sound.target
 Wants=network-online.target
 Conflicts=getty@tty1.service
 After=getty@tty1.service
 
 [Service]
-User=htpc
+User=jellyroll
 # PAMName opens a logind session on tty1, so the seat ACLs grant DRM master
 # and /dev/input access. If your distro's PAM stack does not, the install
 # script also adds the user to video/render/input as a fallback.
@@ -22,7 +22,7 @@ TTYReset=yes
 TTYVHangup=yes
 TTYVTDisallocate=yes
 Environment=RUST_LOG=info
-ExecStart=/usr/local/bin/jf-htpc
+ExecStart=/usr/local/bin/jellyroll
 Restart=always
 RestartSec=1
 # The render loop pings the watchdog itself (WATCHDOG=1 every 10 s), so a
@@ -37,7 +37,7 @@ NotifyAccess=main
 NoNewPrivileges=yes
 PrivateTmp=yes
 #ProtectSystem=strict
-#ReadWritePaths=/home/htpc/.config/jf-htpc /home/htpc/.local/share/jf-htpc /home/htpc/.cache/jf-htpc
+#ReadWritePaths=/home/jellyroll/.config/jellyroll /home/jellyroll/.local/share/jellyroll /home/jellyroll/.cache/jellyroll
 #ProtectHome=read-only
 
 [Install]

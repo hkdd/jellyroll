@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Startup benchmark (spec 13): runs the client N times and reports
 # process start -> first frame presented, as logged by the render loop.
-# Budget (spec 2): < 500 ms. Usage: scripts/bench-startup.sh [N] [jf-htpc args...]
+# Budget (spec 2): < 500 ms. Usage: scripts/bench-startup.sh [N] [jellyroll args...]
 set -euo pipefail
 N="${1:-10}"; shift || true
-BIN="${BIN:-target/release/jf-htpc}"
+BIN="${BIN:-target/release/jellyroll}"
 times=()
 for _ in $(seq "$N"); do
   out="$("$BIN" --bench-idle 0.1 "$@" 2>&1 >/dev/null || true)"

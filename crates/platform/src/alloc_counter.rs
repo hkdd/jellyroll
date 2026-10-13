@@ -3,7 +3,7 @@
 //!
 //! ```ignore
 //! #[global_allocator]
-//! static ALLOC: jf_platform::alloc_counter::CountingAlloc = jf_platform::alloc_counter::CountingAlloc;
+//! static ALLOC: jellyroll_platform::alloc_counter::CountingAlloc = jellyroll_platform::alloc_counter::CountingAlloc;
 //! ```
 //!
 //! Cost is one relaxed atomic increment per allocation.

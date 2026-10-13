@@ -1,4 +1,4 @@
-//! jf-htpc: boot-to-app Jellyfin HTPC client. See docs/ and the README.
+//! jellyroll: boot-to-app Jellyfin HTPC client. See docs/ and the README.
 
 #![forbid(unsafe_code)]
 
@@ -17,17 +17,18 @@ mod systemd;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use jf_platform::{SdlOptions, SdlPlatform};
+use jellyroll_platform::{SdlOptions, SdlPlatform};
 
 #[global_allocator]
-static ALLOC: jf_platform::alloc_counter::CountingAlloc = jf_platform::alloc_counter::CountingAlloc;
+static ALLOC: jellyroll_platform::alloc_counter::CountingAlloc =
+    jellyroll_platform::alloc_counter::CountingAlloc;
 
 fn main() -> ExitCode {
     let process_start = Instant::now();
     let opts = match args::parse(std::env::args().skip(1)) {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("jf-htpc: {e}");
+            eprintln!("jellyroll: {e}");
             return ExitCode::from(2);
         }
     };

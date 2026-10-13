@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use jf_platform::{Key, Modifiers};
+use jellyroll_platform::{Key, Modifiers};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[allow(dead_code)] // TextInput/Backspace arrive with the on-screen keyboard (M4).
