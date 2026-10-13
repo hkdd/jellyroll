@@ -52,9 +52,10 @@ GitHub (rust-skia/skia-binaries) during the first build, so that build needs
 network access. Offline builds can point `SKIA_BINARIES_URL` at a local copy
 of the archive (`file://...`).
 
-Besides libc, the binary links `libstdc++` (for Skia). SDL `dlopen`s
-drm/gbm/EGL/GL/udev at runtime. Fonts are compiled in; fontconfig is not
-used.
+The prebuilt Skia links against the system's `libstdc++`, `freetype` and
+`fontconfig`, so building needs their development packages (see the table
+below). At runtime jellyroll only uses its compiled-in fonts and never asks
+fontconfig for any. SDL `dlopen`s drm/gbm/EGL/GL/udev at runtime.
 
 System packages (runtime, plus headers when using `build-sdl`):
 
@@ -63,6 +64,7 @@ System packages (runtime, plus headers when using `build-sdl`):
 | SDL3 | `SDL3-devel` | build with `build-sdl` (24.04 has no SDL3) | `sdl3` |
 | Mesa / KMS | `mesa-libEGL-devel mesa-libgbm-devel libdrm-devel mesa-dri-drivers` | `libegl-dev libgbm-dev libdrm-dev libgl1-mesa-dri` | `mesa libdrm` |
 | input | `systemd-devel` (libudev) | `libudev-dev` | `systemd-libs` |
+| Skia (link) | `libstdc++-devel freetype-devel fontconfig-devel` | `libstdc++-dev libfreetype-dev libfontconfig-dev` | `gcc-libs freetype2 fontconfig` |
 | build-sdl only | `cmake ninja-build` + X11/Wayland headers | see `.github/workflows/ci.yml` | `cmake ninja` |
 
 libmpv, PipeWire and libcec come in at M3/M4.

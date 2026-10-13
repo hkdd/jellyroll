@@ -50,8 +50,14 @@ Checked against the crates.io index on 2026-10-13.
 | `unicode-script` | 0.5.8 | Already in the tree via cosmic-text; named directly because the `Fallback` trait takes its `Script` type |
 
 The release binary grew from 4.6 MB to 13.9 MB (stripped), including 3.9 MB
-of fonts. Skia adds a runtime dependency on `libstdc++.so.6` and nothing else
-(no fontconfig, no system freetype).
+of fonts. The prebuilt Skia links dynamically against `libstdc++.so.6`,
+`libfreetype.so.6` and `libfontconfig.so.1` (plus their own deps: expat,
+zlib, bzip2, libpng, brotli). Building needs the development packages:
+Fedora `libstdc++-devel freetype-devel fontconfig-devel`. jellyroll loads
+fonts only from its own bundled bytes (`FontMgr::custom_empty`), so
+fontconfig is linked but never consulted. rust-skia also publishes an
+`ftembed` (embedded FreeType) variant, but only with `textlayout`, which
+adds ICU and HarfBuzz we don't use.
 
 ## Fonts
 

@@ -93,8 +93,9 @@ Rust, so `jellyroll-render` is `#![forbid(unsafe_code)]`.
 **D13: Text = cosmic-text shaping + Skia glyph rasterization, bundled fonts
 only.** cosmic-text 0.19 (no default features) shapes and ellipsizes;
 glyph ids and positions become a Skia `TextBlob` drawn with typefaces loaded
-from the same font bytes through `FontMgr::custom_empty()`, so neither
-fontconfig nor a system font scan is involved. A custom `Fallback` limits
+from the same font bytes through `FontMgr::custom_empty()`, so no system
+font scan is involved (Skia's prebuilt library still links fontconfig and
+freetype; see VERSIONS.md). A custom `Fallback` limits
 font fallback to the bundled families (Noto Sans, then Noto Sans JP). Text
 renders identically on every machine.
 

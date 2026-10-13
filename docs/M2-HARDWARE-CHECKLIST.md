@@ -8,10 +8,14 @@ mean nothing.
 Run everything on a text console (Ctrl+Alt+F3) as a user in the `input`
 group, with the jellyroll service stopped if it is installed.
 
-1. **Build** (the first build downloads a prebuilt Skia from GitHub):
+1. **Build** (the first build downloads a prebuilt Skia from GitHub, and
+   linking it needs three development packages):
    ```sh
+   sudo dnf install -y libstdc++-devel freetype-devel fontconfig-devel
    cd ~/jellyroll && git pull && cargo build --release
    ```
+   Check the binary is about 14 MB (`ls -l target/release/jellyroll`). If the
+   build fails, the old binary stays in place and still shows the M1 screen.
 2. **Look at it:** `./target/release/jellyroll --hud --allow-exit`
    - Japanese and Cyrillic text renders (header line and the fourth row
      title), long titles end in "…".
