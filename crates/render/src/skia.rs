@@ -518,7 +518,11 @@ impl Renderer for SkiaRenderer {
             &mut self.ctx,
             &raster,
             gpu::Mipmapped::No,
-            gpu::Budgeted::Yes,
+            // Not counted against Skia's cache budget: the app caps its own
+            // artwork (`[cache] textures_mb`, default 512 MB). Counted, it
+            // kept Skia permanently over its 256 MB budget, so Skia purged
+            // and rebuilt its own scratch resources every frame (D42).
+            gpu::Budgeted::No,
         )?;
         let entry = ImageEntry { image, bytes: bytes as u64 };
         self.stats.texture_bytes += entry.bytes;
@@ -550,6 +554,8 @@ impl Renderer for SkiaRenderer {
         RenderStats {
             text_cache_entries: self.text_cache.len() as u32,
             shadow_cache_entries: self.shadows.len() as u32,
+            gpu_cache_bytes: self.ctx.resource_cache_usage().resource_bytes as u64,
+            gpu_cache_limit: self.ctx.resource_cache_limit() as u64,
             ..self.stats
         }
     }

@@ -142,6 +142,9 @@ pub struct RenderStats {
     pub text_cache_hits: u64,
     pub text_cache_misses: u64,
     pub shadow_cache_entries: u32,
+    /// Skia's own GPU resource cache: in use and its budget.
+    pub gpu_cache_bytes: u64,
+    pub gpu_cache_limit: u64,
 }
 
 pub trait Renderer {

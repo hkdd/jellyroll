@@ -575,6 +575,21 @@ vsyncs, no allocating steady-state frames). Under Xvfb with llvmpipe
 (software GL) it reports 0 allocating frames; CPU/GPU numbers there are
 meaningless, so the hardware checklist runs it on the HTPC.
 
+**D42: Artwork textures are outside Skia's cache budget.** The first
+`--bench-scroll` runs on the HTPC (HD 530, 4K) had 0 missed vsyncs and 0
+allocating frames, but CPU p99 8-11 ms and GPU p99 7.4-8.4 ms.
+- The library grid fetched the focused item's backdrop on every step and
+  never drew it (a 1920x1080 upload per press at 4K). Removed.
+- Artwork was created as *budgeted* Skia textures. The app keeps up to
+  512 MB of artwork (its own LRU, `[cache] textures_mb`); Skia's budget is
+  256 MB, so Skia was always over it, purging and rebuilding its own
+  scratch resources and slowing uploads (3 ms p50 per uploading frame,
+  steady frames at 5.5 ms p50). Artwork is now unbudgeted; the app's LRU
+  is its only cap, and Skia's budget covers its own resources.
+- The GPU p99 is the HD 530 at native 4K, as measured in M2 (see
+  "M2 benchmark results", open question 2): above the 6 ms budget, still
+  60 fps with no missed vsyncs.
+
 ## Dependency approvals
 
 | Crate | Status |

@@ -672,6 +672,11 @@ fn finish_bench<P: Platform, R: Renderer>(
                 rs.text_cache_misses,
                 rs.shadow_cache_entries
             );
+            println!(
+                "skia cache: {:.1} of {:.1} MB",
+                rs.gpu_cache_bytes as f64 / (1024.0 * 1024.0),
+                rs.gpu_cache_limit as f64 / (1024.0 * 1024.0)
+            );
             let mut check = |ok: bool, what: &str| {
                 if !ok {
                     println!("FAIL: {what}");
