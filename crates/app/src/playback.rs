@@ -39,11 +39,12 @@ fn title_from(url: &str) -> &str {
 
 impl Playback {
     pub fn start<P: Platform>(p: &P, url: &str, now: Instant) -> Result<Self, String> {
-        let mut player = Player::new(p.gl_loader(), p.waker(), &PlayerOptions::default())?;
         let (major, minor) = jellyroll_video::client_api_version();
         tracing::info!(api = format!("{major}.{minor}"), url, "starting playback");
+        let mut opts = PlayerOptions::default();
         match jellyroll_video::va::probe() {
             Ok(caps) => {
+                opts.render_node = Some(caps.device.clone().into());
                 let list = |v: Vec<jellyroll_video::va::Codec>| {
                     v.iter().map(|c| c.name()).collect::<Vec<_>>().join(", ")
                 };
@@ -56,6 +57,7 @@ impl Playback {
             }
             Err(e) => tracing::warn!("no VA-API hardware decode: {e}"),
         }
+        let mut player = Player::new(p.gl_loader(), p.waker(), &opts)?;
         player.load(url)?;
         Ok(Self {
             player,

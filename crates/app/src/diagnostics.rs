@@ -47,6 +47,7 @@ pub fn print(opts: &SdlOptions) -> ExitCode {
     let (major, minor) = jellyroll_video::client_api_version();
     println!("mpv.client_api: {major}.{minor}");
     println!("video.hwdec_order: {}", jellyroll_video::default_hwdec());
+    println!("video.hwdec_interop: {}", jellyroll_video::default_hwdec_interop());
     match jellyroll_video::va::probe() {
         Ok(caps) => {
             println!("vaapi.device: {}", caps.device);

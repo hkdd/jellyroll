@@ -249,9 +249,17 @@ pub fn run<P: Platform, R: Renderer>(
             dirty |= pb.poll(now);
             if let Some((reason, error)) = &pb.ended {
                 systemd.stopping();
-                if bench_reset_done && bench_end.is_some() {
-                    println!("playback ended early: {reason:?}");
-                    return finish_bench(opts, &stats, &base, p, r, playback.as_ref());
+                if bench_end.is_some() {
+                    let why = error.as_deref().unwrap_or("no error");
+                    if bench_reset_done {
+                        println!("playback ended early: {reason:?} ({why})");
+                        return finish_bench(opts, &stats, &base, p, r, playback.as_ref());
+                    }
+                    // Never leave a benchmark run without output.
+                    println!("bench: play {:?}", opts.play.as_deref().unwrap_or(""));
+                    println!("FAIL: playback ended before measurement started: {reason:?} ({why})");
+                    println!("result: FAIL");
+                    return Exit::BenchFailed;
                 }
                 return if error.is_some() { Exit::Error } else { Exit::Quit };
             }

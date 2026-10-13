@@ -48,6 +48,7 @@ pub const MPV_RENDER_PARAM_OPENGL_INIT_PARAMS: c_int = 2;
 pub const MPV_RENDER_PARAM_OPENGL_FBO: c_int = 3;
 pub const MPV_RENDER_PARAM_FLIP_Y: c_int = 4;
 pub const MPV_RENDER_PARAM_ADVANCED_CONTROL: c_int = 10;
+pub const MPV_RENDER_PARAM_DRM_DISPLAY_V2: c_int = 16;
 
 pub const MPV_RENDER_UPDATE_FRAME: u64 = 1;
 pub const MPV_RENDER_API_TYPE_OPENGL: &[u8] = b"opengl\0";
@@ -103,6 +104,16 @@ pub struct mpv_opengl_fbo {
     pub w: c_int,
     pub h: c_int,
     pub internal_format: c_int,
+}
+
+#[repr(C)]
+pub struct mpv_opengl_drm_params_v2 {
+    pub fd: c_int,
+    pub crtc_id: c_int,
+    pub connector_id: c_int,
+    pub atomic_request_ptr: *mut *mut c_void,
+    /// DRM render node, used for VA-API interop; -1 if none.
+    pub render_fd: c_int,
 }
 
 #[link(name = "mpv")]

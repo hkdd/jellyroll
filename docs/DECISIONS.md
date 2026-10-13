@@ -227,6 +227,18 @@ user scripts, built-in scripts (stats, console, select, ytdl, ...), OSC
 or default key bindings. `audio-fallback-to-null=yes`, so a missing audio
 device (TV or receiver off) doesn't stop video (spec 12).
 
+`gpu-hwdec-interop=vaapi` (or `auto` with the NVIDIA driver):
+`auto` also loads the DRM overlay-plane and CUDA interops, which need
+resources we don't pass and log errors.
+
+**VA-API on a bare console needs the render node.** mpv gets its VA-API
+display from the windowing system (X11, Wayland) or from a DRM render node
+passed as `MPV_RENDER_PARAM_DRM_DISPLAY_V2.render_fd`. On the KMS console
+there is no X11/Wayland, and the first HTPC run silently decoded HEVC
+8-bit in software (the software-decode badge caught it). The player now
+opens the render node found by the VA-API probe and passes it; the struct
+and file stay alive for the render context's lifetime.
+
 **D23: Frame handoff (spec 6.3).** While video advances, the loop renders
 every vsync: reset GL to defaults (mpv requires default state; Skia leaves
 blending, scissor, bound buffers and programs set), mpv renders into FBO 0,

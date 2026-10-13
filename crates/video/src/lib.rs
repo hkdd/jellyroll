@@ -38,6 +38,11 @@ pub struct PlayerOptions {
     pub cache_max_back_bytes: String,
     /// Minimum mpv log level forwarded to tracing.
     pub log_level: String,
+    /// DRM render node for VA-API interop (e.g. /dev/dri/renderD128). On a
+    /// bare console there is no X11/Wayland display for mpv to get a
+    /// VA-API display from, so without this hwdec silently falls back to
+    /// software. Normally the node found by [`va::probe`].
+    pub render_node: Option<std::path::PathBuf>,
 }
 
 impl Default for PlayerOptions {
@@ -48,6 +53,7 @@ impl Default for PlayerOptions {
             cache_max_bytes: "150MiB".into(),
             cache_max_back_bytes: "50MiB".into(),
             log_level: "info".into(),
+            render_node: None,
         }
     }
 }
@@ -56,11 +62,19 @@ impl Default for PlayerOptions {
 /// AMD on Mesa); NVIDIA's NVDEC only when the NVIDIA kernel driver is
 /// loaded, so other machines don't probe CUDA/VDPAU and log errors.
 pub fn default_hwdec() -> String {
-    if std::path::Path::new("/proc/driver/nvidia/version").exists() {
-        "vaapi,nvdec".into()
-    } else {
-        "vaapi".into()
-    }
+    if nvidia_driver() { "vaapi,nvdec".into() } else { "vaapi".into() }
+}
+
+fn nvidia_driver() -> bool {
+    std::path::Path::new("/proc/driver/nvidia/version").exists()
+}
+
+/// GPU interop mpv loads for hardware frames: only VA-API's (EGL/DMA-BUF,
+/// zero-copy) unless the NVIDIA driver is present. "auto" would also load
+/// the DRM overlay-plane and CUDA interops, which need resources we don't
+/// provide (spec 7.4 is later) and log errors.
+pub fn default_hwdec_interop() -> String {
+    if nvidia_driver() { "auto".into() } else { "vaapi".into() }
 }
 
 /// Playback state kept current from mpv property-change events.
@@ -181,6 +195,9 @@ pub struct Player {
     render: *mut mpv_render_context,
     shared: Box<Shared>,
     _loader: Box<ProcLoader>,
+    // mpv may keep pointers to these for the render context's lifetime.
+    _drm_params: Box<mpv_opengl_drm_params_v2>,
+    _render_node: Option<std::fs::File>,
     pub state: PlaybackState,
 }
 
@@ -248,17 +265,39 @@ impl Player {
             wake,
         });
         let loader = Box::new(ProcLoader(Box::new(load)));
+        let render_node = match &opts.render_node {
+            Some(path) => match std::fs::File::open(path) {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    tracing::warn!("cannot open {} for VA-API interop: {e}", path.display());
+                    None
+                }
+            },
+            None => None,
+        };
+        let drm_params = Box::new(mpv_opengl_drm_params_v2 {
+            fd: -1,
+            crtc_id: 0,
+            connector_id: 0,
+            atomic_request_ptr: std::ptr::null_mut(),
+            render_fd: render_node.as_ref().map_or(-1, |f| {
+                use std::os::fd::AsRawFd;
+                f.as_raw_fd()
+            }),
+        });
         let mut player = Self {
             mpv,
             render: std::ptr::null_mut(),
             shared,
             _loader: loader,
+            _drm_params: drm_params,
+            _render_node: render_node,
             state: PlaybackState::default(),
         };
 
         // Spec 7.1: configured through the API only; no config files,
         // scripts, OSC or default key bindings. The app draws its own OSD.
-        let options: [(&str, &str); 18] = [
+        let options: [(&str, &str); 19] = [
             ("config", "no"),
             ("load-scripts", "no"),
             ("osc", "no"),
@@ -267,6 +306,7 @@ impl Player {
             ("terminal", "no"),
             ("vo", "libmpv"),
             ("hwdec", &opts.hwdec),
+            ("gpu-hwdec-interop", &default_hwdec_interop()),
             ("video-sync", &opts.video_sync),
             ("interpolation", "no"),
             ("cache", "yes"),
@@ -308,7 +348,7 @@ impl Player {
             get_proc_address_ctx: &*player._loader as *const ProcLoader as *mut c_void,
         };
         let mut advanced: c_int = 1;
-        let mut params = [
+        let mut params = vec![
             mpv_render_param {
                 type_: MPV_RENDER_PARAM_API_TYPE,
                 data: MPV_RENDER_API_TYPE_OPENGL.as_ptr() as *mut c_void,
@@ -324,8 +364,16 @@ impl Player {
                 type_: MPV_RENDER_PARAM_ADVANCED_CONTROL,
                 data: &mut advanced as *mut _ as *mut c_void,
             },
-            mpv_render_param { type_: MPV_RENDER_PARAM_INVALID, data: std::ptr::null_mut() },
         ];
+        // Render node for VA-API interop (see PlayerOptions::render_node).
+        if player._drm_params.render_fd >= 0 {
+            params.push(mpv_render_param {
+                type_: MPV_RENDER_PARAM_DRM_DISPLAY_V2,
+                data: &*player._drm_params as *const _ as *mut c_void,
+            });
+        }
+        params
+            .push(mpv_render_param { type_: MPV_RENDER_PARAM_INVALID, data: std::ptr::null_mut() });
         let mut render: *mut mpv_render_context = std::ptr::null_mut();
         // SAFETY: GL context current on this thread (caller contract);
         // params are valid for the call; the loader box outlives the context.
