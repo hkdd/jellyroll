@@ -454,7 +454,14 @@ fn finish_bench<P: Platform, R: Renderer>(
                 "present_ms: p50 {:.3} p99 {:.3} max {:.3}",
                 present.p50, present.p99, present.max
             );
-            println!("missed_vsyncs: {}", stats.missed_vsyncs);
+            // Presents follow the video's frame cadence (e.g. ~41.7 ms for
+            // 24p on a 60 Hz output) until refresh-rate matching (M8), so
+            // vsync "misses" are not a playback metric; mpv's dropped,
+            // delayed and mistimed counters below are.
+            println!(
+                "display_vsyncs_skipped: {} (expected when video fps != refresh)",
+                stats.missed_vsyncs
+            );
             // Includes time mpv blocks until a frame's display time.
             println!(
                 "render_thread_frame_ms (incl. waiting): p50 {:.3} p99 {:.3}",
@@ -480,7 +487,7 @@ fn finish_bench<P: Platform, R: Renderer>(
             check(!s.software_decode(), "software decoding (no hardware decoder for this video)");
             check(drops.vo - base.drops.vo == 0, "frames dropped by video output");
             check(drops.decoder - base.drops.decoder == 0, "frames dropped by decoder");
-            check(opts.no_vsync || stats.missed_vsyncs == 0, "missed vsyncs");
+            check(drops.delayed - base.drops.delayed == 0, "frames shown late");
             check(stats.allocating_frames == 0, "steady-state frames allocated");
             check(stats.frames > 0, "no frames presented");
         }
