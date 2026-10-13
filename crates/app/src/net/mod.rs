@@ -4,6 +4,7 @@
 //! never blocks the renderer) and events out (`try_recv` each frame), and
 //! wakes the render loop through the platform waker when it sends one.
 
+mod fetch;
 pub mod images;
 mod session;
 pub mod store;
@@ -13,7 +14,9 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
-use crate::home::model::HomeData;
+use jellyfin_api::endpoints::ItemsQuery;
+
+use crate::home::model::{Card, Detail, HomeData, Shape};
 pub use images::Finish;
 
 /// Commands from the UI.
@@ -28,6 +31,16 @@ pub enum Cmd {
     /// Leave the current server's problem/sign-in screen for the server
     /// screen.
     ChangeServer,
+    /// Fetch page data; the answer is `Event::Fetched` with this id.
+    Fetch { id: u64, req: Fetch },
+    /// Fetch the home screen again (after playback, favorites...).
+    Refresh,
+    /// Sign out of this server (revokes the token), then sign in again.
+    SignOut,
+    /// Sign in with a password instead of Quick Connect.
+    PasswordSignIn { username: String, password: String },
+    /// List the server's public users (for the password sign-in form).
+    ListUsers,
     /// Replace the queue of wanted images, most important first. Images
     /// already in flight finish; queued ones not in the new list are
     /// dropped (spec 4: cancel work for rows scrolled away).
@@ -87,6 +100,60 @@ pub struct FoundServer {
     pub address: String,
 }
 
+/// Page data requests (M6).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Fetch {
+    /// One page of a library grid (or search results).
+    Items {
+        query: ItemsQuery,
+        shape: Shape,
+    },
+    /// Index of the first item at or after `letter` in name order.
+    LetterIndex {
+        query: ItemsQuery,
+        letter: char,
+    },
+    Detail(String),
+    Seasons(String),
+    Episodes {
+        series: String,
+        season: String,
+    },
+    Similar(String),
+    Genres(String),
+    SetFavorite {
+        id: String,
+        on: bool,
+    },
+    SetPlayed {
+        id: String,
+        on: bool,
+    },
+    /// URL and auth header to direct-play a video.
+    Stream {
+        id: String,
+        media_source: String,
+    },
+}
+
+#[derive(Debug)]
+pub enum Fetched {
+    Page { start: u32, total: u32, cards: Vec<Card> },
+    Index(u32),
+    Detail(Box<Detail>),
+    Cards(Vec<Card>),
+    Names(Vec<String>),
+    UserData { favorite: bool, played: bool },
+    Stream { url: String, authorization: String },
+    Failed(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublicUser {
+    pub name: String,
+    pub has_password: bool,
+}
+
 /// Events for the UI.
 #[derive(Debug)]
 pub enum Event {
@@ -107,6 +174,14 @@ pub enum Event {
     ImageFailed {
         key: u64,
     },
+    Fetched {
+        id: u64,
+        result: Fetched,
+    },
+    /// The server's public users (answer to `ListUsers`).
+    Users(Vec<PublicUser>),
+    /// Password sign-in failed; the form shows why.
+    SignInFailed(String),
 }
 
 #[derive(Clone, Debug, Default)]

@@ -131,6 +131,90 @@ pub struct BaseItemDto {
     pub parent_thumb_image_tag: Option<String>,
     #[serde(rename = "UserData", skip_serializing_if = "Option::is_none")]
     pub user_data: Option<UserItemDataDto>,
+    #[serde(rename = "Genres", skip_serializing_if = "Option::is_none")]
+    pub genres: Option<Vec<String>>,
+    #[serde(rename = "Taglines", skip_serializing_if = "Option::is_none")]
+    pub taglines: Option<Vec<String>>,
+    #[serde(rename = "People", skip_serializing_if = "Option::is_none")]
+    pub people: Option<Vec<BaseItemPerson>>,
+    #[serde(rename = "MediaStreams", skip_serializing_if = "Option::is_none")]
+    pub media_streams: Option<Vec<MediaStream>>,
+    #[serde(rename = "ChildCount", skip_serializing_if = "Option::is_none")]
+    pub child_count: Option<i32>,
+    #[serde(rename = "SeasonId", skip_serializing_if = "Option::is_none")]
+    pub season_id: Option<String>,
+    #[serde(rename = "SeasonName", skip_serializing_if = "Option::is_none")]
+    pub season_name: Option<String>,
+    #[serde(rename = "ParentId", skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    #[serde(rename = "PremiereDate", skip_serializing_if = "Option::is_none")]
+    pub premiere_date: Option<String>,
+    #[serde(rename = "Status", skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(rename = "CriticRating", skip_serializing_if = "Option::is_none")]
+    pub critic_rating: Option<f32>,
+    #[serde(rename = "SortName", skip_serializing_if = "Option::is_none")]
+    pub sort_name: Option<String>,
+    #[serde(rename = "DateCreated", skip_serializing_if = "Option::is_none")]
+    pub date_created: Option<String>,
+    #[serde(rename = "HasSubtitles", skip_serializing_if = "Option::is_none")]
+    pub has_subtitles: Option<bool>,
+    #[serde(rename = "Container", skip_serializing_if = "Option::is_none")]
+    pub container: Option<String>,
+}
+
+/// This is used by the api to get information about a Person within a BaseItem.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BaseItemPerson {
+    #[serde(rename = "Name", skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(rename = "Id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(rename = "Role", skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(rename = "Type", skip_serializing_if = "Option::is_none")]
+    pub r#type: Option<PersonKind>,
+    #[serde(rename = "PrimaryImageTag", skip_serializing_if = "Option::is_none")]
+    pub primary_image_tag: Option<String>,
+}
+
+/// Class MediaStream.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MediaStream {
+    #[serde(rename = "Type", skip_serializing_if = "Option::is_none")]
+    pub r#type: Option<MediaStreamType>,
+    #[serde(rename = "Codec", skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
+    #[serde(rename = "Language", skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(rename = "DisplayTitle", skip_serializing_if = "Option::is_none")]
+    pub display_title: Option<String>,
+    #[serde(rename = "Title", skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(rename = "Profile", skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(rename = "BitDepth", skip_serializing_if = "Option::is_none")]
+    pub bit_depth: Option<i32>,
+    #[serde(rename = "Width", skip_serializing_if = "Option::is_none")]
+    pub width: Option<i32>,
+    #[serde(rename = "Height", skip_serializing_if = "Option::is_none")]
+    pub height: Option<i32>,
+    #[serde(rename = "Channels", skip_serializing_if = "Option::is_none")]
+    pub channels: Option<i32>,
+    #[serde(rename = "ChannelLayout", skip_serializing_if = "Option::is_none")]
+    pub channel_layout: Option<String>,
+    #[serde(rename = "VideoRangeType", skip_serializing_if = "Option::is_none")]
+    pub video_range_type: Option<VideoRangeType>,
+    #[serde(rename = "AudioSpatialFormat", skip_serializing_if = "Option::is_none")]
+    pub audio_spatial_format: Option<AudioSpatialFormat>,
+    #[serde(rename = "IsDefault", skip_serializing_if = "Option::is_none")]
+    pub is_default: Option<bool>,
+    #[serde(rename = "IsExternal", skip_serializing_if = "Option::is_none")]
+    pub is_external: Option<bool>,
+    #[serde(rename = "Index", skip_serializing_if = "Option::is_none")]
+    pub index: Option<i32>,
 }
 
 /// Gets or sets the blurhashes for the image tags.
@@ -164,6 +248,21 @@ pub struct UserItemDataDto {
     pub is_favorite: Option<bool>,
     #[serde(rename = "Played", skip_serializing_if = "Option::is_none")]
     pub played: Option<bool>,
+}
+
+/// An enum representing formats of spatial audio.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AudioSpatialFormat {
+    #[serde(rename = "None")]
+    None,
+    #[serde(rename = "DolbyAtmos")]
+    DolbyAtmos,
+    #[serde(rename = "DTSX")]
+    DTSX,
+    /// A value this build doesn't know (newer server).
+    #[default]
+    #[serde(other)]
+    Unrecognized,
 }
 
 /// The base item kind.
@@ -284,6 +383,27 @@ pub enum CollectionType {
     Unrecognized,
 }
 
+/// Enum MediaStreamType.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MediaStreamType {
+    #[serde(rename = "Audio")]
+    Audio,
+    #[serde(rename = "Video")]
+    Video,
+    #[serde(rename = "Subtitle")]
+    Subtitle,
+    #[serde(rename = "EmbeddedImage")]
+    EmbeddedImage,
+    #[serde(rename = "Data")]
+    Data,
+    #[serde(rename = "Lyric")]
+    Lyric,
+    /// A value this build doesn't know (newer server).
+    #[default]
+    #[serde(other)]
+    Unrecognized,
+}
+
 /// Media types.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MediaType {
@@ -297,6 +417,102 @@ pub enum MediaType {
     Photo,
     #[serde(rename = "Book")]
     Book,
+    /// A value this build doesn't know (newer server).
+    #[default]
+    #[serde(other)]
+    Unrecognized,
+}
+
+/// The person kind.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PersonKind {
+    #[serde(rename = "Unknown")]
+    Unknown,
+    #[serde(rename = "Actor")]
+    Actor,
+    #[serde(rename = "Director")]
+    Director,
+    #[serde(rename = "Composer")]
+    Composer,
+    #[serde(rename = "Writer")]
+    Writer,
+    #[serde(rename = "GuestStar")]
+    GuestStar,
+    #[serde(rename = "Producer")]
+    Producer,
+    #[serde(rename = "Conductor")]
+    Conductor,
+    #[serde(rename = "Lyricist")]
+    Lyricist,
+    #[serde(rename = "Arranger")]
+    Arranger,
+    #[serde(rename = "Engineer")]
+    Engineer,
+    #[serde(rename = "Mixer")]
+    Mixer,
+    #[serde(rename = "Remixer")]
+    Remixer,
+    #[serde(rename = "Creator")]
+    Creator,
+    #[serde(rename = "Artist")]
+    Artist,
+    #[serde(rename = "AlbumArtist")]
+    AlbumArtist,
+    #[serde(rename = "Author")]
+    Author,
+    #[serde(rename = "Illustrator")]
+    Illustrator,
+    #[serde(rename = "Penciller")]
+    Penciller,
+    #[serde(rename = "Inker")]
+    Inker,
+    #[serde(rename = "Colorist")]
+    Colorist,
+    #[serde(rename = "Letterer")]
+    Letterer,
+    #[serde(rename = "CoverArtist")]
+    CoverArtist,
+    #[serde(rename = "Editor")]
+    Editor,
+    #[serde(rename = "Translator")]
+    Translator,
+    #[serde(rename = "Narrator")]
+    Narrator,
+    /// A value this build doesn't know (newer server).
+    #[default]
+    #[serde(other)]
+    Unrecognized,
+}
+
+/// An enum representing types of video ranges.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum VideoRangeType {
+    #[serde(rename = "Unknown")]
+    Unknown,
+    #[serde(rename = "SDR")]
+    SDR,
+    #[serde(rename = "HDR10")]
+    HDR10,
+    #[serde(rename = "HLG")]
+    HLG,
+    #[serde(rename = "DOVI")]
+    DOVI,
+    #[serde(rename = "DOVIWithHDR10")]
+    DOVIWithHDR10,
+    #[serde(rename = "DOVIWithHLG")]
+    DOVIWithHLG,
+    #[serde(rename = "DOVIWithSDR")]
+    DOVIWithSDR,
+    #[serde(rename = "DOVIWithEL")]
+    DOVIWithEL,
+    #[serde(rename = "DOVIWithHDR10Plus")]
+    DOVIWithHDR10Plus,
+    #[serde(rename = "DOVIWithELHDR10Plus")]
+    DOVIWithELHDR10Plus,
+    #[serde(rename = "DOVIInvalid")]
+    DOVIInvalid,
+    #[serde(rename = "HDR10Plus")]
+    HDR10Plus,
     /// A value this build doesn't know (newer server).
     #[default]
     #[serde(other)]

@@ -103,6 +103,21 @@ impl Client {
         Ok(Self { http, base, info, token: None })
     }
 
+    /// The `Authorization` header this client sends, for other HTTP users
+    /// of the same session (mpv streaming a video).
+    pub fn authorization_header(&self) -> String {
+        self.info.authorization(self.token.as_deref())
+    }
+
+    /// The short `MediaBrowser Token="…"` form, for HTTP clients whose
+    /// header option can't carry commas (mpv). The server accepts it.
+    pub fn token_header(&self) -> String {
+        let mut s = String::from("MediaBrowser Token=\"");
+        crate::auth::encode_component(&mut s, self.token.as_deref().unwrap_or(""));
+        s.push('"');
+        s
+    }
+
     pub fn base_url(&self) -> &str {
         &self.base
     }
@@ -120,6 +135,7 @@ impl Client {
         let rb = match method {
             Method::Get => self.http.get(url),
             Method::Post => self.http.post(url),
+            Method::Delete => self.http.delete(url),
         };
         rb.header("Authorization", self.info.authorization(self.token.as_deref()))
     }
@@ -128,11 +144,20 @@ impl Client {
         let mut rb = self.request(req.method, &req.path).header("Accept", "application/json");
         if let Some(body) = &req.body {
             rb = rb.header("Content-Type", "application/json").body(body.clone());
-        } else if req.method == Method::Post {
+        } else if req.method != Method::Get {
             rb = rb.header("Content-Length", "0");
         }
         let bytes = Self::execute(rb).await?;
         serde_json::from_slice(&bytes).map_err(|e| Error::Parse(format!("{}: {e}", req.path)))
+    }
+
+    /// For endpoints that answer 204 No Content.
+    pub async fn send_no_content<T>(&self, req: &Request<T>) -> Result<()> {
+        let mut rb = self.request(req.method, &req.path);
+        if req.method != Method::Get && req.body.is_none() {
+            rb = rb.header("Content-Length", "0");
+        }
+        Self::execute(rb).await.map(|_| ())
     }
 
     /// Raw bytes, e.g. an image.

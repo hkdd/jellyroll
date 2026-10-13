@@ -39,9 +39,19 @@ fn title_from(url: &str) -> &str {
 
 impl Playback {
     pub fn start<P: Platform>(p: &P, url: &str, now: Instant) -> Result<Self, String> {
+        Self::start_with(p, url, title_from(url), PlayerOptions::default(), now)
+    }
+
+    /// Plays `url` with `opts` (auth header, start position) under `title`.
+    pub fn start_with<P: Platform>(
+        p: &P,
+        url: &str,
+        title: &str,
+        mut opts: PlayerOptions,
+        now: Instant,
+    ) -> Result<Self, String> {
         let (major, minor) = jellyroll_video::client_api_version();
-        tracing::info!(api = format!("{major}.{minor}"), url, "starting playback");
-        let mut opts = PlayerOptions::default();
+        tracing::info!(api = format!("{major}.{minor}"), title, "starting playback");
         match jellyroll_video::va::probe() {
             Ok(caps) => {
                 opts.render_node = Some(caps.device.clone().into());
@@ -61,7 +71,7 @@ impl Playback {
         player.load(url)?;
         Ok(Self {
             player,
-            osd: Osd::new(title_from(url), now),
+            osd: Osd::new(title, now),
             events: Vec::with_capacity(16),
             ended: None,
             started: false,

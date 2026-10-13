@@ -60,6 +60,13 @@ impl View {
         matches!(self, View::Home(h) if h.wants_text())
     }
 
+    fn next_deadline(&self) -> Option<Instant> {
+        match self {
+            View::Home(h) => h.next_deadline(),
+            View::Demo(_) => None,
+        }
+    }
+
     /// Per-iteration update; returns true if a redraw is needed.
     fn update(&mut self, now: Instant) -> bool {
         match self {
@@ -109,6 +116,19 @@ fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
 fn make_header(fb: (u32, u32), hz: f32, header: &mut String) {
     header.clear();
     let _ = write!(header, "M2 render benchmark · {}×{} @ {:.2} Hz · F3 HUD", fb.0, fb.1, hz);
+}
+
+/// Device facts for the Settings page.
+fn about_device<P: Platform>(p: &P, fb: (u32, u32), hz: f32) -> Vec<(String, String)> {
+    let i = p.info();
+    let (major, minor) = jellyroll_video::client_api_version();
+    vec![
+        ("Jellyroll".into(), env!("CARGO_PKG_VERSION").into()),
+        ("GPU".into(), i.gl_renderer.clone()),
+        ("OpenGL".into(), i.gl_version.clone()),
+        ("Display".into(), format!("{}×{} @ {:.2} Hz ({})", fb.0, fb.1, hz, i.video_driver)),
+        ("libmpv".into(), format!("client API {major}.{minor}")),
+    ]
 }
 
 /// On-screen notice for config problems (details are in the journal).
@@ -162,7 +182,10 @@ pub fn run<P: Platform, R: Renderer>(
         Some(cfg) if !opts.demo && opts.play.is_none() => {
             let cap = config.config.cache.textures_mb << 20;
             match NetHandle::start(cfg, p.waker()) {
-                Ok(h) => View::Home(Box::new(HomeApp::new(h, cap, fb, safe_area))),
+                Ok(h) => {
+                    let about = about_device(p, fb, refresh_hz);
+                    View::Home(Box::new(HomeApp::new(h, cap, fb, safe_area, about)))
+                }
                 Err(e) => {
                     tracing::error!("cannot start the network thread: {e}");
                     View::Demo(Box::new(Scene::new(start)))
@@ -198,6 +221,10 @@ pub fn run<P: Platform, R: Renderer>(
 
     let mut dirty = true;
     let mut first_frame = true;
+    // Browsing the server: playback returns to the UI when it ends
+    // (with --play, the app exits instead).
+    let browsing = opts.play.is_none() && matches!(view, View::Home(_));
+    let mut stop_playback = false;
     let mut last_present: Option<Instant> = None;
     let mut alloc_warned = false;
 
@@ -210,7 +237,7 @@ pub fn run<P: Platform, R: Renderer>(
         );
         let (deadline, animating) = match &playback {
             Some(pb) => (earliest(deadline, pb.osd.next_deadline(now)), pb.playing()),
-            None => (deadline, view.is_animating(now)),
+            None => (earliest(deadline, view.next_deadline()), view.is_animating(now)),
         };
         let timeout = wait_timeout(dirty, animating, deadline, now);
         events.clear();
@@ -304,6 +331,7 @@ pub fn run<P: Platform, R: Renderer>(
                         repeat.press(button, a, now);
                         if let Some(pb) = playback.as_mut() {
                             match pb.on_action(a, now) {
+                                Outcome::Exit if browsing => stop_playback = true,
                                 Outcome::Exit => {
                                     systemd.stopping();
                                     return Exit::Quit;
@@ -332,7 +360,16 @@ pub fn run<P: Platform, R: Renderer>(
                 dirty |= redraw;
             }
             dirty |= pb.poll(now);
-            if let Some((reason, error)) = &pb.ended {
+            if let Some((reason, error)) = &pb.ended
+                && browsing
+            {
+                // Back to the page that started it.
+                match error {
+                    Some(e) => tracing::warn!("playback ended: {reason:?}: {e}"),
+                    None => tracing::info!("playback ended: {reason:?}"),
+                }
+                stop_playback = true;
+            } else if let Some((reason, error)) = &pb.ended {
                 systemd.stopping();
                 if bench_end.is_some() {
                     let why = error.as_deref().unwrap_or("no error");
@@ -347,8 +384,7 @@ pub fn run<P: Platform, R: Renderer>(
                     return Exit::BenchFailed;
                 }
                 return if error.is_some() { Exit::Error } else { Exit::Quit };
-            }
-            if matches!(opts.bench, Some(Bench::Play(_))) && now >= bench_osd_next {
+            } else if matches!(opts.bench, Some(Bench::Play(_))) && now >= bench_osd_next {
                 bench_osd_next = now + BENCH_OSD_PERIOD;
                 pb.osd.toggle(now);
                 dirty = true;
@@ -364,9 +400,37 @@ pub fn run<P: Platform, R: Renderer>(
             }
             dirty |= view.update(now);
             p.set_text_input(view.wants_text());
+            if let View::Home(h) = &mut view
+                && let Some(req) = h.take_play()
+            {
+                let popts = jellyroll_video::PlayerOptions {
+                    http_header: Some(format!("Authorization: {}", req.authorization)),
+                    start_secs: Some(req.start_secs),
+                    ..Default::default()
+                };
+                match Playback::start_with(p, &req.url, &req.title, popts, now) {
+                    Ok(pb) => {
+                        playback = Some(pb);
+                        overlay_shown = false;
+                        repeat.reset();
+                        dirty = true;
+                    }
+                    Err(e) => tracing::error!("playback: {e}"),
+                }
+            }
             if view.is_animating(now) {
                 dirty = true;
             }
+        }
+        if std::mem::take(&mut stop_playback) {
+            playback = None;
+            // mpv changed GL state; Skia must not trust its cache.
+            r.reset_gl_state();
+            repeat.reset();
+            if let View::Home(h) = &mut view {
+                h.playback_finished(now);
+            }
+            dirty = true;
         }
         if !dirty {
             continue;
