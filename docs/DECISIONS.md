@@ -659,6 +659,56 @@ Decided:
   and GPU p99 ~6.5 ms, with steady 60 fps, 0 missed vsyncs and 0
   allocating frames; frames with nothing new to load are within budget.
 
+## Decisions made in M7
+
+**D45: Playback requests: direct play only, verified API.** Checked
+against the pinned 12.2 spec (D31): `POST /Items/{id}/PlaybackInfo` with
+a device profile allowing every codec in the containers mpv plays and
+`EnableTranscoding=false` (D19), then `/Videos/{id}/stream?static=true`.
+A media source the server won't send as-is is a clear error ("transcoding
+is off"), never a transcode. The item fetch brings `Chapters` and
+`Trickplay`; `/MediaSegments/{id}` (10.10+) the intro/recap/preview/
+commercial/outro ranges (missing on older servers: no skip buttons);
+`/Shows/{id}/Episodes?startItemId=&limit=2` the next episode.
+
+**D46: Tracks are chosen by the app, mapped to mpv by order.** The
+server's default audio/subtitle (from the user's language preferences) is
+applied at load through mpv's `aid`/`sid` (spec 7.1: `sub-auto=no`).
+Jellyfin indexes streams globally; mpv numbers each type from 1 in stream
+order, so an embedded track's mpv id is its position among embedded tracks
+of its type. External subtitles (sidecar files the server delivers with
+`DeliveryMethod=External`) are added with `sub-add` when chosen and take
+the next ids. All track and seek changes go through mpv's async commands
+(D20: the render thread never waits for mpv). Subtitles are styled for
+the couch (larger, outlined, sized to the video).
+
+**D47: Playback reports go through a persistent retry queue.** Start,
+progress (every 10 s and on pause, seek or track change) and stopped
+(EOF reports the full duration, so the server marks the item watched) are
+queued on the network thread, sent in order, and retried with backoff
+(5 s to 2 min). Consecutive progress reports for one session coalesce.
+The queue is written to `~/.local/share/jellyroll/pending-reports.json`
+while anything is unsent, so quitting offline doesn't lose where you
+stopped; it is sent on the next start once signed in. Reports the server
+rejects for good (4xx other than 401/408/429) are dropped and logged.
+Found while testing: `Client::send_no_content` didn't send JSON bodies;
+fixed, with an end-to-end test against the mock.
+
+**D48: The player UI lives in the browsing app; the frame loop owns
+mpv.** `PlayerUi` (home/player.rs) has the network, image cache and page
+stack it needs; the frame loop keeps the GL context and mpv (`Playback`)
+and asks the UI what to do each frame. Keys: Left/Right scrub (held:
+10 s, then 30 s, then 60 s steps), committed 0.7 s after the last press
+or with Select; trickplay thumbnails above the target (tile sheets through
+the image pipeline, drawn with the new `Renderer::image_region`); Down or
+Menu opens audio and subtitle lists; Select skips the current segment,
+plays the next episode now, or pauses; Info shows codec, decoder, play
+method and drops; Next/Prev jump between chapters; Back closes, cancels,
+dismisses the next-episode card, or stops. The next-episode card appears
+at the credits segment (else 30 s before the end) with a 10 s countdown in
+playback time, then plays it without returning to the page; Back on the
+card plays to the end and stops. `--play FILE` keeps the minimal M3 OSD.
+
 ## Dependency approvals
 
 | Crate | Status |

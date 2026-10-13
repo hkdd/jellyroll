@@ -19,7 +19,8 @@ and verified versions.
 | **M4** Input: keyboard, gamepad, HDMI-CEC; spatial focus graph; key repeat | **Done.** Keyboard verified on the HTPC; gamepad tested end to end with an SDL virtual pad. CEC is built and unit-tested, but the HTPC's DisplayPort-to-HDMI adapter doesn't carry CEC, so the TV remote waits for an adapter that does (`docs/DECISIONS.md` D29) |
 | **M5** Jellyfin client: discovery, Quick Connect, auth, home data, images with caching; mock server | **Done.** On the HTPC against a Jellyfin 12.2 server: real home screen, cached start in ~0.4 s, first frame 393 ms. See `docs/DECISIONS.md` |
 | **M6** Browsing: libraries (10k-item grids), detail pages, search, settings, password sign-in; play from the server | **Built.** On the HTPC: search and series pages verified; scroll benchmark 0 missed vsyncs, 0 allocating frames; native 4K over the CPU/GPU budgets on frames that load artwork (accepted, D44; 1080p upscaled in Settings). Rest of the walkthrough: `docs/M6-HARDWARE-CHECKLIST.md` |
-| M7 to M10 | Not started |
+| **M7** Player UX: OSD, track menus, trickplay, skip segments, next-up, progress reporting, resume | **Built**, awaiting the HTPC checklist (`docs/M7-HARDWARE-CHECKLIST.md`) |
+| M8 to M10 | Not started |
 
 The app connects to your Jellyfin server and shows its home screen: My
 Media, Continue Watching, Next Up, the latest additions to each library and
@@ -30,7 +31,10 @@ screen appears instantly from the cache and refreshes in the background.
 From the nav bar at the top you can open each library as a grid (sort,
 filters, A-Z jump), Search, and Settings. Selecting an item opens its
 detail page, where Play streams the file directly (never transcoded)
-from the resume point. Progress reporting and the full player come in M7.
+from the resume point. The player shows chapters and trickplay previews
+while seeking, lets you pick audio and subtitle tracks, skips intros and
+credits, plays the next episode, and keeps the server's resume points and
+watched state current (even if the server is briefly unreachable).
 `--demo` still shows the synthetic M2 render benchmark.
 
 ## Layout
@@ -181,6 +185,18 @@ repeats at the same rate.
 | Search | `/` | Back / Select | Blue |
 | Volume, mute | `+` `-` `m` | | Volume, Mute (if the TV forwards them) |
 | Perf HUD | F3 | | |
+
+During playback:
+
+| Key | Does |
+|---|---|
+| Left / Right | Seek back / forward (hold to go faster); shows a preview |
+| Select (Enter) | Confirm a seek, skip the intro/credits, play the next episode now, or pause |
+| Play/pause | Pause or resume |
+| Down, Menu | Audio and subtitle tracks |
+| Info | Codec, decoder, play method, dropped frames |
+| Previous / next | Previous / next chapter |
+| Back | Close the menu, cancel a seek or the next-episode countdown, or stop |
 
 ### HDMI-CEC (TV remote)
 
