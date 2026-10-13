@@ -317,26 +317,31 @@ basics (address polling, retries, abort replies). jellyroll:
 never claims an address or wakes the TV. CEC needs read-write access to
 `/dev/cecN`, which belongs to the `video` group.
 
-Native HDMI ports on Intel iGPUs (including the HTPC's HD 530) have no CEC
-support in the i915 driver; such machines need one of the adapters above.
+Native HDMI ports on Intel iGPUs have no CEC support in the i915 driver;
+such machines need one of the adapters above. The HTPC drives its TV
+from DisplayPort (DP-1) and gets `/dev/cec0` from i915's DP CEC tunneling.
 
-**D27: Spatial focus graph.** `crates/app/src/focus.rs`. Every focusable
-node gives an id, a container (row, grid, nav bar) and its layout rect;
-the scene rebuilds the graph when the layout changes (logical width,
-safe area), keeping focus and memory for ids that still exist. Moving in a
-direction:
+**D27: Spatial focus graph, no row memory.** `crates/app/src/focus.rs`.
+Every focusable node gives an id and its layout rect; the scene rebuilds
+the graph when the layout changes (logical width, safe area), keeping
+focus if its id still exists. Moving in a direction:
 1. an explicit override for (node, direction) wins;
 2. otherwise candidates are nodes lying in that direction; those
    overlapping the current node on the cross axis ("in the beam") beat
    those that don't, then the lowest `13·major² + minor²` wins (major =
    gap along the direction, minor = center offset across it; the weighting
-   Android's focus finder uses);
-3. if the winner is in another container that has been focused before, the
-   last focused node there is restored instead (spec 10.2: returning to a
-   row restores its position).
+   Android's focus finder uses).
+
+Spec 10.2 asks for focus memory per container (returning to a row
+restores its last position). It was built, tried on the HTPC, and removed
+by request (2026-10-13): Up/Down always go to the item
+straight above/below. Scroll and focus restoration on Back (spec 10.2's
+back stack) is a different feature and still planned for M6.
 The graph is the only record of focus: the scene asks it what is focused
 and keeps no copy. Unit-tested on grids, rows of different sizes (nav
-pills above cards), overrides and relayout.
+pills above cards), overrides and relayout. In the test scene, Select on a
+nav pill picks that section and Select on a card shows its title, so
+Select can be checked from every input source.
 
 **D28: Play and Pause both toggle for now.** Remotes and keyboards have
 separate Play and Pause keys, but the M4 action set has only `PlayPause`,

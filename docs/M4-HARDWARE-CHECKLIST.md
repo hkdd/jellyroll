@@ -4,7 +4,8 @@ M4 exit criterion (spec §15): *navigate a synthetic grid by all three
 sources (keyboard, gamepad, HDMI-CEC) with consistent behavior.*
 
 Run on a text console (Ctrl+Alt+F3) as a user in `input` (keyboard and
-gamepad) and `video` (CEC). Write output to a file, then copy it from the
+gamepad) and `video` (CEC: `sudo usermod -aG video "$USER"`, then log out
+and back in). Write output to a file, then copy it from the
 desktop with `cat FILE | tee >(wl-copy)`.
 
 1. **Build**
@@ -17,19 +18,19 @@ desktop with `cat FILE | tee >(wl-copy)`.
    - `cec`: each `/dev/cecN` with its physical and logical address, or why
      it can't be opened. No `/dev/cec*` at all means this machine
      has no CEC adapter (see the README).
-3. **Keyboard** (`./target/release/jellyroll --hud`)
-   - Arrows move focus card by card; Up from the first row reaches the
-     nav pills; Enter on a pill selects it (it stays highlighted).
-   - Row memory: in row 2 move to the 6th card, go Up, move Left twice,
-     go Down: focus returns to the 6th card in row 2.
+3. **Keyboard** (`./target/release/jellyroll --hud --allow-exit`; without
+   `--allow-exit`, Esc doesn't quit on the console, by design)
+   - Arrows move focus card by card; Up/Down go to the card straight
+     above/below. Up from the first row reaches the nav pills.
+   - Enter on a card shows "Selected: <title>" next to the pills; Enter on
+     a pill selects that section (it stays highlighted).
    - Holding an arrow repeats after ~350 ms and speeds up after 1.5 s;
      releasing stops immediately (no run-on).
 4. **Gamepad** (plug in before or after starting; both work)
    - Log shows `gamepad connected` with its name.
    - D-pad and left stick move exactly like the arrows, including hold to
      repeat; a stick resting slightly off center doesn't drift.
-   - A/Cross on a nav pill selects it; B/Circle is Back (exits with
-     `--allow-exit`).
+   - A/Cross selects (card title or pill); B/Circle is Back (exits).
    - Unplug and replug: `gamepad disconnected`, then works again.
 5. **TV remote over CEC**
    - With the TV on another input or in standby, start jellyroll: the TV
@@ -42,7 +43,7 @@ desktop with `cat FILE | tee >(wl-copy)`.
      settings (Anynet+, Bravia Sync, SimpLink, ...) and look for `cec`
      lines in the log.
 6. **Consistency:** the three sources move focus identically: same
-   targets, same repeat feel, same row memory.
+   targets, same repeat feel.
 7. **Regression:** `./target/release/jellyroll --bench-pacing 20` and
    `--bench-idle 10` give the same results as M2 (the nav bar adds a few
    draws).

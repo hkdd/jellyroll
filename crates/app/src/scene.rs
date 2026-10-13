@@ -5,7 +5,8 @@
 //! focus scale-up, and Latin/Japanese/Cyrillic text.
 //!
 //! Navigation (M4) goes through the spatial focus graph: a nav bar of pills
-//! above the rows, and each row remembers its last focused card.
+//! above the rows. Select on a pill picks a section; Select on a card shows
+//! its title, so every input source can be checked for Select.
 //!
 //! The data is fake and the strings are fixtures; the real home screen and
 //! string table arrive in M5/M6. In bench mode the focus walks the grid and
@@ -50,7 +51,6 @@ pub const DEFAULT_SAFE_AREA: f32 = 0.025;
 const NAV: [&str; 6] = ["Home", "映画", "テレビ番組", "Фильмы", "Search", "Settings"];
 /// Focus ids: cards are 0..CARDS, nav pills follow.
 const NAV_ID: usize = CARDS;
-const NAV_CONTAINER: u32 = 100;
 const PILL_W: f32 = 150.0;
 const PILL_H: f32 = 36.0;
 const PILL_GAP: f32 = 12.0;
@@ -88,12 +88,18 @@ const NOTICE: Color = Color::rgb(240, 180, 60);
 const BG_RGB: [u8; 3] = [12, 14, 20];
 const BG: Color = Color::rgb(BG_RGB[0], BG_RGB[1], BG_RGB[2]);
 
+fn card_title(i: usize) -> &'static str {
+    TITLES[(i * 7 + i / COLS) % TITLES.len()]
+}
+
 pub struct Scene {
     graph: FocusGraph,
     /// Layout the graph was built for: (logical width, safe area).
     layout: (f32, f32),
     /// Selected nav section.
     nav: usize,
+    /// Last card Select was pressed on.
+    picked: Option<usize>,
     /// Previously focused node, for the focus-out animation.
     prev_focus: usize,
     focus_anim: Tween,
@@ -116,6 +122,7 @@ impl Scene {
             graph: FocusGraph::new(),
             layout: (0.0, 0.0),
             nav: 0,
+            picked: None,
             prev_focus: 0,
             focus_anim: Tween::settled(1.0, now),
             backdrop: 0,
@@ -143,7 +150,7 @@ impl Scene {
     }
 
     /// Rebuilds the focus graph when the logical width or safe area
-    /// changes. Focus and per-row memory are kept.
+    /// changes. Focus is kept.
     pub fn set_viewport(&mut self, logical_w: f32, safe_area: f32) {
         if self.layout == (logical_w, safe_area) {
             return;
@@ -152,10 +159,9 @@ impl Scene {
         let (sx, sy) = (logical_w * safe_area, 1080.0 * safe_area);
         let cards = (0..CARDS).map(|i| {
             let (r, c) = (i / COLS, i % COLS);
-            (i as NodeId, r as u32, Self::card_rect(r, c, sx, sy))
+            (i as NodeId, Self::card_rect(r, c, sx, sy))
         });
-        let pills = (0..NAV.len())
-            .map(|k| ((NAV_ID + k) as NodeId, NAV_CONTAINER, Self::pill_rect(k, sx, sy)));
+        let pills = (0..NAV.len()).map(|k| ((NAV_ID + k) as NodeId, Self::pill_rect(k, sx, sy)));
         self.graph.set_nodes(cards.chain(pills));
     }
 
@@ -235,11 +241,19 @@ impl Scene {
             return true;
         }
         let focus = self.focus();
-        if a == InputAction::Select && focus >= NAV_ID && focus - NAV_ID != self.nav {
-            self.nav = focus - NAV_ID;
-            return true;
+        match a {
+            InputAction::Select if focus >= NAV_ID => {
+                let changed = focus - NAV_ID != self.nav;
+                self.nav = focus - NAV_ID;
+                changed
+            }
+            InputAction::Select => {
+                let changed = self.picked != Some(focus);
+                self.picked = Some(focus);
+                changed
+            }
+            _ => false,
         }
-        false
     }
 
     /// Advances bench-mode animation; call once per frame.
@@ -327,12 +341,21 @@ impl Scene {
             TEXT_DIM,
         );
 
+        if let Some(i) = self.picked {
+            let x = Self::pill_rect(NAV.len(), sx, sy).x + 12.0;
+            let style = TextStyle::new(20.0, Weight::Regular).max_width(lw - sx - x);
+            let mut line = crate::hud::Line::<96>::default();
+            let _ =
+                std::fmt::Write::write_fmt(&mut line, format_args!("Selected: {}", card_title(i)));
+            r.text(line.as_str(), &style, Point::new(x, sy + PILL_Y + 6.0), TEXT);
+        }
+
         let t = now.saturating_duration_since(self.start).as_secs_f32();
         let title_style = TextStyle::new(16.0, Weight::Regular).max_width(CARD_W);
         let label_style = TextStyle::new(22.0, Weight::Bold);
-        for row in 0..ROWS {
+        for (row, label) in ROW_LABELS.iter().enumerate() {
             let y = sy + HEADER_H + row as f32 * ROW_H;
-            r.text(ROW_LABELS[row], &label_style, Point::new(sx, y), TEXT);
+            r.text(label, &label_style, Point::new(sx, y), TEXT);
             let sway = if self.bench { (t * 1.6 + row as f32).sin() * 60.0 } else { 0.0 };
             for col in 0..COLS {
                 let i = row * COLS + col;
@@ -364,7 +387,7 @@ impl Scene {
                         Color::WHITE.with_alpha(focus),
                     );
                 }
-                let title = TITLES[(i * 7 + row) % TITLES.len()];
+                let title = card_title(i);
                 let color = if self.is_focused(i) { TEXT } else { TEXT_DIM };
                 // The title slides down with the focused card's growth and
                 // border so they never overlap.
@@ -404,13 +427,16 @@ mod tests {
             s.on_action(InputAction::Down, t0);
         }
         assert_eq!(s.focus(), CARDS - 1);
-        assert!(!s.on_action(InputAction::Select, t0));
+        assert!(!s.on_action(InputAction::Down, t0), "bottom edge");
     }
 
     #[test]
-    fn nav_bar_and_row_memory() {
+    fn nav_bar_and_select() {
         let t0 = Instant::now();
         let mut s = Scene::new(t0);
+        assert!(s.on_action(InputAction::Select, t0), "select on a card picks it");
+        assert_eq!(s.picked, Some(0));
+        assert!(!s.on_action(InputAction::Select, t0), "same card again: nothing new");
         // Up from the first card reaches the nav bar; Select picks a section.
         assert!(s.on_action(InputAction::Up, t0));
         assert_eq!(s.focus(), NAV_ID);
@@ -418,19 +444,23 @@ mod tests {
         s.on_action(InputAction::Right, t0);
         assert!(s.on_action(InputAction::Select, t0));
         assert_eq!(s.nav, 1);
-        // Down returns to the remembered card in row 0.
+        // Down goes to the card under the pill.
         s.on_action(InputAction::Down, t0);
-        assert_eq!(s.focus(), 0);
-        // Row 1 remembers column 5 after a detour through row 0.
+        assert_eq!(s.focus(), 2);
+    }
+
+    #[test]
+    fn moves_straight_without_row_memory() {
+        let t0 = Instant::now();
+        let mut s = Scene::new(t0);
         for _ in 0..5 {
             s.on_action(InputAction::Right, t0);
         }
         s.on_action(InputAction::Down, t0);
-        assert_eq!(s.focus(), COLS + 5);
-        s.on_action(InputAction::Up, t0);
         s.on_action(InputAction::Left, t0);
-        s.on_action(InputAction::Down, t0);
-        assert_eq!(s.focus(), COLS + 5);
+        s.on_action(InputAction::Left, t0);
+        s.on_action(InputAction::Up, t0);
+        assert_eq!(s.focus(), 3, "straight up from column 3");
     }
 
     #[test]

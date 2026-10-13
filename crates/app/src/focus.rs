@@ -1,10 +1,10 @@
-//! Spatial focus graph (spec 10.2). Every focusable node reports its rect
-//! and the container it belongs to (a row, a grid, the nav bar). Moving in
-//! a direction picks the nearest node in that direction, preferring nodes
-//! aligned with the current one (in its "beam") and weighting distance
-//! along the direction of travel over cross-axis offset. Explicit overrides
-//! win over the search, and entering a container restores the node that was
-//! last focused in it.
+//! Spatial focus graph (spec 10.2). Every focusable node reports its rect.
+//! Moving in a direction picks the nearest node in that direction,
+//! preferring nodes aligned with the current one (in its "beam") and
+//! weighting distance along the direction of travel over cross-axis
+//! offset. Explicit overrides win over the search. There is deliberately no
+//! per-row focus memory: moving always goes to what is spatially next
+//! (D27).
 //!
 //! Focus is data here, one source of truth: widgets ask the graph whether
 //! they are focused rather than keeping their own flags.
@@ -36,7 +36,6 @@ impl Dir {
 }
 
 pub type NodeId = u32;
-pub type ContainerId = u32;
 
 /// Weight of the major (travel) axis distance against the minor one; the
 /// same constant Android's focus finder uses, so a node straight ahead beats
@@ -46,7 +45,6 @@ const MAJOR_WEIGHT: f32 = 13.0;
 #[derive(Copy, Clone, Debug)]
 struct Node {
     id: NodeId,
-    container: ContainerId,
     rect: Rect,
 }
 
@@ -55,8 +53,6 @@ pub struct FocusGraph {
     nodes: Vec<Node>,
     index: HashMap<NodeId, usize>,
     overrides: HashMap<(NodeId, Dir), NodeId>,
-    /// Last focused node per container.
-    memory: HashMap<ContainerId, NodeId>,
     focused: Option<NodeId>,
 }
 
@@ -65,20 +61,16 @@ impl FocusGraph {
         Self::default()
     }
 
-    /// Replaces the layout (and clears overrides). Focus and container
-    /// memory survive for nodes that still exist; if the focused node is
-    /// gone, focus moves to the first node.
-    pub fn set_nodes(&mut self, nodes: impl IntoIterator<Item = (NodeId, ContainerId, Rect)>) {
+    /// Replaces the layout (and clears overrides). Focus survives if its
+    /// node still exists; otherwise it moves to the first node.
+    pub fn set_nodes(&mut self, nodes: impl IntoIterator<Item = (NodeId, Rect)>) {
         self.nodes.clear();
         self.index.clear();
         self.overrides.clear();
-        for (id, container, rect) in nodes {
+        for (id, rect) in nodes {
             self.index.insert(id, self.nodes.len());
-            self.nodes.push(Node { id, container, rect });
+            self.nodes.push(Node { id, rect });
         }
-        let index = &self.index;
-        let nodes = &self.nodes;
-        self.memory.retain(|&c, id| index.get(id).is_some_and(|&i| nodes[i].container == c));
         if !self.focused.is_some_and(|id| self.index.contains_key(&id)) {
             self.focused = None;
             if let Some(first) = self.nodes.first().map(|n| n.id) {
@@ -104,9 +96,7 @@ impl FocusGraph {
 
     /// Focuses `id`; returns true if focus changed.
     pub fn focus(&mut self, id: NodeId) -> bool {
-        let Some(&i) = self.index.get(&id) else { return false };
-        self.memory.insert(self.nodes[i].container, id);
-        if self.focused == Some(id) {
+        if !self.index.contains_key(&id) || self.focused == Some(id) {
             return false;
         }
         self.focused = Some(id);
@@ -134,11 +124,6 @@ impl FocusGraph {
                 let kb = rank(&cur.rect, &b.rect, dir);
                 ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
             })?;
-        if best.container != cur.container
-            && let Some(&remembered) = self.memory.get(&best.container)
-        {
-            return Some(remembered);
-        }
         Some(best.id)
     }
 }
@@ -179,14 +164,13 @@ fn rank(src: &Rect, dest: &Rect, dir: Dir) -> (u8, f32) {
 mod tests {
     use super::*;
 
-    /// A rows×cols grid of 100×150 cards, one container per row; node id
-    /// is row * 10 + col.
-    fn grid(rows: u32, cols: u32) -> Vec<(NodeId, ContainerId, Rect)> {
+    /// A rows×cols grid of 100×150 cards; node id is row * 10 + col.
+    fn grid(rows: u32, cols: u32) -> Vec<(NodeId, Rect)> {
         let mut v = Vec::new();
         for r in 0..rows {
             for c in 0..cols {
                 let rect = Rect::new(c as f32 * 116.0, 100.0 + r as f32 * 200.0, 100.0, 150.0);
-                v.push((r * 10 + c, r, rect));
+                v.push((r * 10 + c, rect));
             }
         }
         v
@@ -208,27 +192,26 @@ mod tests {
     }
 
     #[test]
-    fn rows_remember_their_last_focus() {
+    fn no_row_memory_moves_straight() {
         let mut g = FocusGraph::new();
         g.set_nodes(grid(2, 6));
         g.focus(4);
         assert_eq!(g.navigate(Dir::Down), Some(14));
         assert_eq!(g.navigate(Dir::Left), Some(13));
         assert_eq!(g.navigate(Dir::Left), Some(12));
-        // Back up: row 0 restores column 4, not the spatially nearest 2.
-        assert_eq!(g.navigate(Dir::Up), Some(4));
-        assert_eq!(g.navigate(Dir::Down), Some(12));
+        // Up goes straight up, not back to where row 0 was left.
+        assert_eq!(g.navigate(Dir::Up), Some(2));
     }
 
     #[test]
     fn aligned_beats_closer_diagonal() {
         let mut g = FocusGraph::new();
         g.set_nodes([
-            (1, 0, Rect::new(0.0, 0.0, 100.0, 40.0)),
+            (1, Rect::new(0.0, 0.0, 100.0, 40.0)),
             // Slightly below-right and close, but not in the beam.
-            (2, 0, Rect::new(110.0, 60.0, 100.0, 40.0)),
+            (2, Rect::new(110.0, 60.0, 100.0, 40.0)),
             // Straight right, further away.
-            (3, 0, Rect::new(400.0, 0.0, 100.0, 40.0)),
+            (3, Rect::new(400.0, 0.0, 100.0, 40.0)),
         ]);
         assert_eq!(g.neighbor(Dir::Right), Some(3));
     }
@@ -239,16 +222,15 @@ mod tests {
         // under the pill; up picks the pill above the card.
         let mut g = FocusGraph::new();
         let mut nodes = vec![
-            (100, 9, Rect::new(0.0, 0.0, 80.0, 30.0)),
-            (101, 9, Rect::new(90.0, 0.0, 80.0, 30.0)),
-            (102, 9, Rect::new(180.0, 0.0, 80.0, 30.0)),
+            (100, Rect::new(0.0, 0.0, 80.0, 30.0)),
+            (101, Rect::new(90.0, 0.0, 80.0, 30.0)),
+            (102, Rect::new(180.0, 0.0, 80.0, 30.0)),
         ];
         nodes.extend(grid(1, 3));
         g.set_nodes(nodes);
         g.focus(102);
         assert_eq!(g.navigate(Dir::Down), Some(1), "card under x=180..260");
         g.focus(2);
-        g.memory.remove(&9);
         assert_eq!(g.navigate(Dir::Up), Some(102), "nearest pill above, by distance");
     }
 
@@ -270,6 +252,5 @@ mod tests {
         assert_eq!(g.focused(), Some(13), "same ids keep focus");
         g.set_nodes(grid(1, 4));
         assert_eq!(g.focused(), Some(0), "focused node removed: first node");
-        assert!(!g.memory.contains_key(&1), "memory of a vanished row dropped");
     }
 }

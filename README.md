@@ -22,7 +22,7 @@ and verified versions.
 The app currently shows the M2 render benchmark: a home-screen-like layout
 with a backdrop, a nav bar, 60 poster cards with shadows and titles,
 Japanese and Cyrillic text, a focus animation, and a perf HUD on F3. Focus
-moves spatially, and each row remembers where you left it. The data and
+moves spatially; Select on a card shows its title. The data and
 artwork are fake; the real UI and Jellyfin data arrive in M5/M6.
 
 ## Layout
@@ -172,8 +172,9 @@ devices and their addresses. Settings: `cec`, `cec_wake_tv` and
 `cec_device` under `[input]` in the config.
 
 - Many PCs have **no CEC on their HDMI port**. Intel's integrated graphics
-  never expose it on native HDMI. Use a Pulse-Eight USB-CEC adapter, or a
-  DisplayPort-to-HDMI adapter with CEC support.
+  never expose it on native HDMI. A DisplayPort output (or a
+  DisplayPort-to-HDMI adapter) that passes CEC through usually works, and
+  shows up as `/dev/cec0`; otherwise use a Pulse-Eight USB-CEC adapter.
 - **Pulse-Eight USB adapter:** the kernel driver is `pulse8-cec`, but it
   must be attached to the serial port first:
   `sudo inputattach --pulse8-cec /dev/ttyACM0 &` (Fedora package
