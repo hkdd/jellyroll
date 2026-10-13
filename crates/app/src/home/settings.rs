@@ -5,12 +5,14 @@
 //! config.toml.
 //!
 //! Each section is a row of buttons: Left/Right within a row, Up/Down
-//! between rows, Select changes the value (cycling through the choices).
+//! between rows. On/off settings are toggles (Select flips them); the
+//! others open a list from the right (`Blade`, D53).
 
 use std::time::Instant;
 
 use jellyroll_render::{Point, Rect, Renderer, TextStyle, Weight};
 
+use super::blade::{self, Blade};
 use super::pages::{Change, Ctx, Open};
 use super::strings as s;
 use super::theme::{BG, TEXT, TEXT_DIM};
@@ -57,6 +59,8 @@ pub struct SettingsView {
     devices: Vec<AudioDevice>,
     /// (row, column) in `rows()`.
     focus: (usize, usize),
+    /// A list open for this item.
+    blade: Option<(Item, Blade)>,
 }
 
 impl SettingsView {
@@ -75,6 +79,7 @@ impl SettingsView {
             values,
             devices,
             focus: (0, 0),
+            blade: None,
         }
     }
 
@@ -113,68 +118,118 @@ impl SettingsView {
         changed
     }
 
+    fn device_name(&self, d: &AudioDevice) -> String {
+        if d.name == "auto" { s::AUDIO_AUTO.into() } else { d.label().to_string() }
+    }
+
     fn device_label(&self) -> String {
         let name = &self.values.audio_device;
         let label = self
             .devices
             .iter()
             .find(|d| &d.name == name)
-            .map(|d| d.label().to_string())
+            .map(|d| self.device_name(d))
             .unwrap_or_else(|| if name == "auto" { s::AUDIO_AUTO.into() } else { name.clone() });
         s::fill(s::AUDIO_OUTPUT, &[&label])
     }
 
-    fn label(&self, item: Item) -> String {
-        let v = &self.values;
-        let on_off = |b: bool| if b { s::ON } else { s::OFF };
-        match item {
-            Item::SignOut => s::SIGN_OUT.into(),
-            Item::ChangeServer => s::CHANGE_SERVER.into(),
-            Item::UiResolution => match v.resolution {
-                Some(UiResolution::Native) => s::UI_RES_NATIVE.into(),
-                _ => s::UI_RES_1080.into(),
-            },
-            Item::MatchRefresh => s::fill(s::MATCH_REFRESH, &[on_off(v.match_refresh)]),
-            Item::AudioDevice => self.device_label(),
-            Item::Passthrough => s::fill(s::PASSTHROUGH, &[on_off(v.passthrough)]),
-            Item::Channels => {
-                let c = match v.channels.as_str() {
-                    "auto" | "" => s::CHANNELS_AUTO,
-                    "stereo" => s::CHANNELS_STEREO,
-                    other => other,
-                };
-                s::fill(s::CHANNELS_LABEL, &[c])
-            }
+    fn channels_name(c: &str) -> &str {
+        match c {
+            "auto" | "" => s::CHANNELS_AUTO,
+            "stereo" => s::CHANNELS_STEREO,
+            other => other,
         }
     }
 
-    /// The change Select makes on `item`.
-    fn change(&self, item: Item) -> Option<Change> {
+    /// On/off items are toggles; the rest open a list.
+    fn toggle_state(&self, item: Item) -> Option<bool> {
+        match item {
+            Item::MatchRefresh => Some(self.values.match_refresh),
+            Item::Passthrough => Some(self.values.passthrough),
+            _ => None,
+        }
+    }
+
+    fn label(&self, item: Item) -> String {
+        let v = &self.values;
+        match item {
+            Item::SignOut => s::SIGN_OUT.into(),
+            Item::ChangeServer => s::CHANGE_SERVER.into(),
+            Item::UiResolution => widgets::list_label(match v.resolution {
+                Some(UiResolution::Native) => s::UI_RES_NATIVE,
+                _ => s::UI_RES_1080,
+            }),
+            Item::MatchRefresh => s::MATCH_REFRESH.into(),
+            Item::AudioDevice => widgets::list_label(&self.device_label()),
+            Item::Passthrough => s::PASSTHROUGH.into(),
+            Item::Channels => widgets::list_label(&s::fill(
+                s::CHANNELS_LABEL,
+                &[Self::channels_name(&v.channels)],
+            )),
+        }
+    }
+
+    /// The list Select opens on `item`: (title, options, current).
+    fn list(&self, item: Item) -> Option<(&'static str, Vec<String>, Option<usize>)> {
         let v = &self.values;
         Some(match item {
-            Item::SignOut | Item::ChangeServer => return None,
-            Item::UiResolution => Change::UiResolution(match v.resolution {
-                Some(UiResolution::Native) => UiResolution::Hd1080,
-                _ => UiResolution::Native,
-            }),
-            Item::MatchRefresh => Change::MatchRefresh(!v.match_refresh),
-            Item::Passthrough => Change::Passthrough(!v.passthrough),
-            Item::Channels => {
-                let i = CHANNELS.iter().position(|c| *c == v.channels).unwrap_or(0);
-                Change::Channels(CHANNELS[(i + 1) % CHANNELS.len()].into())
-            }
+            Item::UiResolution => (
+                s::UI_RES_TITLE,
+                vec![s::UI_RES_OPT_NATIVE.into(), s::UI_RES_OPT_1080.into()],
+                Some(usize::from(v.resolution != Some(UiResolution::Native))),
+            ),
             Item::AudioDevice => {
                 if self.devices.is_empty() {
                     return None;
                 }
-                let i = self.devices.iter().position(|d| d.name == v.audio_device);
-                let next = i.map_or(0, |i| (i + 1) % self.devices.len());
-                Change::AudioDevice(self.devices[next].name.clone())
+                (
+                    s::AUDIO_OUTPUT_TITLE,
+                    self.devices.iter().map(|d| self.device_name(d)).collect(),
+                    self.devices.iter().position(|d| d.name == v.audio_device),
+                )
             }
+            Item::Channels => (
+                s::CHANNELS_TITLE,
+                CHANNELS.iter().map(|c| Self::channels_name(c).to_string()).collect(),
+                CHANNELS.iter().position(|c| *c == v.channels).or(Some(0)),
+            ),
+            _ => return None,
         })
     }
 
-    pub fn on_action(&mut self, a: InputAction, ctx: &mut Ctx) -> bool {
+    /// The change picking option `i` of `item`'s list makes.
+    fn picked(&self, item: Item, i: usize) -> Option<Change> {
+        Some(match item {
+            Item::UiResolution => Change::UiResolution(if i == 0 {
+                UiResolution::Native
+            } else {
+                UiResolution::Hd1080
+            }),
+            Item::AudioDevice => Change::AudioDevice(self.devices.get(i)?.name.clone()),
+            Item::Channels => Change::Channels((*CHANNELS.get(i)?).into()),
+            _ => return None,
+        })
+    }
+
+    pub fn is_animating(&self, now: Instant) -> bool {
+        self.blade.as_ref().is_some_and(|(_, b)| b.is_animating(now))
+    }
+
+    pub fn on_action(&mut self, a: InputAction, now: Instant, ctx: &mut Ctx) -> bool {
+        if let Some((item, b)) = &mut self.blade {
+            let item = *item;
+            match b.on_action(a) {
+                blade::Outcome::Stay => {}
+                blade::Outcome::Closed => self.blade = None,
+                blade::Outcome::Picked(i) => {
+                    if let Some(ch) = self.picked(item, i) {
+                        ctx.open = Some(Open::Setting(ch));
+                    }
+                    self.blade = None;
+                }
+            }
+            return true;
+        }
         let rows = self.rows();
         let (r, c) = self.focus;
         match a {
@@ -187,8 +242,16 @@ impl SettingsView {
             InputAction::Select => match rows[r][c] {
                 Item::SignOut => ctx.send(Cmd::SignOut),
                 Item::ChangeServer => ctx.send(Cmd::ChangeServer),
-                item => match self.change(item) {
-                    Some(ch) => ctx.open = Some(Open::Setting(ch)),
+                Item::MatchRefresh => {
+                    ctx.open = Some(Open::Setting(Change::MatchRefresh(!self.values.match_refresh)))
+                }
+                Item::Passthrough => {
+                    ctx.open = Some(Open::Setting(Change::Passthrough(!self.values.passthrough)))
+                }
+                item => match self.list(item) {
+                    Some((title, options, current)) => {
+                        self.blade = Some((item, Blade::new(title, options, current, now)));
+                    }
                     None => return false,
                 },
             },
@@ -197,7 +260,7 @@ impl SettingsView {
         true
     }
 
-    pub fn draw<R: Renderer>(&mut self, r: &mut R, _now: Instant) {
+    pub fn draw<R: Renderer>(&mut self, r: &mut R, now: Instant) {
         let (sx, sy) = (self.vp.sx(), self.vp.sy());
         r.clear(BG);
         r.text(s::SETTINGS_TITLE, &TextStyle::new(40.0, Weight::Bold), Point::new(sx, sy), TEXT);
@@ -216,10 +279,19 @@ impl SettingsView {
             let mut x = sx;
             for (ci, item) in items.iter().enumerate() {
                 let label = self.label(*item);
-                let w = widgets::button_width(r, &label).max(200.0);
-                let focused = self.focus == (ri, ci);
-                widgets::draw_button(r, Rect::new(x, y, w, 52.0), &label, focused, false);
-                x += w + 14.0;
+                let focused = self.focus == (ri, ci) && self.blade.is_none();
+                match self.toggle_state(*item) {
+                    Some(on) => {
+                        let w = widgets::toggle_width(r, &label).max(200.0);
+                        widgets::draw_toggle(r, Rect::new(x, y, w, 52.0), &label, on, focused);
+                        x += w + 14.0;
+                    }
+                    None => {
+                        let w = widgets::button_width(r, &label).max(200.0);
+                        widgets::draw_button(r, Rect::new(x, y, w, 52.0), &label, focused, false);
+                        x += w + 14.0;
+                    }
+                }
             }
             y += 64.0;
             let hint = match ri {
@@ -240,6 +312,9 @@ impl SettingsView {
             r.text(k, &key, Point::new(sx, y), TEXT_DIM);
             r.text(v, &body, Point::new(sx + 320.0, y), TEXT);
             y += 34.0;
+        }
+        if let Some((_, b)) = &self.blade {
+            b.draw(r, now, self.vp.safe);
         }
     }
 }
@@ -271,7 +346,7 @@ mod tests {
     fn select(v: &mut SettingsView) -> Option<Change> {
         let mut next = 0;
         let mut ctx = Ctx::new(&mut next);
-        v.on_action(InputAction::Select, &mut ctx);
+        v.on_action(InputAction::Select, Instant::now(), &mut ctx);
         match ctx.open {
             Some(Open::Setting(c)) => Some(c),
             _ => None,
@@ -281,11 +356,11 @@ mod tests {
     fn press(v: &mut SettingsView, a: InputAction) -> bool {
         let mut next = 0;
         let mut ctx = Ctx::new(&mut next);
-        v.on_action(a, &mut ctx)
+        v.on_action(a, Instant::now(), &mut ctx)
     }
 
     #[test]
-    fn display_row_toggles() {
+    fn display_row() {
         let mut v = SettingsView::new(
             VP,
             "alice",
@@ -296,9 +371,16 @@ mod tests {
         );
         assert!(press(&mut v, InputAction::Down));
         assert_eq!(v.focus, (1, 0));
+        // A list: Select opens it on the current value; Up picks Native.
+        assert_eq!(select(&mut v), None);
+        assert!(v.blade.is_some());
+        press(&mut v, InputAction::Up);
         assert_eq!(select(&mut v), Some(Change::UiResolution(UiResolution::Native)));
+        assert!(v.blade.is_none());
+        // A toggle: Select flips it directly.
         assert!(press(&mut v, InputAction::Right));
         assert_eq!(select(&mut v), Some(Change::MatchRefresh(false)));
+        assert!(v.blade.is_none());
         assert!(!press(&mut v, InputAction::Right), "end of the row");
         assert!(press(&mut v, InputAction::Up));
         assert_eq!(v.focus, (0, 1), "back to the account buttons");
@@ -308,36 +390,40 @@ mod tests {
     fn no_resolution_choice_on_1080p_outputs() {
         let mut v = SettingsView::new(VP, "alice", "home", Vec::new(), values(None), devices());
         press(&mut v, InputAction::Down);
-        assert_eq!(v.label(v.rows()[1][0]), s::fill(s::MATCH_REFRESH, &[s::ON]));
+        assert_eq!(v.toggle_state(v.rows()[1][0]), Some(true));
         assert_eq!(select(&mut v), Some(Change::MatchRefresh(false)));
     }
 
     #[test]
-    fn audio_row_cycles() {
+    fn audio_row() {
         let mut v = SettingsView::new(VP, "alice", "home", Vec::new(), values(None), devices());
         press(&mut v, InputAction::Down);
         press(&mut v, InputAction::Down);
         assert_eq!(v.focus, (2, 0));
-        assert_eq!(select(&mut v), Some(Change::AudioDevice("pipewire".into())));
-        let mut vals = values(None);
-        vals.audio_device = "alsa/hdmi:CARD=PCH,DEV=0".into();
-        v.set_values(vals.clone());
-        assert_eq!(select(&mut v), Some(Change::AudioDevice("auto".into())), "wraps");
+        // Output list: opens on "auto" (first); the HDMI device is 2 down.
+        assert_eq!(select(&mut v), None);
+        press(&mut v, InputAction::Down);
+        press(&mut v, InputAction::Down);
+        assert_eq!(select(&mut v), Some(Change::AudioDevice("alsa/hdmi:CARD=PCH,DEV=0".into())));
+        // Back closes a list without a change.
+        select(&mut v);
+        assert!(press(&mut v, InputAction::Back));
+        assert!(v.blade.is_none());
         press(&mut v, InputAction::Right);
         assert_eq!(select(&mut v), Some(Change::Passthrough(true)));
         press(&mut v, InputAction::Right);
+        select(&mut v);
+        press(&mut v, InputAction::Down);
         assert_eq!(select(&mut v), Some(Change::Channels("stereo".into())));
-        vals.channels = "7.1".into();
-        v.set_values(vals);
-        assert_eq!(select(&mut v), Some(Change::Channels("auto".into())));
     }
 
     #[test]
-    fn device_choice_waits_for_the_list() {
+    fn device_list_waits_for_the_probe() {
         let mut v = SettingsView::new(VP, "alice", "home", Vec::new(), values(None), Vec::new());
         press(&mut v, InputAction::Down);
         press(&mut v, InputAction::Down);
         assert_eq!(select(&mut v), None);
+        assert!(v.blade.is_none());
         assert_eq!(v.device_label(), s::fill(s::AUDIO_OUTPUT, &[s::AUDIO_AUTO]));
     }
 }

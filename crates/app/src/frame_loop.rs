@@ -368,7 +368,18 @@ pub fn run<P: Platform, R: Renderer>(
                     if let Err(e) = p.reapply_mode() {
                         tracing::warn!("re-modeset failed: {e}");
                     }
+                    // HDMI audio went away with the display; reopen it.
+                    if let Some(pb) = playback.as_mut() {
+                        tracing::info!("reopening the audio output");
+                        pb.player.reload_audio();
+                    }
                     dirty = true;
+                }
+                PlatformEvent::AudioSinkChanged => {
+                    if let Some(pb) = playback.as_mut() {
+                        tracing::info!("HDMI audio sink changed; reopening the audio output");
+                        pb.player.reload_audio();
+                    }
                 }
                 PlatformEvent::CecStandby => {
                     // The TV is going to standby: pause playback (spec 5.4).

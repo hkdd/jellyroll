@@ -211,6 +211,9 @@ pub enum PlatformEvent {
     OutputConnected {
         connected: bool,
     },
+    /// An HDMI audio sink (TV, receiver) went away, came back or
+    /// renegotiated; an open audio stream may need reopening.
+    AudioSinkChanged,
 }
 
 #[derive(Clone, Debug)]

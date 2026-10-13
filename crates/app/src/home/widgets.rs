@@ -269,6 +269,38 @@ pub fn button_width<R: Renderer>(r: &mut R, label: &str) -> f32 {
     r.measure_text(label, &BUTTON).width + 56.0
 }
 
+/// Extra width a toggle needs for its switch.
+pub const TOGGLE_EXTRA: f32 = 70.0;
+
+/// Toggle button width that fits `label` and the switch.
+pub fn toggle_width<R: Renderer>(r: &mut R, label: &str) -> f32 {
+    button_width(r, label) + TOGGLE_EXTRA
+}
+
+/// An on/off setting (D53): the label, then a switch that shows the state
+/// (accent and knob right when on). Select flips it; no list opens.
+pub fn draw_toggle<R: Renderer>(r: &mut R, rect: Rect, label: &str, on: bool, focused: bool) {
+    let (bg, fg) =
+        if focused { (Color::WHITE, BG) } else { (Color::rgba(255, 255, 255, 26), TEXT) };
+    r.fill_rrect(rect, rect.h / 2.0, bg);
+    let style = BUTTON.max_width(rect.w - 28.0 - TOGGLE_EXTRA);
+    let m = r.measure_text(label, &style);
+    let p = Point::new((rect.x + 28.0).round(), (rect.y + (rect.h - m.height) / 2.0).round());
+    r.text(label, &style, p, fg);
+    let (sw, sh) = (46.0, 26.0);
+    let track = Rect::new(rect.right() - sw - 20.0, rect.y + (rect.h - sh) / 2.0, sw, sh);
+    let off_track = if focused { Color::rgba(0, 0, 0, 60) } else { Color::rgba(255, 255, 255, 50) };
+    r.fill_rrect(track, sh / 2.0, if on { ACCENT } else { off_track });
+    let d = sh - 6.0;
+    let kx = if on { track.right() - d - 3.0 } else { track.x + 3.0 };
+    r.fill_rrect(Rect::new(kx, track.y + 3.0, d, d), d / 2.0, Color::WHITE);
+}
+
+/// A button that opens a list (a `Blade`): the label ends with a chevron.
+pub fn list_label(label: &str) -> String {
+    format!("{label}  ›")
+}
+
 /// Full-screen backdrop with a crossfade when it changes.
 pub struct Backdrop {
     shown: Option<u64>,

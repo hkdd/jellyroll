@@ -5,6 +5,7 @@
 //! which images and data it needs, and hands playback requests to the
 //! frame loop.
 
+mod blade;
 mod detail;
 mod library;
 pub mod model;
@@ -749,7 +750,7 @@ impl HomeApp {
                     Some(Page::Library(v)) => v.on_action(a, now, ctx),
                     Some(Page::Detail(v)) => v.on_action(a, now, ctx),
                     Some(Page::Search(v)) => v.on_action(a, now, ctx),
-                    Some(Page::Settings(v)) => v.on_action(a, ctx),
+                    Some(Page::Settings(v)) => v.on_action(a, now, ctx),
                     None => me.home.as_mut().is_some_and(|h| h.on_action(a, now, ctx)),
                 });
                 if !used && a == InputAction::Back && !self.stack.is_empty() {
@@ -831,7 +832,7 @@ impl HomeApp {
             Some(Page::Library(v)) => v.is_animating(now),
             Some(Page::Detail(v)) => v.is_animating(now),
             Some(Page::Search(v)) => v.is_animating(now),
-            Some(Page::Settings(_)) => false,
+            Some(Page::Settings(v)) => v.is_animating(now),
             None => self.home.as_ref().is_some_and(|h| h.is_animating(now)),
         }
     }

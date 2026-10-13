@@ -777,6 +777,26 @@ running, so page flips still complete. To be confirmed on the HTPC with
 a TV power cycle (many TVs keep the hotplug line up in standby, in which
 case nothing changes at all).
 
+**D53: One way to choose (request after the M8 run).** A choice
+among several values opens a list that slides in from the right (`Blade`:
+dimmed page, current value marked, opens on it, Up/Down wrap, Select
+picks, Back/Left closes): Settings' interface resolution, audio output and
+channels; the library's Sort and Genre. Buttons that open one end with
+"›". On/off settings are toggles with a switch drawn in the button and
+flip on Select: match refresh rate, passthrough, the library's Unwatched
+and Favorites. Nothing cycles through values any more (cycling >10 audio
+outputs was slow and unforgiving). The player's audio/subtitle panel was
+already a list on the right.
+
+**D54: Audio after a TV power cycle.** On the HTPC, after the TV was
+turned off and on, the movie kept playing with no sound: the connector
+never reported a disconnect, but the HDMI audio path (TV/soundbar) was
+re-established, and mpv's open stream stayed silent. The hotplug thread
+also fingerprints the HDMI audio sinks' ELD (`/proc/asound/card*/eld#*`)
+and reports a change; during playback, a change (or a display reconnect)
+makes mpv reopen its audio output (`ao-reload`). To be confirmed on the
+HTPC.
+
 ## Dependency approvals
 
 | Crate | Status |

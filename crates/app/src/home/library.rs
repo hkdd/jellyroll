@@ -11,6 +11,7 @@ use jellyfin_api::dto::CollectionType;
 use jellyfin_api::endpoints::ItemsQuery;
 use jellyroll_render::{Color, Point, Rect, Renderer, TextStyle, Weight};
 
+use super::blade::{self, Blade};
 use super::model::{self, Card, Kind, Shape};
 use super::pages::{Ctx, Open};
 use super::strings as s;
@@ -52,10 +53,11 @@ enum BarItem {
 
 const BAR: [BarItem; 4] = [BarItem::Sort, BarItem::Unwatched, BarItem::Favorites, BarItem::Genre];
 
-/// The genre list overlay.
-struct Picker {
-    options: Vec<String>,
-    focus: usize,
+/// Which list the blade shows.
+enum Pick {
+    Sort,
+    /// "All genres", then the library's genres.
+    Genre(Vec<String>),
 }
 
 pub struct LibraryView {
@@ -77,7 +79,7 @@ pub struct LibraryView {
     prev_grid: Option<usize>,
     anim: Tween,
     v_scroll: Tween,
-    picker: Option<Picker>,
+    picker: Option<(Pick, Blade)>,
     genres_req: Option<u64>,
     letter_req: Option<u64>,
     bar_rects: Vec<Rect>,
@@ -85,6 +87,8 @@ pub struct LibraryView {
     /// per frame).
     count_label: String,
     genre_label: String,
+    /// The Sort button's label (kept so drawing doesn't allocate).
+    sort_label: String,
     vp: Viewport,
 }
 
@@ -138,7 +142,8 @@ impl LibraryView {
             letter_req: None,
             bar_rects: Vec::new(),
             count_label: String::new(),
-            genre_label: s::GENRE_ALL.into(),
+            genre_label: widgets::list_label(s::GENRE_ALL),
+            sort_label: widgets::list_label(SORTS[0].0),
             vp,
         };
         v.load(ctx);
@@ -258,23 +263,29 @@ impl LibraryView {
     }
 
     pub fn on_action(&mut self, a: InputAction, now: Instant, ctx: &mut Ctx) -> bool {
-        if let Some(p) = &mut self.picker {
-            match a {
-                InputAction::Up => p.focus = p.focus.saturating_sub(1),
-                InputAction::Down => p.focus = (p.focus + 1).min(p.options.len() - 1),
-                InputAction::Select => {
-                    self.genre = (p.focus > 0).then(|| p.options[p.focus].clone());
-                    self.genre_label = match &self.genre {
-                        Some(g) => format!("{}{g}", s::GENRE_PREFIX),
-                        None => s::GENRE_ALL.into(),
-                    };
-                    self.bar_rects.clear();
-                    self.picker = None;
-                    self.reset(ctx, now);
-                }
-                InputAction::Back => self.picker = None,
-                _ => return false,
+        if let Some((pick, b)) = &mut self.picker {
+            match b.on_action(a) {
+                blade::Outcome::Stay => return true,
+                blade::Outcome::Closed => {}
+                blade::Outcome::Picked(i) => match pick {
+                    Pick::Sort => {
+                        self.sort = i.min(SORTS.len() - 1);
+                        self.sort_label = widgets::list_label(SORTS[self.sort].0);
+                        self.bar_rects.clear();
+                        self.reset(ctx, now);
+                    }
+                    Pick::Genre(options) => {
+                        self.genre = (i > 0).then(|| options[i].clone());
+                        self.genre_label = widgets::list_label(&match &self.genre {
+                            Some(g) => format!("{}{g}", s::GENRE_PREFIX),
+                            None => s::GENRE_ALL.into(),
+                        });
+                        self.bar_rects.clear();
+                        self.reset(ctx, now);
+                    }
+                },
             }
+            self.picker = None;
             return true;
         }
         let total = self.total.unwrap_or(0) as usize;
@@ -316,8 +327,9 @@ impl LibraryView {
             }
             (Focus::Bar(b), InputAction::Select) => match BAR[b] {
                 BarItem::Sort => {
-                    self.sort = (self.sort + 1) % SORTS.len();
-                    self.reset(ctx, now);
+                    let options = SORTS.iter().map(|s| s.0.to_string()).collect();
+                    let b = Blade::new(s::SORT_TITLE, options, Some(self.sort), now);
+                    self.picker = Some((Pick::Sort, b));
                 }
                 BarItem::Unwatched => {
                     self.unwatched = !self.unwatched;
@@ -359,14 +371,15 @@ impl LibraryView {
         if self.genres_req == Some(id) {
             self.genres_req = None;
             if let Fetched::Names(names) = result {
-                let mut options = vec![s::GENRE_ALL.to_string()];
+                let mut options = vec![s::GENRE_ALL_OPT.to_string()];
                 options.extend(names.iter().cloned());
                 let focus = self
                     .genre
                     .as_ref()
                     .and_then(|g| options.iter().position(|o| o == g))
                     .unwrap_or(0);
-                self.picker = Some(Picker { options, focus });
+                let b = Blade::new(s::GENRE_TITLE, options.clone(), Some(focus), Instant::now());
+                self.picker = Some((Pick::Genre(options), b));
                 return true;
             }
             return false;
@@ -412,7 +425,9 @@ impl LibraryView {
     }
 
     pub fn is_animating(&self, now: Instant) -> bool {
-        self.anim.is_animating(now) || self.v_scroll.is_animating(now)
+        self.anim.is_animating(now)
+            || self.v_scroll.is_animating(now)
+            || self.picker.as_ref().is_some_and(|(_, b)| b.is_animating(now))
     }
 
     fn cell_rect(&self, i: usize, v: f32) -> Rect {
@@ -464,25 +479,31 @@ impl LibraryView {
         if self.bar_rects.is_empty() {
             let mut x = sx;
             for b in BAR {
-                let w = widgets::button_width(r, self.bar_label(b)).max(150.0);
+                let w = match b {
+                    BarItem::Unwatched | BarItem::Favorites => {
+                        widgets::toggle_width(r, self.bar_label(b))
+                    }
+                    _ => widgets::button_width(r, self.bar_label(b)).max(150.0),
+                };
                 self.bar_rects.push(Rect::new(x, sy + BAR_Y, w, BAR_H));
                 x += w + 12.0;
             }
         }
         for (i, b) in BAR.iter().enumerate() {
-            let selected = match b {
-                BarItem::Unwatched => self.unwatched,
-                BarItem::Favorites => self.favorites,
-                BarItem::Genre => self.genre.is_some(),
-                BarItem::Sort => false,
-            };
-            widgets::draw_button(
-                r,
-                self.bar_rects[i],
-                self.bar_label(*b),
-                self.focus == Focus::Bar(i),
-                selected,
-            );
+            let focused = self.focus == Focus::Bar(i) && self.picker.is_none();
+            let rect = self.bar_rects[i];
+            match b {
+                BarItem::Unwatched => {
+                    widgets::draw_toggle(r, rect, self.bar_label(*b), self.unwatched, focused)
+                }
+                BarItem::Favorites => {
+                    widgets::draw_toggle(r, rect, self.bar_label(*b), self.favorites, focused)
+                }
+                BarItem::Genre => {
+                    widgets::draw_button(r, rect, self.bar_label(*b), focused, self.genre.is_some())
+                }
+                BarItem::Sort => widgets::draw_button(r, rect, self.bar_label(*b), focused, false),
+            }
         }
 
         // Grid (only rows near the viewport).
@@ -568,37 +589,15 @@ impl LibraryView {
             }
         }
 
-        // Genre picker overlay.
-        if let Some(p) = &self.picker {
-            let w = 520.0;
-            let x = lw - sx - w;
-            r.fill_rect(Rect::new(0.0, 0.0, lw, lh), Color::rgba(0, 0, 0, 140));
-            r.fill_rrect(Rect::new(x, sy, w, lh - 2.0 * sy), 16.0, Color::rgba(28, 30, 38, 250));
-            let item_h = 52.0;
-            let visible = ((lh - 2.0 * sy - 40.0) / item_h) as usize;
-            let first =
-                p.focus.saturating_sub(visible / 2).min(p.options.len().saturating_sub(visible));
-            let st = TextStyle::new(24.0, Weight::Regular).max_width(w - 60.0);
-            for (k, opt) in p.options.iter().enumerate().skip(first).take(visible) {
-                let y = sy + 20.0 + (k - first) as f32 * item_h;
-                let rect = Rect::new(x + 16.0, y, w - 32.0, item_h - 6.0);
-                let focused = k == p.focus;
-                if focused {
-                    r.fill_rrect(rect, 10.0, Color::WHITE);
-                }
-                r.text(
-                    opt,
-                    &st,
-                    Point::new(rect.x + 18.0, rect.y + 8.0),
-                    if focused { BG } else { TEXT },
-                );
-            }
+        // Sort or genre list.
+        if let Some((_, b)) = &self.picker {
+            b.draw(r, now, self.vp.safe);
         }
     }
 
     fn bar_label(&self, b: BarItem) -> &str {
         match b {
-            BarItem::Sort => SORTS[self.sort].0,
+            BarItem::Sort => &self.sort_label,
             BarItem::Unwatched => s::FILTER_UNWATCHED,
             BarItem::Favorites => s::FILTER_FAVORITES,
             BarItem::Genre => &self.genre_label,

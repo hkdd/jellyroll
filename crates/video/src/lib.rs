@@ -579,6 +579,12 @@ impl Player {
         let _ = self.command(&["stop"]);
     }
 
+    /// Reopens the audio output: after the display (and with it HDMI
+    /// audio) came back, a sink that went away can stay silent otherwise.
+    pub fn reload_audio(&mut self) {
+        let _ = self.command(&["ao-reload"]);
+    }
+
     /// Latest dropped/late frame counters (from observed properties).
     pub fn frame_drops(&self) -> FrameDrops {
         self.state.drops

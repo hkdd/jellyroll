@@ -54,13 +54,19 @@ pub const ABOUT: &str = "About this device";
 pub const DISPLAY: &str = "Display";
 pub const UI_RES_1080: &str = "Interface: 1080p, upscaled (smoother)";
 pub const UI_RES_NATIVE: &str = "Interface: full resolution (sharpest)";
-pub const ON: &str = "on";
-pub const OFF: &str = "off";
-pub const MATCH_REFRESH: &str = "Match refresh rate: %s";
+pub const MATCH_REFRESH: &str = "Match refresh rate";
+pub const SORT_TITLE: &str = "Sort by";
+pub const GENRE_TITLE: &str = "Genre";
+pub const GENRE_ALL_OPT: &str = "All genres";
+pub const UI_RES_TITLE: &str = "Interface resolution";
+pub const UI_RES_OPT_NATIVE: &str = "Full resolution (sharpest)";
+pub const UI_RES_OPT_1080: &str = "1080p, upscaled (smoother)";
+pub const AUDIO_OUTPUT_TITLE: &str = "Audio output";
+pub const CHANNELS_TITLE: &str = "Channels for decoded audio";
 pub const DISPLAY_HINT: &str = "Select to change. Matching plays each video at its own frame rate (films at 24 Hz); set for %s.";
 pub const AUDIO_OUTPUT: &str = "Output: %s";
 pub const AUDIO_AUTO: &str = "automatic";
-pub const PASSTHROUGH: &str = "Passthrough: %s";
+pub const PASSTHROUGH: &str = "Passthrough";
 pub const CHANNELS_LABEL: &str = "Channels: %s";
 pub const CHANNELS_AUTO: &str = "auto";
 pub const CHANNELS_STEREO: &str = "stereo";
@@ -168,9 +174,16 @@ pub const ALL: &[&str] = &[
     DISPLAY,
     UI_RES_1080,
     UI_RES_NATIVE,
-    ON,
-    OFF,
     MATCH_REFRESH,
+    SORT_TITLE,
+    GENRE_TITLE,
+    GENRE_ALL_OPT,
+    UI_RES_TITLE,
+    UI_RES_OPT_NATIVE,
+    UI_RES_OPT_1080,
+    AUDIO_OUTPUT_TITLE,
+    CHANNELS_TITLE,
+    "  ›",
     DISPLAY_HINT,
     AUDIO_OUTPUT,
     AUDIO_AUTO,

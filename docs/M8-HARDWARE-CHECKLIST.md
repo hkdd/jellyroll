@@ -33,9 +33,10 @@ copy them from the desktop with `cat FILE | tee >(wl-copy)`.
    - Settings → Display → Match refresh rate: off. Play the film again:
      no switch (60 Hz). Turn it back on.
 5. **Audio** (Settings → Audio):
-   - Output: Select cycles through what mpv found. Note which one is your
-     TV/receiver's HDMI (for passthrough, an `alsa/hdmi:...` entry usually
-     works best).
+   - Output: Select opens the list of what mpv found, from the right.
+     Note which one is your TV/receiver's HDMI (for passthrough, an
+     `alsa/hdmi:...` entry usually works best). Lists everywhere work the
+     same (library Sort and Genre too); on/off settings are switches.
    - With a receiver or soundbar that decodes Dolby/DTS: Passthrough: on,
      then play something with Dolby Digital (AC3) or DTS audio. The
      receiver's display should show Dolby/DTS, not PCM. Info (`i`) in the
@@ -46,7 +47,9 @@ copy them from the desktop with `cat FILE | tee >(wl-copy)`.
 6. **TV power cycle:** play something, turn the TV off with its remote,
    wait 10 s, turn it on. Playback should be paused (if the TV dropped
    the connection) or still running (if it didn't); either way the picture
-   comes back and jellyroll is still running. Also try it from the menus.
+   and the sound come back (the log says "HDMI audio sink changed;
+   reopening the audio output") and jellyroll is still running. Also try
+   it from the menus.
 7. **Power menu:** on the home screen press Back: Restart, Shut down,
    Cancel (and "Exit to console", because of `--allow-exit`). Cancel
    closes it. Restart reboots the HTPC (save your work elsewhere first).
@@ -56,7 +59,7 @@ copy them from the desktop with `cat FILE | tee >(wl-copy)`.
    ```
 8. **Results**, from the desktop:
    ```sh
-   { grep -E "^display|mode:|current:|audio" ~/jellyroll-m8-diag.txt; grep -hE "output mode|frame rate|refresh|display (dis)?connected|watching display|audio outputs|setting changed|power|hardware decod|WARN|ERROR" ~/jellyroll-m8.log | cut -c1-200; } | tee >(wl-copy)
+   { grep -E "^display|mode:|current:|audio" ~/jellyroll-m8-diag.txt; grep -hE "output mode|frame rate|refresh|display (dis)?connected|watching display|audio sink|reopening|audio outputs|setting changed|power|hardware decod|WARN|ERROR" ~/jellyroll-m8.log | cut -c1-200; } | tee >(wl-copy)
    ```
    And tell me how the pan looked, what the receiver showed, and what
    happened on the TV power cycle.

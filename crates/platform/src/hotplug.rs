@@ -6,6 +6,12 @@
 //! probe the display) and reports when the outputs go from some connected
 //! to none, or back. TVs differ: many keep the HDMI hotplug line up in
 //! standby (then nothing changes here), others drop it.
+//!
+//! It also watches the HDMI audio sinks' ELD (`/proc/asound/card*/eld#*`:
+//! what the TV or receiver says it can play). That changes when the sink
+//! goes away or renegotiates (TV or soundbar power cycle) even while the
+//! video link stays up, and an audio stream opened before can stay silent
+//! afterwards; the app reopens it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -54,14 +60,40 @@ fn any_connected(files: &[PathBuf]) -> Option<bool> {
     Some(files.iter().any(|f| std::fs::read_to_string(f).is_ok_and(|s| s.trim() == "connected")))
 }
 
+/// A fingerprint of every HDMI audio sink's ELD under `asound` (e.g.
+/// /proc/asound); 0 when there are none.
+fn eld_signature(asound: &Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut files: Vec<PathBuf> = std::fs::read_dir(asound)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("card"))
+        .flat_map(|card| std::fs::read_dir(card.path()).into_iter().flatten().flatten())
+        .filter(|e| e.file_name().to_string_lossy().starts_with("eld#"))
+        .map(|e| e.path())
+        .collect();
+    if files.is_empty() {
+        return 0;
+    }
+    files.sort();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for f in files {
+        f.hash(&mut h);
+        std::fs::read(&f).unwrap_or_default().hash(&mut h);
+    }
+    h.finish()
+}
+
 /// Starts watching; None when there are no connectors to watch (e.g. not
 /// a DRM system).
 pub fn start(tx: Sender<PlatformEvent>, wake: Arc<dyn Fn() + Send + Sync>) -> Option<Watcher> {
-    start_at(PathBuf::from("/sys/class/drm"), POLL, tx, wake)
+    start_at(PathBuf::from("/sys/class/drm"), PathBuf::from("/proc/asound"), POLL, tx, wake)
 }
 
 fn start_at(
     root: PathBuf,
+    asound: PathBuf,
     poll: Duration,
     tx: Sender<PlatformEvent>,
     wake: Arc<dyn Fn() + Send + Sync>,
@@ -69,6 +101,7 @@ fn start_at(
     let files = status_files(&root);
     let mut last = any_connected(&files)?;
     tracing::info!(connectors = files.len(), connected = last, "watching display connectors");
+    let mut last_eld = eld_signature(&asound);
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = stop.clone();
     std::thread::Builder::new()
@@ -76,6 +109,15 @@ fn start_at(
         .spawn(move || {
             while !thread_stop.load(Ordering::Relaxed) {
                 std::thread::sleep(poll);
+                let eld = eld_signature(&asound);
+                if eld != last_eld {
+                    last_eld = eld;
+                    tracing::info!("HDMI audio sink changed");
+                    if tx.send(PlatformEvent::AudioSinkChanged).is_err() {
+                        return;
+                    }
+                    wake();
+                }
                 // Connectors can appear (MST, adapters): rescan each time.
                 let Some(now) = any_connected(&status_files(&root)) else { continue };
                 if now != last {
@@ -103,13 +145,22 @@ mod tests {
         std::fs::create_dir_all(root.join("renderD128")).unwrap();
         std::fs::write(conn.join("status"), "connected\n").unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
-        let w = start_at(root.clone(), Duration::from_millis(10), tx, Arc::new(|| {})).unwrap();
+        let asound = root.join("asound");
+        let eld = asound.join("card0");
+        std::fs::create_dir_all(&eld).unwrap();
+        std::fs::write(eld.join("eld#0.0"), "monitor_present\t1\neld_valid\t1\n").unwrap();
+        let w =
+            start_at(root.clone(), asound, Duration::from_millis(10), tx, Arc::new(|| {})).unwrap();
         std::fs::write(conn.join("status"), "disconnected\n").unwrap();
         let ev = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(matches!(ev, PlatformEvent::OutputConnected { connected: false }));
         std::fs::write(conn.join("status"), "connected\n").unwrap();
         let ev = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(matches!(ev, PlatformEvent::OutputConnected { connected: true }));
+        // The audio sink renegotiates while the video link stays up.
+        std::fs::write(eld.join("eld#0.0"), "monitor_present\t1\neld_valid\t0\n").unwrap();
+        let ev = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(ev, PlatformEvent::AudioSinkChanged));
         drop(w);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -118,6 +169,6 @@ mod tests {
     fn nothing_to_watch() {
         let (tx, _rx) = std::sync::mpsc::channel();
         let missing = PathBuf::from("/nonexistent/drm");
-        assert!(start_at(missing, POLL, tx, Arc::new(|| {})).is_none());
+        assert!(start_at(missing.clone(), missing, POLL, tx, Arc::new(|| {})).is_none());
     }
 }
