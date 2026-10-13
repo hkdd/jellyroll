@@ -16,7 +16,7 @@ use super::status::wrap;
 use super::strings as s;
 use super::textures::Textures;
 use super::theme::{NOTICE, TEXT, TEXT_DIM};
-use super::widgets::{self, Backdrop, RowList, Viewport, Wants};
+use super::widgets::{self, Backdrop, RowList, Step, Viewport, Wants};
 use crate::focus::{Dir, FocusGraph, NodeId};
 use crate::input::InputAction;
 use crate::net::{Fetch, Fetched};
@@ -66,6 +66,9 @@ pub struct DetailView {
     season_title: String,
     seasons_req: Option<u64>,
     episodes_req: Option<u64>,
+    /// A season was selected: focus its episodes when they arrive (they
+    /// are below the fold, so otherwise nothing visible changes).
+    focus_episodes: bool,
     similar_req: Option<u64>,
     toggle_req: Option<u64>,
     overview: Option<Vec<String>>,
@@ -102,6 +105,7 @@ impl DetailView {
             season_title: s::EPISODES.into(),
             seasons_req: None,
             episodes_req: None,
+            focus_episodes: false,
             similar_req: None,
             toggle_req: None,
             overview: None,
@@ -216,6 +220,14 @@ impl DetailView {
         self.rebuild_graph();
     }
 
+    /// Focus the episodes row: the episode in progress, else the first.
+    fn focus_episode_row(&mut self, now: Instant) {
+        let Some(r) = self.rows.rows.iter().position(|r| r.key == "episodes") else { return };
+        let c = self.episodes.iter().position(|e| e.progress.is_some()).unwrap_or(0);
+        self.rows.take_focus((r, c), &self.vp, now);
+        self.rebuild_graph();
+    }
+
     fn rebuild_graph(&mut self) {
         let mut nodes = self.rows.nodes(&self.vp);
         if self.buttons_ready {
@@ -231,8 +243,14 @@ impl DetailView {
 
     pub fn on_action(&mut self, a: InputAction, now: Instant, ctx: &mut Ctx) -> bool {
         if let Some(dir) = Dir::from_action(a) {
-            let step = self.rows.step(dir, &self.vp);
-            let Some(id) = step.or_else(|| self.graph.navigate(dir)) else { return false };
+            let id = match self.rows.step(dir, &self.vp) {
+                Step::To(id) => id,
+                Step::Stay => return true,
+                Step::Free => match self.graph.navigate(dir) {
+                    Some(id) => id,
+                    None => return false,
+                },
+            };
             match widgets::card_of(id) {
                 Some(rc) => {
                     self.button_focus = None;
@@ -282,6 +300,7 @@ impl DetailView {
                     self.season_title = card.title.clone();
                     self.episodes_req =
                         Some(ctx.fetch(Fetch::Episodes { series, season: card.id.clone() }));
+                    self.focus_episodes = true;
                 }
             }
             (_, Kind::Person | Kind::Library) => return false,
@@ -353,6 +372,12 @@ impl DetailView {
             if let Fetched::Cards(c) = result {
                 self.episodes = c.clone();
                 self.set_rows(now);
+                // Unless the user moved off the seasons meanwhile.
+                let on_seasons = self.button_focus.is_none()
+                    && self.rows.rows.get(self.rows.focus.0).is_some_and(|r| r.key == "seasons");
+                if std::mem::take(&mut self.focus_episodes) && on_seasons {
+                    self.focus_episode_row(now);
+                }
             }
             return true;
         }
@@ -615,5 +640,17 @@ mod tests {
         // Cast arrived first; focus (where Down from the buttons goes) is
         // still the first row, Seasons.
         assert_eq!(v.rows.focus, (0, 0));
+
+        // Right to Season 2 (buttons are not laid out here, so focus is
+        // on the rows), Select: its episodes load and focus moves to them.
+        v.on_action(InputAction::Right, t, &mut ctx);
+        assert_eq!(v.rows.focus, (0, 1));
+        assert!(v.on_action(InputAction::Select, t, &mut ctx));
+        let Some(crate::net::Cmd::Fetch { id: eid, req }) = ctx.cmds.pop() else { panic!() };
+        assert_eq!(req, Fetch::Episodes { series: "show".into(), season: "s2".into() });
+        let eps = vec![card("e5", Kind::Episode), card("e6", Kind::Episode)];
+        v.on_fetched(eid, &Fetched::Cards(eps), t, &mut ctx);
+        assert_eq!(v.rows.focus, (1, 0), "first episode of season 2");
+        assert_eq!(v.rows.rows[1].title, "s2");
     }
 }

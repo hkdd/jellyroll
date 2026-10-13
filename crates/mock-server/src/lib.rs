@@ -232,11 +232,14 @@ impl Library {
                 (0..8).map(move |e| {
                     let i = id(0x30, s * 100 + e);
                     let (tags, hashes) = images(&i, &["Primary"]);
+                    // Two seasons of four.
+                    let season = e / 4 + 1;
                     Item {
                         json: json!({
                             "Id": i, "Name": format!("Chapter {}", e + 1), "Type": "Episode", "MediaType": "Video",
                             "SeriesName": sname, "SeriesId": sid, "SeriesPrimaryImageTag": format!("t{}", &sid[sid.len() - 6..]),
-                            "ParentIndexNumber": 1, "IndexNumber": e + 1, "RunTimeTicks": runtime.unwrap_or(45i64 * 600_000_000),
+                            "SeasonId": format!("{sid}s{season}"),
+                            "ParentIndexNumber": season, "IndexNumber": e % 4 + 1, "RunTimeTicks": runtime.unwrap_or(45i64 * 600_000_000),
                             "ProductionYear": 2022, "Overview": "A synthetic episode.",
                             "PrimaryImageAspectRatio": 1.7778, "ImageTags": tags, "ImageBlurHashes": hashes,
                             "ParentBackdropItemId": sid, "ParentBackdropImageTags": sbd,
@@ -617,8 +620,12 @@ impl Server {
                         .map(|e| e.json.clone())
                         .collect(),
                     None => {
-                        let season1 = req.query.get("seasonid").is_some_and(|s| s.ends_with("s1"));
-                        all.filter(|_| season1).map(|e| e.json.clone()).collect()
+                        let season = req.query.get("seasonid").map(|s| Value::from(s.as_str()));
+                        all.filter(|e| {
+                            season.is_none() || e.json.get("SeasonId") == season.as_ref()
+                        })
+                        .map(|e| e.json.clone())
+                        .collect()
                     }
                 };
                 Response::json(query_result(eps))

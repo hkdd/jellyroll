@@ -547,7 +547,6 @@ pub fn run<P: Platform, R: Renderer>(
         }
 
         // ---- draw ------------------------------------------------------
-        let timing = gpu_timer.as_mut().is_some_and(|t| t.begin(p.gl()));
         let mut hud_allocs = load_allocs;
         let mut loading = load_allocs > 0;
         if let Some(pb) = playback.as_mut() {
@@ -555,6 +554,13 @@ pub fn run<P: Platform, R: Renderer>(
             p.gl().reset_to_defaults();
             pb.player.render(fb);
             r.reset_gl_state();
+        }
+        // The GPU timer measures our drawing only: it starts after mpv's
+        // frame, because mpv times its own passes with GL_TIME_ELAPSED
+        // queries and only one can be active at a time (an open one of ours
+        // made each of mpv's fail with GL_INVALID_OPERATION).
+        let timing = gpu_timer.as_mut().is_some_and(|t| t.begin(p.gl()));
+        if let Some(pb) = playback.as_mut() {
             let submit_start = Instant::now();
             stats.record_ms.push(ms(submit_start - frame_start));
             let home = matches!(&view, View::Home(h) if h.has_player());

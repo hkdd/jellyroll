@@ -14,7 +14,7 @@ use super::pages::{Ctx, Open};
 use super::strings as s;
 use super::textures::Textures;
 use super::theme::{BG, TEXT, TEXT_DIM};
-use super::widgets::{self, RowList, Viewport, Wants};
+use super::widgets::{self, RowList, Step, Viewport, Wants};
 use crate::focus::{Dir, FocusGraph, NodeId};
 use crate::input::InputAction;
 use crate::net::{Fetch, Fetched};
@@ -153,8 +153,14 @@ impl SearchView {
 
     pub fn on_action(&mut self, a: InputAction, now: Instant, ctx: &mut Ctx) -> bool {
         if let Some(dir) = Dir::from_action(a) {
-            let step = self.rows.step(dir, &self.vp);
-            let Some(id) = step.or_else(|| self.graph.navigate(dir)) else { return false };
+            let id = match self.rows.step(dir, &self.vp) {
+                Step::To(id) => id,
+                Step::Stay => return true,
+                Step::Free => match self.graph.navigate(dir) {
+                    Some(id) => id,
+                    None => return false,
+                },
+            };
             match widgets::card_of(id) {
                 Some(rc) => {
                     self.key_focus = None;

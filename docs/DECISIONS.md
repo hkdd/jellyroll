@@ -709,6 +709,24 @@ at the credits segment (else 30 s before the end) with a 10 s countdown in
 playback time, then plays it without returning to the page; Back on the
 card plays to the end and stops. `--play FILE` keeps the minimal M3 OSD.
 
+**D49: M7 HTPC results and follow-ups.** All M7 walkthrough steps passed
+on the HTPC (movie: OSD, scrub, tracks, info, resume point on the server;
+episode: skip, next-up autoplay, watched state); the offline step was
+skipped. Fixes from the run:
+- Rows: Left and Right stay in the focused row, and Right on the last card
+  wraps to the row's first card (user preference). The page's spatial
+  graph used to pick the nearest card of the next row.
+- Series page: selecting a season loaded its episodes below the fold, so
+  nothing visibly changed. Focus now moves to the season's episodes when
+  they arrive (unless the user moved off the seasons meanwhile).
+- mpv logged `OpenGL error INVALID_OPERATION` on every playback. Our GPU
+  frame timer held a `GL_TIME_ELAPSED` query open across mpv's render, and
+  mpv times its own passes with the same query type (only one may be
+  active). The timer now starts after mpv's frame, so it measures our
+  drawing only; with mpv's `gpu-debug` on, no GL errors remain. Timestamp
+  queries would include mpv's work, but on llvmpipe they read near zero,
+  so the measured method stays as in the M6 benchmarks.
+
 ## Dependency approvals
 
 | Crate | Status |
