@@ -489,6 +489,14 @@ impl RowList {
         g.navigate(dir)
     }
 
+    /// Back to the first card, scrolled to the top (while focus is
+    /// elsewhere, e.g. new search results).
+    pub fn reset_focus(&mut self, vp: &Viewport, now: Instant) {
+        self.focus = (0, 0);
+        self.prev_focus = self.focus;
+        self.scroll_to_focus(vp, now, false);
+    }
+
     /// Focus moved to a card.
     pub fn take_focus(&mut self, rc: (usize, usize), vp: &Viewport, now: Instant) {
         self.prev_focus = if self.active { self.focus } else { (usize::MAX, 0) };

@@ -136,6 +136,8 @@ impl SignInForm {
                 (true, None)
             }
             InputAction::Backspace => (self.field().pop().is_some(), None),
+            // Typing mode turns Enter into Submit; on a user it picks them.
+            InputAction::Submit if self.focus >= USER_BASE => self.on_action(InputAction::Select),
             InputAction::Submit if self.editing == USER_FIELD => {
                 self.editing = PASS_FIELD;
                 self.focus = PASS_FIELD;
@@ -258,7 +260,7 @@ mod tests {
         let mut f = SignInForm::new("home", 48.0, 27.0);
         f.set_users(vec![PublicUser { name: "kids".into(), has_password: false }], 48.0, 27.0);
         f.focus = USER_BASE;
-        let (_, cmd) = f.on_action(InputAction::Select);
+        let (_, cmd) = f.on_action(InputAction::Submit);
         assert!(
             matches!(cmd, Some(Cmd::PasswordSignIn { ref username, .. }) if username == "kids")
         );

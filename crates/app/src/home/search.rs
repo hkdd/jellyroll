@@ -126,6 +126,12 @@ impl SearchView {
         let active = self.rows.active;
         self.rows.set_rows(rows, &self.vp, now);
         self.rows.active = active && !self.rows.is_empty();
+        // Rows arrive one kind at a time; until the user is in them, the
+        // first row is where Down goes (not wherever the first answer
+        // was).
+        if !self.rows.active {
+            self.rows.reset_focus(&self.vp, now);
+        }
         if self.rows.is_empty() && self.key_focus.is_none() {
             self.key_focus = Some(0);
         }
@@ -176,6 +182,10 @@ impl SearchView {
                     self.changed(now);
                 }
                 changed
+            }
+            // Typing mode turns Enter into Submit; on a result it opens it.
+            InputAction::Submit if self.key_focus.is_none() => {
+                self.on_action(InputAction::Select, now, ctx)
             }
             // Enter: to the results if there are any (typing on a
             // keyboard, the results are many presses below the keys).
@@ -322,12 +332,17 @@ mod tests {
         }
         v.update(t + DEBOUNCE, &mut ctx);
         let ids: Vec<u64> = v.reqs.iter().flatten().copied().collect();
-        for (i, id) in ids.iter().enumerate() {
+        // Answers arrive out of order: episodes (the last row) first.
+        for (i, id) in ids.iter().enumerate().rev() {
             let cards = (0..5).map(|n| card(&format!("{i}-{n}"))).collect();
             v.on_fetched(*id, &Fetched::Page { start: 0, total: 5, cards }, t);
         }
         assert_eq!(v.rows.rows.len(), 3);
-        v.on_action(InputAction::Submit, t, &mut ctx);
+        assert_eq!(v.rows.focus, (0, 0), "Down from the keys starts at the first row");
+        while v.key_focus.is_some() {
+            assert!(v.on_action(InputAction::Down, t, &mut ctx));
+        }
+        assert_eq!(v.rows.focus.0, 0, "the keyboard's Down lands on the first row");
         v.on_action(InputAction::Down, t, &mut ctx);
         v.on_action(InputAction::Down, t, &mut ctx);
         assert_eq!(v.rows.focus.0, 2);
@@ -337,5 +352,12 @@ mod tests {
         assert_eq!(v.rows.focus.0, 0);
         v.on_action(InputAction::Up, t, &mut ctx);
         assert!(v.key_focus.is_some(), "from the first row, up to the keyboard");
+        // Enter (Submit in typing mode) on a result opens it.
+        v.on_action(InputAction::Submit, t, &mut ctx);
+        v.on_action(InputAction::Down, t, &mut ctx);
+        let mut next = 0;
+        let mut ctx = Ctx::new(&mut next);
+        v.on_action(InputAction::Submit, t, &mut ctx);
+        assert!(matches!(ctx.open, Some(Open::Detail { ref id }) if id == "1-0"));
     }
 }

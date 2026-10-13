@@ -177,6 +177,16 @@ impl ServerEntry {
                 (true, None)
             }
             InputAction::Backspace => (self.text.pop().is_some(), None),
+            // Typing mode turns Enter into Submit; on a button it presses
+            // that button.
+            InputAction::Submit
+                if matches!(
+                    self.elements.get(self.focus).map(|e| e.0),
+                    Some(Element::Search | Element::Found(_))
+                ) =>
+            {
+                self.on_action(InputAction::Select)
+            }
             InputAction::Submit => (true, self.connect()),
             InputAction::Select => match self.elements.get(self.focus).map(|e| e.0) {
                 Some(Element::Char(c)) => {
@@ -380,7 +390,8 @@ mod tests {
         let mut e = ServerEntry::new("");
         let search = e.elements.iter().position(|x| x.0 == Element::Search).unwrap();
         e.set_focus(search);
-        assert!(matches!(press(&mut e, InputAction::Select), Some(Cmd::Search)));
+        // Enter on a keyboard (Submit in typing mode) presses the button.
+        assert!(matches!(press(&mut e, InputAction::Submit), Some(Cmd::Search)));
         assert!(press(&mut e, InputAction::Select).is_none(), "no double search");
         e.update(
             None,
@@ -389,7 +400,7 @@ mod tests {
         );
         assert_eq!(e.elements[e.focus].0, Element::Found(0), "focus jumps to the result");
         assert!(
-            matches!(press(&mut e, InputAction::Select), Some(Cmd::Connect(a)) if a == "http://10.0.0.5:8096")
+            matches!(press(&mut e, InputAction::Submit), Some(Cmd::Connect(a)) if a == "http://10.0.0.5:8096")
         );
     }
 }
