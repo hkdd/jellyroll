@@ -631,7 +631,6 @@ impl DetailView {
         let h = (base.h + (full_h - base.h) * t).min(bottom - base.y);
         let rect = Rect::new(base.x, base.y, base.w, h);
         r.fill_rrect(rect, 12.0, Color::rgba(14, 16, 22, (236.0 * t) as u8));
-        r.stroke_rrect(rect.inset(-3.0), 15.0, 3.0, Color::WHITE.with_alpha(t));
         r.push_clip(rect, 12.0);
         let mut y = top;
         for l in &self.overview_full {

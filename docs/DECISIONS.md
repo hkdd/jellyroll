@@ -824,7 +824,7 @@ button read as unrelated to the text. Of three options (focus it and open
 a side panel; focus it and Enter expands it in place; focus alone expands
 it), the last was chosen: the cut description is a focus-graph node
 above the buttons; on focus it grows (180 ms) to the whole text on a dark
-panel with the focus ring, drawn over the buttons and rows, and shrinks
+panel (no outline), drawn over the buttons and rows, and shrinks
 when focus leaves. Down goes back to where focus came from, not the
 spatially nearest button. Short descriptions are not focusable.
 
