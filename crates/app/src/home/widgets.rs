@@ -248,7 +248,12 @@ pub fn draw_card<R: Renderer>(
 /// The watched mark: a check in an accent circle, top right of a card.
 pub fn draw_watched<R: Renderer>(r: &mut R, card: Rect) {
     let d = 34.0;
-    let c = Rect::new(card.right() - d - 8.0, card.y + 8.0, d, d);
+    draw_check(r, Rect::new(card.right() - d - 8.0, card.y + 8.0, d, d));
+}
+
+/// The watched mark: a check in a filled circle filling `c` (square).
+pub fn draw_check<R: Renderer>(r: &mut R, c: Rect) {
+    let d = c.w;
     r.fill_rrect(c, d / 2.0, ACCENT);
     let (x, y) = (c.x, c.y);
     r.polyline(

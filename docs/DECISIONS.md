@@ -1088,6 +1088,11 @@ every vsync. While it shows, mpv isn't rendered. Its frames count as
 non-steady (like loading frames) for the frame budgets and the
 allocation check. More styles can be added behind the same setting.
 
+**D74: Watched mark on the item page.** Cards already showed a check for
+watched items; the item page's header now shows the same blue check with
+"Watched" after the year/rating line, so the page itself says it (it
+updates with Mark watched and live updates, D63).
+
 ## Dependency approvals
 
 | Crate | Status |

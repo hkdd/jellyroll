@@ -29,6 +29,7 @@ pub const ALL_OF_DECADE: &str = "All of the %ss";
 pub const GENRE_PREFIX: &str = "Genre: ";
 
 pub const PLAY: &str = "Play";
+pub const WATCHED: &str = "Watched";
 pub const RESUME_PREFIX: &str = "Resume ";
 pub const PLAY_FROM_START: &str = "From the start";
 pub const MARK_WATCHED: &str = "Mark watched";
@@ -203,6 +204,7 @@ pub const ALL: &[&str] = &[
     ALL_OF_DECADE,
     GENRE_PREFIX,
     PLAY,
+    WATCHED,
     RESUME_PREFIX,
     PLAY_FROM_START,
     MARK_WATCHED,

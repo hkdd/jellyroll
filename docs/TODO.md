@@ -35,7 +35,7 @@ Agreed 2026-10-14, in this order. Strike through when done.
    long without input while browsing or while a video is paused. Any key
    wakes it and does nothing else. First style: The Matrix's falling green
    characters, built so more styles can be added.
-6. **Watched mark on the item page.** A check mark in the item page's
+6. ~~**Watched mark on the item page.**~~ Built (D74). A check mark in the item page's
    header (next to the year and rating) for watched items; cards already
    have one.
 

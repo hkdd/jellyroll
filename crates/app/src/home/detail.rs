@@ -711,8 +711,14 @@ impl DetailView {
             r.text(&d.card.subtitle, &SUB, Point::new(sx, y), TEXT);
             y += 42.0;
         }
-        if !d.card.meta.is_empty() {
-            r.text(&d.card.meta, &META, Point::new(sx, y), TEXT_DIM);
+        if !d.card.meta.is_empty() || d.played {
+            let m = r.text(&d.card.meta, &META, Point::new(sx, y), TEXT_DIM);
+            // Watched: the cards' check mark, here too (D74).
+            if d.played {
+                let x = if d.card.meta.is_empty() { sx } else { sx + m.width + 18.0 };
+                widgets::draw_check(r, Rect::new(x, y - 1.0, 26.0, 26.0));
+                r.text(s::WATCHED, &META, Point::new(x + 34.0, y), TEXT_DIM);
+            }
             y += 40.0;
         }
         if !d.badges.is_empty() {
