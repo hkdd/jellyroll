@@ -28,7 +28,7 @@ Agreed 2026-10-14, in this order. Strike through when done.
    - Server transcode: follow Jellyfin's normal behaviour: tell the server
      what this device can decode and let it choose (in practice H.264).
    - Replaces D19's "never transcode" with "ask".
-4. **Year filter, finer.** Keep the decade list; picking a decade then
+4. ~~**Year filter, finer.**~~ Built (D72). Keep the decade list; picking a decade then
    offers the single years within it (1990s → 1994), with "All of the
    1990s" at the top.
 5. **Screensaver.** Settings: Off / 5 / 10 / 15 minutes. Starts after that

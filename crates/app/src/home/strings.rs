@@ -24,6 +24,8 @@ pub const YEAR_LABEL: &str = "Year: %ss";
 pub const YEAR_TITLE: &str = "Year";
 pub const ALL_YEARS: &str = "All years";
 pub const DECADE: &str = "%ss";
+pub const YEAR_ONE_LABEL: &str = "Year: %s";
+pub const ALL_OF_DECADE: &str = "All of the %ss";
 pub const GENRE_PREFIX: &str = "Genre: ";
 
 pub const PLAY: &str = "Play";
@@ -193,6 +195,8 @@ pub const ALL: &[&str] = &[
     YEAR_TITLE,
     ALL_YEARS,
     DECADE,
+    YEAR_ONE_LABEL,
+    ALL_OF_DECADE,
     GENRE_PREFIX,
     PLAY,
     RESUME_PREFIX,

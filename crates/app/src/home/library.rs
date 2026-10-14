@@ -63,6 +63,31 @@ enum Pick {
     Genre(Vec<Option<String>>),
     /// The decade of each row; None for "All years".
     Year(Vec<Option<i32>>),
+    /// The years of `decade` (each row; None for "All of the 1990s").
+    YearIn { decade: i32, rows: Vec<Option<i32>> },
+}
+
+/// The year filter (D66, D72): a decade, or one year in it.
+#[derive(Copy, Clone, Debug, PartialEq)]
+enum YearFilter {
+    Decade(i32),
+    Year(i32),
+}
+
+impl YearFilter {
+    fn decade(self) -> i32 {
+        match self {
+            YearFilter::Decade(d) => d,
+            YearFilter::Year(y) => y / 10 * 10,
+        }
+    }
+
+    fn years(self) -> Vec<i32> {
+        match self {
+            YearFilter::Decade(d) => (d..d + 10).collect(),
+            YearFilter::Year(y) => vec![y],
+        }
+    }
 }
 
 pub struct LibraryView {
@@ -77,8 +102,10 @@ pub struct LibraryView {
     genres: Vec<String>,
     /// The sort's order reversed.
     reverse: bool,
-    /// Items from this decade only (e.g. 1990 for the 1990s).
-    decade: Option<i32>,
+    /// Items from this decade or year only.
+    year: Option<YearFilter>,
+    /// The years the library has (newest first), from the last `/Years`.
+    years_present: Vec<i32>,
     /// Requested pages (by page number) of the current query.
     pages: HashMap<u32, u64>,
     total: Option<u32>,
@@ -141,7 +168,8 @@ impl LibraryView {
             favorites: false,
             genres: Vec::new(),
             reverse: false,
-            decade: None,
+            year: None,
+            years_present: Vec::new(),
             pages: HashMap::new(),
             total: None,
             items: Vec::new(),
@@ -176,7 +204,7 @@ impl LibraryView {
             unplayed: self.unwatched,
             favorites: self.favorites,
             genres: self.genres.clone(),
-            years: self.decade.map(|d| (d..d + 10).collect()).unwrap_or_default(),
+            years: self.year.map(YearFilter::years).unwrap_or_default(),
             ..Default::default()
         }
     }
@@ -316,8 +344,8 @@ impl LibraryView {
                 return true;
             }
             let Some((pick, b)) = self.picker.take() else { return true };
-            let (mut sort, mut reverse, mut genres, mut decade) =
-                (self.sort, self.reverse, self.genres.clone(), self.decade);
+            let (mut sort, mut reverse, mut genres, mut year) =
+                (self.sort, self.reverse, self.genres.clone(), self.year);
             match (pick, outcome) {
                 (Pick::Sort, blade::Outcome::Picked(i)) => {
                     sort = i.saturating_sub(1).min(SORTS.len() - 1);
@@ -335,18 +363,33 @@ impl LibraryView {
                         .collect();
                     genres.sort();
                 }
-                (Pick::Year(rows), blade::Outcome::Picked(i)) => {
-                    decade = rows.get(i).copied().flatten()
-                }
+                // A decade: its years next (nothing changes yet).
+                (Pick::Year(rows), blade::Outcome::Picked(i)) => match rows.get(i).copied() {
+                    Some(Some(d)) => {
+                        self.open_years(d, now);
+                        return true;
+                    }
+                    _ => year = None,
+                },
                 (Pick::Year(_), _) => {}
+                (Pick::YearIn { decade, rows }, blade::Outcome::Picked(i)) => {
+                    year = Some(match rows.get(i).copied().flatten() {
+                        Some(y) => YearFilter::Year(y),
+                        None => YearFilter::Decade(decade),
+                    });
+                }
+                // Back from the years: the decades again.
+                (Pick::YearIn { decade, .. }, _) => {
+                    self.open_decades(Some(decade), now);
+                    return true;
+                }
             }
-            if (sort, reverse, &genres, decade)
-                != (self.sort, self.reverse, &self.genres, self.decade)
+            if (sort, reverse, &genres, year) != (self.sort, self.reverse, &self.genres, self.year)
             {
                 self.sort = sort;
                 self.reverse = reverse;
                 self.genres = genres;
-                self.decade = decade;
+                self.year = year;
                 self.update_labels();
                 self.reset(ctx, now);
             }
@@ -473,25 +516,12 @@ impl LibraryView {
         if self.years_req == Some(id) {
             self.years_req = None;
             if let Fetched::Names(names) = result {
-                // The decades that have something, newest first.
-                let mut decades: Vec<i32> = names
-                    .iter()
-                    .filter_map(|n| n.trim().parse::<i32>().ok())
-                    .map(|y| y / 10 * 10)
-                    .collect();
-                decades.sort_unstable_by(|a, b| b.cmp(a));
-                decades.dedup();
-                let mut rows = vec![None];
-                rows.extend(decades.into_iter().map(Some));
-                let labels = rows
-                    .iter()
-                    .map(|d| match d {
-                        None => s::ALL_YEARS.to_string(),
-                        Some(d) => s::fill(s::DECADE, &[&d.to_string()]),
-                    })
-                    .collect();
-                let cur = rows.iter().position(|d| *d == self.decade);
-                self.picker = Some((Pick::Year(rows), Blade::new(s::YEAR_TITLE, labels, cur, now)));
+                let mut years: Vec<i32> =
+                    names.iter().filter_map(|n| n.trim().parse::<i32>().ok()).collect();
+                years.sort_unstable_by(|a, b| b.cmp(a));
+                years.dedup();
+                self.years_present = years;
+                self.open_decades(self.year.map(YearFilter::decade), now);
                 return true;
             }
             return false;
@@ -627,13 +657,9 @@ impl LibraryView {
                     focused,
                     !self.genres.is_empty(),
                 ),
-                BarItem::Year => widgets::draw_button(
-                    r,
-                    rect,
-                    self.bar_label(*b),
-                    focused,
-                    self.decade.is_some(),
-                ),
+                BarItem::Year => {
+                    widgets::draw_button(r, rect, self.bar_label(*b), focused, self.year.is_some())
+                }
                 BarItem::Sort => widgets::draw_button(r, rect, self.bar_label(*b), focused, false),
             }
         }
@@ -737,11 +763,59 @@ impl LibraryView {
             [g] => format!("{}{g}", s::GENRE_PREFIX),
             [g, rest @ ..] => s::fill(s::GENRES_MORE, &[g, &rest.len().to_string()]),
         });
-        self.year_label = widgets::list_label(&match self.decade {
+        self.year_label = widgets::list_label(&match self.year {
             None => s::YEAR_ALL.to_string(),
-            Some(d) => s::fill(s::YEAR_LABEL, &[&d.to_string()]),
+            Some(YearFilter::Decade(d)) => s::fill(s::YEAR_LABEL, &[&d.to_string()]),
+            Some(YearFilter::Year(y)) => s::fill(s::YEAR_ONE_LABEL, &[&y.to_string()]),
         });
         self.bar_rects.clear();
+    }
+
+    /// "All years" and each decade the library has, newest first; opened
+    /// on `focus` (a decade).
+    fn open_decades(&mut self, focus: Option<i32>, now: Instant) {
+        let mut decades: Vec<i32> = self.years_present.iter().map(|y| y / 10 * 10).collect();
+        decades.dedup();
+        let mut rows = vec![None];
+        rows.extend(decades.into_iter().map(Some));
+        let labels: Vec<String> = rows
+            .iter()
+            .map(|d| match d {
+                None => s::ALL_YEARS.to_string(),
+                Some(d) => s::fill(s::DECADE, &[&d.to_string()]),
+            })
+            .collect();
+        let cur = rows.iter().position(|d| *d == self.year.map(YearFilter::decade));
+        let focus = rows.iter().position(|d| *d == focus).or(cur).unwrap_or(0);
+        let b = Blade::with_rows(
+            s::YEAR_TITLE,
+            labels.into_iter().map(Row::choice).collect(),
+            cur,
+            focus,
+            now,
+        );
+        self.picker = Some((Pick::Year(rows), b));
+    }
+
+    /// "All of the 1990s" and each year of the decade the library has.
+    fn open_years(&mut self, decade: i32, now: Instant) {
+        let mut rows = vec![None];
+        rows.extend(self.years_present.iter().copied().filter(|y| y / 10 * 10 == decade).map(Some));
+        let labels = rows
+            .iter()
+            .map(|y| match y {
+                None => s::fill(s::ALL_OF_DECADE, &[&decade.to_string()]),
+                Some(y) => y.to_string(),
+            })
+            .collect();
+        let cur = match self.year {
+            Some(YearFilter::Decade(d)) if d == decade => Some(0),
+            Some(YearFilter::Year(y)) => rows.iter().position(|r| *r == Some(y)),
+            _ => None,
+        };
+        let title = s::fill(s::DECADE, &[&decade.to_string()]);
+        let b = Blade::new(&title, labels, cur, now);
+        self.picker = Some((Pick::YearIn { decade, rows }, b));
     }
 
     fn bar_label(&self, b: BarItem) -> &str {
@@ -1054,14 +1128,37 @@ mod tests {
         let names = ["2019", "2011", "1994", "1990", "bogus"].map(String::from).to_vec();
         v.on_fetched(id, &Fetched::Names(names), t, &mut ctx);
         assert!(v.picker.is_some());
-        // All years, 2010s, 1990s: pick the 1990s.
+        // All years, 2010s, 1990s: the 1990s open their years.
         v.on_action(InputAction::Down, t, &mut ctx);
         v.on_action(InputAction::Down, t, &mut ctx);
+        v.on_action(InputAction::Select, t, &mut ctx);
+        assert!(matches!(v.picker, Some((Pick::YearIn { decade: 1990, .. }, _))));
+        assert_eq!(v.year, None, "nothing changes until a pick");
+        // Back: the decades again, on the 1990s.
+        v.on_action(InputAction::Back, t, &mut ctx);
+        assert!(matches!(v.picker, Some((Pick::Year(_), _))));
+        v.on_action(InputAction::Select, t, &mut ctx);
+        // "All of the 1990s".
         let mut ctx = Ctx::new(&mut next);
         v.on_action(InputAction::Select, t, &mut ctx);
-        assert_eq!(v.decade, Some(1990));
+        assert_eq!(v.year, Some(YearFilter::Decade(1990)));
         assert_eq!(v.year_label, "Year: 1990s  ›");
         let (_, q) = fetches(&ctx).remove(0);
         assert_eq!(q.years, (1990..2000).collect::<Vec<_>>());
+        // Again, one year: All of the 1990s, 1994, 1990.
+        v.focus = Focus::Bar(year_button);
+        let mut ctx = Ctx::new(&mut next);
+        v.on_action(InputAction::Select, t, &mut ctx);
+        let Some(crate::net::Cmd::Fetch { id, .. }) = ctx.cmds.pop() else { panic!() };
+        let names = ["2019", "2011", "1994", "1990"].map(String::from).to_vec();
+        v.on_fetched(id, &Fetched::Names(names), t, &mut ctx);
+        v.on_action(InputAction::Select, t, &mut ctx);
+        v.on_action(InputAction::Down, t, &mut ctx);
+        let mut ctx = Ctx::new(&mut next);
+        v.on_action(InputAction::Select, t, &mut ctx);
+        assert_eq!(v.year, Some(YearFilter::Year(1994)));
+        assert_eq!(v.year_label, "Year: 1994  ›");
+        let (_, q) = fetches(&ctx).remove(0);
+        assert_eq!(q.years, [1994]);
     }
 }

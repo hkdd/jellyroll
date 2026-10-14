@@ -1069,6 +1069,12 @@ jellyroll checks the answer:
   switched. Tested end to end against the mock (`--no-direct-play`);
   the "GPU can't decode" case is unit-tested (no VA-API in the sandbox).
 
+**D72: Year filter, decade then year.** Picking a decade in the Year list
+(D66) now opens a second list: "All of the 1990s", then each year of that
+decade the library has, newest first (from the same `/Years` answer). Back
+returns to the decades, on that decade. The button reads "Year: 1990s ›"
+or "Year: 1994 ›"; a single year filters with `years=1994`.
+
 ## Dependency approvals
 
 | Crate | Status |
