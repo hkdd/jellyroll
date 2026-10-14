@@ -2,10 +2,13 @@
 //! `PlaybackInfo`, and the session reports (`/Sessions/Playing`, progress,
 //! stopped). Hand-written: the profile is policy, not API surface.
 //!
-//! Policy (D19): direct play only. mpv plays nearly any container, codec
-//! and subtitle format, so the profile allows everything for direct play
-//! and the request disables transcoding; what the GPU can't decode is
-//! reported by the app, never silently transcoded or software-decoded.
+//! Policy (D19, D71): direct play first. mpv plays nearly any container,
+//! codec and subtitle format, so the profile allows everything for direct
+//! play and the first request disables transcoding. When that can't work
+//! (the server can't send the file as it is, or this GPU can't decode it)
+//! the app asks; a server transcode is a second request with direct play
+//! off and an H.264 transcoding profile, where the server picks the rest
+//! as it does for Jellyfin's own apps.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -26,10 +29,30 @@ const EMBEDDED_SUBS: [&str; 11] = [
 /// Upper bound for direct streaming (bits/s); the LAN is the limit.
 const MAX_BITRATE: u64 = 400_000_000;
 
-pub fn device_profile() -> Value {
+/// The device profile; `transcode`: for a server transcode (text
+/// subtitles as files, the rest burned in; H.264 over HLS).
+pub fn device_profile(transcode: bool) -> Value {
     let mut subs: Vec<Value> =
         EXTERNAL_SUBS.iter().map(|f| json!({ "Format": f, "Method": "External" })).collect();
-    subs.extend(EMBEDDED_SUBS.iter().map(|f| json!({ "Format": f, "Method": "Embed" })));
+    if transcode {
+        subs.extend(
+            EMBEDDED_SUBS
+                .iter()
+                .filter(|f| !EXTERNAL_SUBS.contains(f))
+                .map(|f| json!({ "Format": f, "Method": "Encode" })),
+        );
+    } else {
+        subs.extend(EMBEDDED_SUBS.iter().map(|f| json!({ "Format": f, "Method": "Embed" })));
+    }
+    let transcoding = if transcode {
+        json!([{
+            "Type": "Video", "Container": "ts", "Protocol": "hls", "Context": "Streaming",
+            "VideoCodec": "h264", "AudioCodec": "aac,ac3,eac3,mp3",
+            "MaxAudioChannels": "6", "BreakOnNonKeyFrames": true,
+        }])
+    } else {
+        json!([])
+    };
     json!({
         "Name": "jellyroll",
         "MaxStreamingBitrate": MAX_BITRATE,
@@ -38,7 +61,7 @@ pub fn device_profile() -> Value {
             { "Type": "Video", "Container": CONTAINERS },
             { "Type": "Audio" },
         ],
-        "TranscodingProfiles": [],
+        "TranscodingProfiles": transcoding,
         "ContainerProfiles": [],
         "CodecProfiles": [],
         "SubtitleProfiles": subs,
@@ -52,22 +75,72 @@ fn item_path(prefix: &str, item_id: &str, suffix: &str) -> String {
     p
 }
 
+/// A server transcode's starting point and tracks.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TranscodeRequest {
+    pub start_ticks: i64,
+    pub audio_stream_index: Option<i32>,
+    /// -1: no subtitles.
+    pub subtitle_stream_index: Option<i32>,
+}
+
 /// `POST /Items/{id}/PlaybackInfo`: media sources with streams, default
-/// tracks from the user's preferences, and a play session id.
-pub fn playback_info(user_id: &str, item_id: &str) -> Request<PlaybackInfoResponse> {
+/// tracks from the user's preferences, and a play session id. With
+/// `transcode`, direct play is off and the source carries a
+/// `TranscodingUrl`.
+pub fn playback_info(
+    user_id: &str,
+    item_id: &str,
+    transcode: Option<&TranscodeRequest>,
+) -> Request<PlaybackInfoResponse> {
     let mut path = item_path("/Items/", item_id, "/PlaybackInfo?userId=");
     encode_component(&mut path, user_id);
-    Request::new(Method::Post, path).json(json!({
+    let mut body = json!({
         "UserId": user_id,
-        "DeviceProfile": device_profile(),
+        "DeviceProfile": device_profile(transcode.is_some()),
         "MaxStreamingBitrate": MAX_BITRATE,
-        "EnableDirectPlay": true,
-        "EnableDirectStream": true,
-        "EnableTranscoding": false,
+        "EnableDirectPlay": transcode.is_none(),
+        "EnableDirectStream": transcode.is_none(),
+        "EnableTranscoding": transcode.is_some(),
         "AllowVideoStreamCopy": true,
         "AllowAudioStreamCopy": true,
         "AutoOpenLiveStream": true,
-    }))
+    });
+    if let Some(t) = transcode {
+        body["StartTimeTicks"] = json!(t.start_ticks);
+        if let Some(a) = t.audio_stream_index {
+            body["AudioStreamIndex"] = json!(a);
+        }
+        if let Some(s) = t.subtitle_stream_index {
+            body["SubtitleStreamIndex"] = json!(s);
+        }
+    }
+    Request::new(Method::Post, path).json(body)
+}
+
+/// `DELETE /Videos/ActiveEncodings`: stops this device's server transcode
+/// for a play session (Jellyfin's apps call it when playback stops).
+pub fn stop_encoding(device_id: &str, play_session_id: &str) -> Request<()> {
+    let mut path = String::from("/Videos/ActiveEncodings?deviceId=");
+    encode_component(&mut path, device_id);
+    path.push_str("&playSessionId=");
+    encode_component(&mut path, play_session_id);
+    Request::new(Method::Delete, path)
+}
+
+/// A `TranscodingUrl` without the access token the server puts in it
+/// (`ApiKey=`/`api_key=`): the player sends the token in a header, and a
+/// URL ends up in logs.
+pub fn strip_token(url: &str) -> String {
+    let Some((path, query)) = url.split_once('?') else { return url.to_string() };
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|kv| {
+            let k = kv.split('=').next().unwrap_or("");
+            !k.eq_ignore_ascii_case("api_key") && !k.eq_ignore_ascii_case("apikey")
+        })
+        .collect();
+    if kept.is_empty() { path.to_string() } else { format!("{path}?{}", kept.join("&")) }
 }
 
 /// `GET /MediaSegments/{id}`: intro, outro (credits), recap, preview and
@@ -90,6 +163,7 @@ pub fn trickplay_tile_path(item_id: &str, width: u32, index: u32, media_source_i
 pub enum PlayMethod {
     DirectPlay,
     DirectStream,
+    Transcode,
 }
 
 /// One playback report. Kept as plain data so unsent reports can be queued
@@ -156,7 +230,7 @@ mod tests {
 
     #[test]
     fn playback_info_disables_transcoding() {
-        let r = playback_info("u 1", "i/2");
+        let r = playback_info("u 1", "i/2", None);
         assert_eq!(r.method, Method::Post);
         assert_eq!(r.path, "/Items/i%2F2/PlaybackInfo?userId=u%201");
         let b: Value = serde_json::from_str(r.body.as_deref().unwrap()).unwrap();
@@ -166,6 +240,42 @@ mod tests {
         let subs = b["DeviceProfile"]["SubtitleProfiles"].as_array().unwrap();
         assert!(subs.iter().any(|s| s["Format"] == "srt" && s["Method"] == "External"));
         assert!(subs.iter().any(|s| s["Format"] == "pgssub" && s["Method"] == "Embed"));
+    }
+
+    #[test]
+    fn transcode_request_and_cleanup() {
+        let t = TranscodeRequest {
+            start_ticks: 50,
+            audio_stream_index: Some(2),
+            subtitle_stream_index: Some(-1),
+        };
+        let r = playback_info("u", "i", Some(&t));
+        let b: Value = serde_json::from_str(r.body.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            (b["EnableDirectPlay"].clone(), b["EnableTranscoding"].clone()),
+            (json!(false), json!(true))
+        );
+        assert_eq!(b["StartTimeTicks"], 50);
+        assert_eq!(b["AudioStreamIndex"], 2);
+        assert_eq!(b["SubtitleStreamIndex"], -1);
+        let tp = &b["DeviceProfile"]["TranscodingProfiles"][0];
+        assert_eq!(
+            (tp["VideoCodec"].as_str(), tp["Protocol"].as_str()),
+            (Some("h264"), Some("hls"))
+        );
+        let subs = b["DeviceProfile"]["SubtitleProfiles"].as_array().unwrap();
+        assert!(subs.iter().any(|s| s["Format"] == "pgssub" && s["Method"] == "Encode"));
+        let d = stop_encoding("dev 1", "ps");
+        assert_eq!(
+            (d.method, d.path.as_str()),
+            (Method::Delete, "/Videos/ActiveEncodings?deviceId=dev%201&playSessionId=ps")
+        );
+        assert_eq!(
+            strip_token("/videos/i/master.m3u8?DeviceId=d&ApiKey=secret&VideoCodec=h264"),
+            "/videos/i/master.m3u8?DeviceId=d&VideoCodec=h264"
+        );
+        assert_eq!(strip_token("/a?api_key=x"), "/a");
+        assert_eq!(strip_token("/a"), "/a");
     }
 
     #[test]

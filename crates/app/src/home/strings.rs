@@ -116,6 +116,13 @@ pub const EXIT_APP: &str = "Exit to console";
 pub const REBOOT: &str = "Restart";
 pub const POWER_OFF: &str = "Shut down";
 pub const CANCEL: &str = "Cancel";
+pub const CANT_PLAY_DIRECTLY: &str = "This video can't play directly";
+pub const NO_HW_DECODE_VIDEO: &str = "This computer's graphics can't decode %s video.";
+pub const SOFTWARE_4K_NOTE: &str =
+    "Software decoding 4K video will probably stutter on this computer.";
+pub const NO_DIRECT_PLAY: &str = "The server can't send this file as it is.";
+pub const PLAY_SOFTWARE: &str = "Software decode";
+pub const PLAY_TRANSCODE: &str = "Server transcode";
 pub const RESTARTING: &str = "Restarting…";
 pub const SHUTTING_DOWN: &str = "Shutting down…";
 pub const POWER_NOT_ALLOWED: &str =
@@ -268,6 +275,12 @@ pub const ALL: &[&str] = &[
     REBOOT,
     POWER_OFF,
     CANCEL,
+    CANT_PLAY_DIRECTLY,
+    NO_HW_DECODE_VIDEO,
+    SOFTWARE_4K_NOTE,
+    NO_DIRECT_PLAY,
+    PLAY_SOFTWARE,
+    PLAY_TRANSCODE,
     RESTARTING,
     SHUTTING_DOWN,
     POWER_NOT_ALLOWED,

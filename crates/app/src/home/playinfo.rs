@@ -101,6 +101,59 @@ pub struct PlayInfo {
     pub fps: Option<f64>,
     /// The server reports the video as interlaced (deinterlacing, D67).
     pub interlaced: bool,
+    /// The video stream: codec (None when not one VA-API knows), size.
+    pub video: Option<VideoFormat>,
+    /// False when the server can't send the file as it is and this is not
+    /// a transcode (D71: the app asks before anything else).
+    pub stream_ok: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VideoFormat {
+    pub codec: Option<jellyroll_video::va::Codec>,
+    /// The codec as the server names it ("hevc"), for messages.
+    pub codec_name: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// What playing an item needs from the user first (D71).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Check {
+    /// Plays directly with hardware decoding (or nothing is known that
+    /// says otherwise).
+    Play,
+    /// The server can send it, but this GPU can't decode it: software
+    /// decode, server transcode, or cancel.
+    NoHardwareDecode { codec: String, uhd: bool },
+    /// The server can't send it as it is: server transcode or cancel.
+    NoDirectPlay,
+}
+
+impl PlayInfo {
+    pub fn is_transcode(&self) -> bool {
+        self.play_method == PlayMethod::Transcode
+    }
+
+    /// Whether to ask before playing. `caps`: what the GPU decodes; None
+    /// (not probed yet, or no VA-API) never asks about decoding.
+    pub fn check(&self, caps: Option<&jellyroll_video::va::DecodeCaps>) -> Check {
+        if self.is_transcode() {
+            return Check::Play;
+        }
+        if !self.stream_ok {
+            return Check::NoDirectPlay;
+        }
+        match (&self.video, caps) {
+            (Some(v), Some(caps)) if v.codec.is_some_and(|c| !caps.supports(c)) => {
+                Check::NoHardwareDecode {
+                    codec: v.codec.map(|c| c.name().to_string()).unwrap_or(v.codec_name.clone()),
+                    uhd: v.width >= 3200 || v.height >= 2000,
+                }
+            }
+            _ => Check::Play,
+        }
+    }
 }
 
 impl PlayInfo {
@@ -209,18 +262,43 @@ pub fn build(
     let item_id = item.id.clone().ok_or("the server returned an item without an id")?;
     let sources = info.media_sources.as_deref().unwrap_or_default();
     let source: &MediaSourceInfo = sources.first().ok_or("the server offered no media to play")?;
-    let play_method = match (source.supports_direct_play, source.supports_direct_stream) {
-        (Some(true), _) => PlayMethod::DirectPlay,
-        (_, Some(true)) => PlayMethod::DirectStream,
-        // D19: no transcoding.
-        _ => {
-            return Err("The server can't send this file as it is, and transcoding is off \
-                        (direct play only)."
-                .into());
-        }
-    };
     let source_id = source.id.clone().unwrap_or_else(|| item_id.clone());
+    let transcoding = source.transcoding_url.as_deref().filter(|u| !u.is_empty());
+    // Direct first; a transcode only when this was a transcode request
+    // (D71); otherwise the app asks.
+    let (play_method, stream_path, stream_ok) =
+        match (source.supports_direct_play, source.supports_direct_stream, transcoding) {
+            (Some(true), _, _) => (PlayMethod::DirectPlay, stream_path(&item_id, &source_id), true),
+            (_, Some(true), _) => {
+                (PlayMethod::DirectStream, stream_path(&item_id, &source_id), true)
+            }
+            (_, _, Some(url)) => {
+                (PlayMethod::Transcode, jellyfin_api::playback::strip_token(url), true)
+            }
+            _ => (PlayMethod::DirectPlay, String::new(), false),
+        };
     let streams = source.media_streams.as_deref().unwrap_or_default();
+    let video = streams.iter().find(|s| s.r#type == Some(MediaStreamType::Video)).map(|v| {
+        let codec_name = v.codec.clone().unwrap_or_default();
+        VideoFormat {
+            codec: model::video_codec(
+                &codec_name,
+                v.bit_depth.unwrap_or(8),
+                v.profile.as_deref().unwrap_or(""),
+            ),
+            codec_name,
+            width: v.width.unwrap_or(0).max(0) as u32,
+            height: v.height.unwrap_or(0).max(0) as u32,
+        }
+    });
+    // A transcode carries one audio track (mpv's default) and text
+    // subtitles as files; others are burned in by the server.
+    let transcode = play_method == PlayMethod::Transcode;
+    let audio = if transcode { Vec::new() } else { tracks(streams, MediaStreamType::Audio) };
+    let mut subtitles = tracks(streams, MediaStreamType::Subtitle);
+    if transcode {
+        subtitles.retain(|t| t.external.is_some());
+    }
     let card = model::card(item, Shape::Landscape);
     let (title, subtitle) =
         card.map(|c| (c.title, c.subtitle)).unwrap_or_else(|| (String::new(), String::new()));
@@ -233,14 +311,14 @@ pub fn build(
         title,
         subtitle,
         is_episode: item.r#type == Some(BaseItemKind::Episode),
-        stream_path: stream_path(&item_id, &source_id),
+        stream_path,
         play_method,
         media_source_id: source_id.clone(),
         play_session_id: info.play_session_id.clone().unwrap_or_default(),
         duration,
         start: start_ticks.max(0) as f64 / TICKS_PER_SEC,
-        audio: tracks(streams, MediaStreamType::Audio),
-        subtitles: tracks(streams, MediaStreamType::Subtitle),
+        audio,
+        subtitles,
         default_audio: source.default_audio_stream_index.filter(|i| *i >= 0),
         default_subtitle: source.default_subtitle_stream_index.filter(|i| *i >= 0),
         chapters: item
@@ -262,6 +340,8 @@ pub fn build(
         interlaced: streams
             .iter()
             .any(|s| s.r#type == Some(MediaStreamType::Video) && s.is_interlaced == Some(true)),
+        video,
+        stream_ok,
     })
 }
 
@@ -339,10 +419,12 @@ mod tests {
     }
 
     #[test]
-    fn no_direct_play_is_an_error() {
+    fn no_direct_play_leaves_the_choice_to_the_user() {
         let mut info = source(vec![]);
         info.media_sources.as_mut().unwrap()[0].supports_direct_play = Some(false);
-        assert!(build(&item(), &info, &[], None, 0).unwrap_err().contains("transcoding is off"));
+        let p = build(&item(), &info, &[], None, 0).unwrap();
+        assert!(!p.stream_ok && p.stream_path.is_empty());
+        assert_eq!(p.check(None), Check::NoDirectPlay);
     }
 
     #[test]
@@ -421,6 +503,8 @@ mod tests {
             next: None,
             fps: None,
             interlaced: false,
+            video: None,
+            stream_ok: true,
         };
         i.choose(TrackChoice::default());
         assert_eq!((i.default_audio, i.default_subtitle), (Some(1), Some(3)));
@@ -428,5 +512,48 @@ mod tests {
         assert_eq!((i.default_audio, i.default_subtitle), (Some(1), None), "unknown audio kept");
         i.choose(TrackChoice { audio: Some(2), subtitle: Some(3) });
         assert_eq!((i.default_audio, i.default_subtitle), (Some(2), Some(3)));
+    }
+
+    #[test]
+    fn asks_only_when_it_cannot_play_directly() {
+        use jellyroll_video::va::{Codec, DecodeCaps};
+        let item = BaseItemDto { id: Some("item".into()), ..Default::default() };
+        let hevc10 = MediaStream {
+            r#type: Some(MediaStreamType::Video),
+            codec: Some("hevc".into()),
+            bit_depth: Some(10),
+            width: Some(3840),
+            height: Some(2160),
+            index: Some(0),
+            ..Default::default()
+        };
+        let info = build(&item, &source(vec![hevc10.clone()]), &[], None, 0).unwrap();
+        assert_eq!(info.check(None), Check::Play, "unknown capabilities: no question");
+        let caps_of = |list: &[Codec]| DecodeCaps {
+            va_profiles: list.iter().flat_map(|c| c.va_profiles().iter().copied()).collect(),
+            ..Default::default()
+        };
+        let caps = caps_of(&[Codec::H264, Codec::Hevc8]);
+        assert_eq!(
+            info.check(Some(&caps)),
+            Check::NoHardwareDecode { codec: "HEVC 10-bit".into(), uhd: true }
+        );
+        let all = caps_of(&[Codec::H264, Codec::Hevc8, Codec::Hevc10]);
+        assert_eq!(info.check(Some(&all)), Check::Play);
+
+        let mut no_direct = source(vec![hevc10]);
+        let src = &mut no_direct.media_sources.as_mut().unwrap()[0];
+        src.supports_direct_play = Some(false);
+        let info = build(&item, &no_direct, &[], None, 0).unwrap();
+        assert_eq!(info.check(Some(&all)), Check::NoDirectPlay);
+        assert!(info.stream_path.is_empty());
+
+        // The transcode answer plays its URL, without the token.
+        let src = &mut no_direct.media_sources.as_mut().unwrap()[0];
+        src.transcoding_url = Some("/videos/item/master.m3u8?ApiKey=t&VideoCodec=h264".into());
+        let info = build(&item, &no_direct, &[], None, 0).unwrap();
+        assert!(info.is_transcode());
+        assert_eq!(info.stream_path, "/videos/item/master.m3u8?VideoCodec=h264");
+        assert_eq!(info.check(Some(&caps)), Check::Play);
     }
 }

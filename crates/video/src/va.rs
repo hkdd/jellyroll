@@ -79,7 +79,7 @@ impl Codec {
     }
 
     /// VA-API profiles (va.h `VAProfile` values) that provide this codec.
-    fn va_profiles(self) -> &'static [c_int] {
+    pub fn va_profiles(self) -> &'static [c_int] {
         match self {
             Codec::Mpeg2 => &[0, 1],
             Codec::Vc1 => &[8, 9, 10],

@@ -319,7 +319,11 @@ fn track_options(
     v
 }
 
-fn video_codec(codec: &str, bit_depth: i32, profile: &str) -> Option<jellyroll_video::va::Codec> {
+pub(crate) fn video_codec(
+    codec: &str,
+    bit_depth: i32,
+    profile: &str,
+) -> Option<jellyroll_video::va::Codec> {
     use jellyroll_video::va::Codec as C;
     let ten = bit_depth >= 10 || profile.contains("10");
     Some(match codec.to_ascii_lowercase().as_str() {

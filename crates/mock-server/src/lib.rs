@@ -20,6 +20,7 @@
 //! as `{"MessageType":"Playstate","Data":{"Command":"Pause"}}`) to every
 //! open socket: remote control from the command line, and for tests.
 //! `POST /Sessions/Capabilities/Full` is recorded (`GET /Mock/Capabilities`).
+//! `GET /Mock/Requests` lists every request seen ("METHOD /path").
 
 #![forbid(unsafe_code)]
 
@@ -67,6 +68,9 @@ pub struct MockConfig {
     pub media: Option<std::path::PathBuf>,
     /// Its duration in seconds (items report this runtime).
     pub media_secs: u32,
+    /// False: PlaybackInfo says files can't be sent as they are, and only
+    /// a transcode request gets a stream (D71 testing).
+    pub direct_play: bool,
 }
 
 impl Default for MockConfig {
@@ -80,6 +84,7 @@ impl Default for MockConfig {
             quick_connect_enabled: true,
             media: None,
             media_secs: 60,
+            direct_play: true,
         }
     }
 }
@@ -743,6 +748,9 @@ impl Server {
                 }
                 Response::status(204)
             }
+            ("GET", "/Mock/Requests") => Response::json(Value::Array(
+                self.log.lock().map(|l| l.iter().map(|x| json!(x)).collect()).unwrap_or_default(),
+            )),
             ("GET", "/Mock/Capabilities") => {
                 Response::json(self.capabilities.lock().map(|c| c.clone()).unwrap_or_default())
             }
@@ -756,13 +764,33 @@ impl Server {
             },
             ("POST", "/Sessions/Logout") => Response::status(204),
             ("POST", p) if p.starts_with("/Sessions/Playing") => self.report(p, body),
+            ("DELETE", "/Videos/ActiveEncodings") => Response::status(204),
             ("GET", "/Mock/Reports") => Response::json(Value::Array(
                 self.reports.lock().map(|r| r.clone()).unwrap_or_default(),
             )),
             ("POST", p) if p.starts_with("/Items/") && p.ends_with("/PlaybackInfo") => {
                 let id = p.trim_start_matches("/Items/").trim_end_matches("/PlaybackInfo");
+                let req = serde_json::from_slice::<Value>(body).unwrap_or_default();
                 match lib.find(id) {
-                    Some(i) => Response::json(playback_info(&i.json)),
+                    Some(i) => {
+                        let mut info = playback_info(&i.json);
+                        let src = &mut info["MediaSources"][0];
+                        if req["EnableTranscoding"] == true && req["EnableDirectPlay"] == false {
+                            // A "transcode": the same file, as the server
+                            // would give its URL (token included).
+                            src["SupportsDirectPlay"] = json!(false);
+                            src["SupportsDirectStream"] = json!(false);
+                            src["SupportsTranscoding"] = json!(true);
+                            src["TranscodingUrl"] = json!(format!(
+                                "/Videos/{id}/stream?static=true&mediaSourceId={id}&ApiKey={TOKEN}"
+                            ));
+                        } else if !self.cfg.direct_play {
+                            src["SupportsDirectPlay"] = json!(false);
+                            src["SupportsDirectStream"] = json!(false);
+                            src["SupportsTranscoding"] = json!(true);
+                        }
+                        Response::json(info)
+                    }
                     None => Response::status(404),
                 }
             }

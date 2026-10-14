@@ -32,6 +32,9 @@ use crate::playback::Playback;
 const OSD_HIDE: Duration = Duration::from_secs(4);
 /// Progress report period while playing (spec 7.2: ~10 s).
 const REPORT_EVERY: Duration = Duration::from_secs(10);
+/// The red software-decoding badge shows this long after the first frame
+/// (D71); Info still says so.
+const SOFTWARE_BADGE_FOR: Duration = Duration::from_secs(5);
 /// A scrub is committed this long after the last Left/Right.
 const SCRUB_COMMIT: Duration = Duration::from_millis(700);
 /// Presses closer than this continue a scrub (held keys repeat faster).
@@ -101,6 +104,8 @@ pub struct PlayerUi {
     /// Default external subtitle, added once the file is loaded.
     pending_external: Option<i32>,
     started: bool,
+    /// When the first frame showed.
+    started_at: Option<Instant>,
     last_report: Instant,
     last_paused: bool,
     reported_stop: bool,
@@ -171,6 +176,7 @@ impl PlayerUi {
             diagnostics: false,
             externals: Vec::new(),
             started: false,
+            started_at: None,
             last_report: now,
             last_paused: false,
             reported_stop: false,
@@ -238,16 +244,25 @@ impl PlayerUi {
     pub fn overlay_visible(&self, now: Instant, st: &PlaybackState) -> bool {
         self.osd_visible(now, st)
             || self.diagnostics
-            || st.software_decode()
+            || (st.software_decode() && self.software_badge(now))
             || !self.started
             || st.buffering
             || matches!(self.next, NextState::Showing { .. })
             || self.skippable(st.time_pos).is_some()
     }
 
+    fn software_badge(&self, now: Instant) -> bool {
+        self.started_at.is_none_or(|t| now < t + SOFTWARE_BADGE_FOR)
+    }
+
     /// When the OSD hides or a scrub commits (the loop wakes then).
     pub fn next_deadline(&self, now: Instant) -> Option<Instant> {
+        let badge = self.started_at.map(|t| t + SOFTWARE_BADGE_FOR).filter(|t| *t > now);
         let osd = self.osd_until.filter(|t| *t > now);
+        let osd = match (osd, badge) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         let scrub = self.scrub.as_ref().map(|s| s.last + SCRUB_COMMIT);
         match (osd, scrub) {
             (Some(a), Some(b)) => Some(a.min(b)),
@@ -312,12 +327,22 @@ impl PlayerUi {
         }
     }
 
+    /// The stop report, and with a server transcode, the end of it (as
+    /// Jellyfin's apps do; D71).
+    fn send_stopped(&self, pos: f64, paused: bool, ctx: &mut Ctx) {
+        ctx.send(self.report(ReportKind::Stopped, pos, paused));
+        if self.info().is_transcode() {
+            let play_session_id = self.info().play_session_id.clone();
+            ctx.send(Cmd::StopTranscode { play_session_id });
+        }
+    }
+
     // ---- input ---------------------------------------------------------
 
     pub(super) fn stop(&mut self, pb: &mut Playback, ctx: &mut Ctx) -> Outcome {
         let st = &pb.player.state;
         if !self.reported_stop && self.started {
-            ctx.send(self.report(ReportKind::Stopped, st.time_pos, st.paused));
+            self.send_stopped(st.time_pos, st.paused, ctx);
         }
         self.reported_stop = true;
         pb.player.stop();
@@ -496,6 +521,7 @@ impl PlayerUi {
         let (pos, paused) = (pb.player.state.time_pos, pb.player.state.paused);
         if pb.started && !self.started {
             self.started = true;
+            self.started_at = Some(now);
             // The bar shows when the video does, not when loading began
             // (a slow start would otherwise have hidden it already).
             self.show(now);
@@ -544,7 +570,7 @@ impl PlayerUi {
             let eof = *reason == EndReason::Eof;
             if !self.reported_stop && self.started {
                 let at = if eof { self.info().duration.max(pos) } else { pos };
-                ctx.send(self.report(ReportKind::Stopped, at, false));
+                self.send_stopped(at, false, ctx);
             }
             self.reported_stop = true;
             let has_next = self.info().next.is_some();
@@ -558,7 +584,7 @@ impl PlayerUi {
         if self.autoplay && self.next != NextState::Dismissed {
             if let Some(n) = self.next_ready.take() {
                 if !self.reported_stop {
-                    ctx.send(self.report(ReportKind::Stopped, pos, paused));
+                    self.send_stopped(pos, paused, ctx);
                     self.reported_stop = true;
                 }
                 return Tick::Next(n);
@@ -575,6 +601,7 @@ impl PlayerUi {
         }
         if let Some(n) = &self.fetched.info.next {
             self.next_fetch = Some(ctx.fetch(Fetch::Play {
+                transcode: false,
                 id: n.id.clone(),
                 start_ticks: 0,
                 tracks: Default::default(),
@@ -630,7 +657,7 @@ impl PlayerUi {
         let (lw, lh) = r.logical_size();
         let (sx, sy) = (lw * safe_area, lh * safe_area);
 
-        if st.software_decode() {
+        if st.software_decode() && self.software_badge(now) {
             let style = TextStyle::new(20.0, Weight::Bold);
             let m = r.measure_text(s::SOFTWARE_DECODE, &style);
             let rect = Rect::new(lw - sx - m.width - 32.0, sy, m.width + 32.0, m.height + 16.0);
@@ -918,7 +945,7 @@ impl PlayerUi {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::home::playinfo::{Segment, Trickplay};
     use jellyfin_api::playback::PlayMethod;
@@ -965,6 +992,8 @@ mod tests {
             next: None,
             fps: None,
             interlaced: false,
+            video: None,
+            stream_ok: true,
         }
     }
 

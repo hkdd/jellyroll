@@ -12,6 +12,7 @@ mod library;
 pub mod model;
 mod osk;
 mod pages;
+mod play_choice;
 pub mod player;
 pub mod playinfo;
 mod power_menu;
@@ -154,6 +155,8 @@ pub struct HomeApp {
     /// shows dimmed with this title and "Starting…" instead of a black
     /// screen. Empty title: not known yet.
     starting: Option<(String, Instant)>,
+    /// Asking how to play something this device can't play directly (D71).
+    choice: Option<play_choice::PlayChoice>,
     /// Open over everything else (spec 5.5).
     power: Option<power_menu::PowerMenu>,
     /// Exit chosen in the power menu, for the frame loop.
@@ -303,6 +306,7 @@ impl HomeApp {
             remote: Default::default(),
             cache_used: None,
             starting: None,
+            choice: None,
             power: None,
             exit_requested: false,
             play: None,
@@ -374,8 +378,9 @@ impl HomeApp {
         let page = match o {
             Open::Play { id, start_ticks, tracks, title, .. } => {
                 self.starting = Some((title, now));
-                let req =
-                    self.with_ctx(now, |_, ctx| ctx.fetch(Fetch::Play { id, start_ticks, tracks }));
+                let req = self.with_ctx(now, |_, ctx| {
+                    ctx.fetch(Fetch::Play { id, start_ticks, tracks, transcode: false })
+                });
                 self.play_req = Some(req);
                 return;
             }
@@ -650,6 +655,46 @@ impl HomeApp {
         });
     }
 
+    /// Hands a play answer to the player (the frame loop takes the request).
+    fn start_playing(&mut self, p: crate::net::PlayFetched, now: Instant) {
+        let (ui, req) = player::PlayerUi::new(p, now);
+        self.set_starting(&req.title, now);
+        self.player = Some(ui);
+        self.play = Some(req);
+    }
+
+    /// The answer to "can't play directly" (D71).
+    fn choose(
+        &mut self,
+        c: play_choice::Choice,
+        fetched: Box<crate::net::PlayFetched>,
+        now: Instant,
+    ) {
+        use play_choice::Choice;
+        match c {
+            Choice::Cancel => {}
+            Choice::Software => {
+                tracing::info!("playing with software decoding (chosen)");
+                self.start_playing(*fetched, now);
+            }
+            Choice::Transcode => {
+                let i = &fetched.info;
+                let tracks = crate::net::TrackChoice {
+                    audio: i.default_audio,
+                    subtitle: Some(i.default_subtitle.unwrap_or(-1)),
+                };
+                let id = i.item_id.clone();
+                let start_ticks = (i.start * playinfo::TICKS_PER_SEC) as i64;
+                tracing::info!("asking the server to transcode");
+                self.set_starting(&i.title, now);
+                let req = self.with_ctx(now, |_, ctx| {
+                    ctx.fetch(Fetch::Play { id, start_ticks, tracks, transcode: true })
+                });
+                self.play_req = Some(req);
+            }
+        }
+    }
+
     /// A video is starting (Play pressed, until its first frame).
     pub fn is_starting(&self) -> bool {
         self.starting.is_some()
@@ -726,10 +771,15 @@ impl HomeApp {
             self.play_req = None;
             match result {
                 Fetched::Play(p) => {
-                    let (ui, req) = player::PlayerUi::new(*p, now);
-                    self.set_starting(&req.title, now);
-                    self.player = Some(ui);
-                    self.play = Some(req);
+                    let caps = self.caps.get().and_then(|c| c.as_ref());
+                    match p.info.check(caps) {
+                        playinfo::Check::Play => self.start_playing(*p, now),
+                        check => {
+                            tracing::info!(?check, "asking how to play");
+                            self.starting = None;
+                            self.choice = Some(play_choice::PlayChoice::new(&check, p));
+                        }
+                    }
                 }
                 Fetched::Failed(e) => {
                     self.starting = None;
@@ -808,6 +858,21 @@ impl HomeApp {
             // The first frame is on screen.
             self.starting = None;
         }
+        // The next episode can't play directly: no autoplay; this one ends
+        // and the question is asked (D71).
+        let t = match t {
+            player::Tick::Next(n) => {
+                let caps = self.caps.get().and_then(|c| c.as_ref());
+                match n.info.check(caps) {
+                    playinfo::Check::Play => player::Tick::Next(n),
+                    check => {
+                        self.choice = Some(play_choice::PlayChoice::new(&check, n));
+                        player::Tick::Finished
+                    }
+                }
+            }
+            t => t,
+        };
         if let player::Tick::Next(n) = &t {
             let (ui, req) = player::PlayerUi::new((**n).clone(), now);
             tracing::info!(title = %req.title, "playing the next episode");
@@ -911,6 +976,14 @@ impl HomeApp {
     /// Applies an action. Returns true if it was used (a redraw is due and
     /// Back must not quit the app).
     pub fn on_action(&mut self, a: InputAction, now: Instant) -> bool {
+        if let Some(c) = &mut self.choice {
+            if let play_choice::Outcome::Picked(pick) = c.on_action(a)
+                && let Some(c) = self.choice.take()
+            {
+                self.choose(pick, c.fetched, now);
+            }
+            return true;
+        }
         if let Some(m) = &mut self.power {
             match m.on_action(a) {
                 power_menu::Outcome::Stay => {}
@@ -1195,6 +1268,9 @@ impl HomeApp {
             draw_starting(r, title, now - *since);
         }
         self.draw_toast(r, now, safe, false);
+        if let Some(c) = &self.choice {
+            c.draw(r);
+        }
         if let Some(m) = &self.power {
             m.draw(r);
         }

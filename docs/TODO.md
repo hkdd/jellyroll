@@ -14,7 +14,8 @@ Agreed 2026-10-14, in this order. Strike through when done.
    not on stop). Find what leaves the console visible for a moment (most
    likely the refresh-rate switch) and keep jellyroll's picture on screen
    throughout.
-3. **Ask before playing what this PC can't play directly.** Only when it
+3. ~~**Ask before playing what this PC can't play directly.**~~ Built (D71); the
+   "GPU can't decode" case to confirm on the HTPC with an HEVC 10-bit file. Only when it
    can't direct play; the choice is not remembered.
    - The server can send the file as it is but the GPU can't decode it
      (e.g. HEVC 10-bit, VP9, AV1 on the HD 530): **Software decode** /

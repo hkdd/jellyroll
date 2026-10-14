@@ -24,6 +24,7 @@ USAGE: jellyroll-mock [OPTIONS]
   --no-discovery      Don't answer LAN discovery on UDP 7359
   --media FILE        Video every movie and episode streams (player testing)
   --media-secs N      Its length in seconds (default 60)
+  --no-direct-play    Files can't be sent as they are: only transcodes play
 ";
 
 fn main() {
@@ -54,6 +55,7 @@ fn main() {
             "--no-discovery" => discover = false,
             "--media" => cfg.media = Some(val("--media").into()),
             "--media-secs" => cfg.media_secs = num(val("--media-secs")) as u32,
+            "--no-direct-play" => cfg.direct_play = false,
             "-h" | "--help" => {
                 print!("{USAGE}");
                 return;

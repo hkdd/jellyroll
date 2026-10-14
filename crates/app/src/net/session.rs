@@ -226,6 +226,20 @@ pub async fn run(cfg: NetConfig, out: Out, mut cmds: mpsc::Receiver<Cmd>) {
                 }
                 reports.push(*r)
             }
+            Cmd::StopTranscode { play_session_id } => {
+                let signed = signed_rx.borrow().clone();
+                if let Some((client, _)) = signed {
+                    tokio::spawn(async move {
+                        let req = jellyfin_api::playback::stop_encoding(
+                            client.device_id(),
+                            &play_session_id,
+                        );
+                        if let Err(e) = client.send_no_content(&req).await {
+                            tracing::warn!("stopping the server transcode: {e}");
+                        }
+                    });
+                }
+            }
             Cmd::StorageInfo => storage(Storage::Info),
             Cmd::SetImageCache(bytes) => storage(Storage::SetCap(bytes)),
             Cmd::ClearCache => {

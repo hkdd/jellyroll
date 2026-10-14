@@ -57,6 +57,8 @@ pub enum Cmd {
     /// A playback report (start/progress/stop), sent in order and retried
     /// until delivered (spec 7.2).
     Report(Box<jellyfin_api::playback::Report>),
+    /// Stop the server's transcode for this play session (D71).
+    StopTranscode { play_session_id: String },
     /// Report the artwork cache's use (`Event::Storage`).
     StorageInfo,
     /// A new artwork disk cache size in bytes (Settings).
@@ -184,6 +186,8 @@ pub enum Fetch {
         id: String,
         start_ticks: i64,
         tracks: TrackChoice,
+        /// Have the server transcode (the user chose it, D71).
+        transcode: bool,
     },
 }
 
@@ -623,7 +627,12 @@ mod tests {
         let movie = data.rows[3].cards[0].id.clone();
         assert!(h.send(Cmd::Fetch {
             id: 77,
-            req: Fetch::Play { id: movie.clone(), start_ticks: 0, tracks: Default::default() }
+            req: Fetch::Play {
+                id: movie.clone(),
+                start_ticks: 0,
+                tracks: Default::default(),
+                transcode: false,
+            }
         }));
         let pf = loop {
             match next(&mut h, deadline) {

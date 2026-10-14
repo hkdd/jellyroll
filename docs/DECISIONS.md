@@ -1038,6 +1038,37 @@ blank after a crash until something reset it. Not seen on the HTPC yet
 (the sandbox has no KMS); on a pseudo-terminal the sequences are written
 and undone as intended.
 
+**D71: Ask instead of refusing (replaces D19's "never transcode").**
+Playback still asks the server for direct play first. Before playing,
+jellyroll checks the answer:
+- The server can't send the file as it is: "This video can't play
+  directly" with **Server transcode** / **Cancel**.
+- It can, but this GPU's VA-API profiles (the startup probe) don't
+  include the video's codec (HEVC 10-bit, VP9, AV1 on the HD 530):
+  **Software decode** / **Server transcode** / **Cancel**, with a note
+  for 4K that software decoding will probably stutter on this CPU.
+  Without probe results (no VA-API, or not finished) it doesn't ask.
+- Focus starts on Server transcode; the choice isn't remembered; an
+  autoplaying next episode that would need the question ends playback
+  and asks instead.
+- Software decode plays as before; the red badge now shows only for the
+  first 5 s of playback (Info still says software).
+- Server transcode is a second PlaybackInfo with direct play off,
+  transcoding on, the position and chosen tracks, and a profile with one
+  transcoding target (H.264 in MPEG-TS over HLS, AAC/AC3/E-AC3/MP3 audio,
+  up to 6 channels; text subtitles as files, image subtitles burned in);
+  the server decides the rest, as for Jellyfin's own apps. The returned
+  `TranscodingUrl` is played without the `ApiKey` the server adds (the
+  token goes in the header, as for direct streams). Stopping reports as
+  usual and calls `DELETE /Videos/ActiveEncodings` (deviceId,
+  playSessionId) like Jellyfin's apps. The HLS and ActiveEncodings
+  endpoints are missing from the SDK's pinned OpenAPI; checked in the
+  server source (DynamicHlsController, HlsSegmentController).
+- Limits: during a transcode the audio track is the one chosen before
+  playing (the stream has only that one), and only text subtitles can be
+  switched. Tested end to end against the mock (`--no-direct-play`);
+  the "GPU can't decode" case is unit-tested (no VA-API in the sandbox).
+
 ## Dependency approvals
 
 | Crate | Status |

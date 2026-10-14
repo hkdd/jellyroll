@@ -127,6 +127,11 @@ impl Client {
         s
     }
 
+    /// This installation's DeviceId (as sent in the Authorization header).
+    pub fn device_id(&self) -> &str {
+        &self.info.device_id
+    }
+
     pub fn base_url(&self) -> &str {
         &self.base
     }

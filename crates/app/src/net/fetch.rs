@@ -87,9 +87,15 @@ async fn play(
     id: &str,
     start_ticks: i64,
     tracks: super::TrackChoice,
+    transcode: bool,
 ) -> Result<Fetched, Error> {
     let item_req = ep::item(user, id);
-    let info_req = jellyfin_api::playback::playback_info(user, id);
+    let t = jellyfin_api::playback::TranscodeRequest {
+        start_ticks,
+        audio_stream_index: tracks.audio,
+        subtitle_stream_index: tracks.subtitle,
+    };
+    let info_req = jellyfin_api::playback::playback_info(user, id, transcode.then_some(&t));
     let seg_req = jellyfin_api::playback::media_segments(id);
     let (item, info, segs) = tokio::join!(c.send(&item_req), c.send(&info_req), c.send(&seg_req));
     let (item, info) = (item?, info?);
@@ -186,6 +192,8 @@ async fn fetch(c: &Client, user: &str, f: Fetch) -> Result<Fetched, Error> {
                 played: d.played.unwrap_or(on),
             }
         }
-        Fetch::Play { id, start_ticks, tracks } => play(c, user, &id, start_ticks, tracks).await?,
+        Fetch::Play { id, start_ticks, tracks, transcode } => {
+            play(c, user, &id, start_ticks, tracks, transcode).await?
+        }
     })
 }
