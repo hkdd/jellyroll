@@ -147,6 +147,9 @@ pub async fn run(cfg: NetConfig, out: Out, mut cmds: mpsc::Receiver<Cmd>) {
             Cmd::WantImages(jobs) => queue.replace(jobs),
             Cmd::Fetch { id, req } => fetches.push(id, req),
             Cmd::Report(r) => reports.push(*r),
+            Cmd::Flush(done) => {
+                let _ = done.send(());
+            }
             Cmd::Refresh => {
                 let _ = ctl_tx.try_send(Ctl::Refresh);
             }

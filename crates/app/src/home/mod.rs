@@ -660,6 +660,22 @@ impl HomeApp {
         }
     }
 
+    /// The app is quitting (systemd stop, Exit in the power menu): report
+    /// where playback stopped, and give the network thread a moment to
+    /// save it, so the server (now or at the next start) has it.
+    pub fn shutdown(&mut self, pb: Option<&mut crate::playback::Playback>, now: Instant) {
+        if let (Some(pb), true) = (pb, self.player.is_some()) {
+            self.with_ctx(now, |me, ctx| {
+                if let Some(pl) = me.player.as_mut() {
+                    pl.stop(pb, ctx);
+                }
+            });
+        }
+        if !self.net.flush(std::time::Duration::from_secs(1)) {
+            tracing::warn!("network thread didn't confirm before exit");
+        }
+    }
+
     /// Playback ended: refresh what it changed (resume points, watched).
     pub fn playback_finished(&mut self, now: Instant) {
         self.player = None;

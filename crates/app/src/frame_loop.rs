@@ -353,7 +353,18 @@ pub fn run<P: Platform, R: Renderer>(
         for ev in &events {
             match *ev {
                 PlatformEvent::Quit => {
+                    // SIGTERM/SIGINT (systemctl stop) arrive here too.
+                    tracing::info!("quitting");
+                    if let View::Home(h) = &mut view {
+                        h.shutdown(playback.as_mut(), now);
+                    }
                     systemd.stopping();
+                    // A soak stopped early (Ctrl+C) still reports.
+                    if let Some(sk) = soak.as_mut() {
+                        let st = r.stats();
+                        sk.record(now, st.texture_bytes, st.gpu_cache_bytes);
+                        return if sk.report() { Exit::BenchPassed } else { Exit::BenchFailed };
+                    }
                     return Exit::Quit;
                 }
                 PlatformEvent::KeyDown {
@@ -567,6 +578,7 @@ pub fn run<P: Platform, R: Renderer>(
             if let View::Home(h) = &mut view
                 && h.take_exit()
             {
+                h.shutdown(playback.as_mut(), now);
                 systemd.stopping();
                 return Exit::Quit;
             }

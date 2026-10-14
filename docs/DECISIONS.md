@@ -860,6 +860,27 @@ automatically…"), the app goes offline at once and asks the session to
 check; the session's backoff retries until the server answers, and then
 the page that failed (library grid, item page) loads again by itself.
 
+**D61: Exit and restart, sandboxing, soak (M10).** Quitting (SIGTERM
+from `systemctl stop`, which SDL turns into a quit event, or Exit in the
+power menu) during playback now sends the Stopped report and waits up to
+1 s for the network thread to confirm it is queued (`Cmd::Flush`); the
+queue is on disk, so the server gets it now or at the next start.
+Verified under Xvfb: SIGTERM mid-play leaves Start/Progress/Stopped on
+the server; `kill -9` mid-play restarts cleanly (redb needs no repair,
+cached home in 0.17 s). The unit is now sandboxed (`ProtectSystem=strict`,
+`ProtectHome=read-only` with the data dir and `~/.cache` writable, kernel,
+cgroup, clock and hostname protection, no SUID, native syscalls only);
+nothing restricts `/dev` or `/run`, so DRM, input, CEC, audio and logind
+still work, but it is unproven on the HTPC until the service is installed
+(checklist step 5). `--soak HOURS [--soak-media FILE]` loops the UI
+against the in-process mock (home rows, a 2000-item grid scrolled deep, an
+item page, a minute of playback, search), samples RSS, texture and Skia
+cache memory every minute to `soak.csv`, and fails if RSS 10 minutes
+after a 15-minute warm-up and RSS over the last 10 minutes differ by more
+than 10% (and 32 MB). Home on the home screen now returns to the top (nav
+bar), which keeps the script's every cycle anchored. CI runs a 2-minute
+soak as a smoke test.
+
 ## Dependency approvals
 
 | Crate | Status |

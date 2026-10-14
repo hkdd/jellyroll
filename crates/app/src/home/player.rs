@@ -311,7 +311,7 @@ impl PlayerUi {
 
     // ---- input ---------------------------------------------------------
 
-    fn stop(&mut self, pb: &mut Playback, ctx: &mut Ctx) -> Outcome {
+    pub(super) fn stop(&mut self, pb: &mut Playback, ctx: &mut Ctx) -> Outcome {
         let st = &pb.player.state;
         if !self.reported_stop && self.started {
             ctx.send(self.report(ReportKind::Stopped, st.time_pos, st.paused));

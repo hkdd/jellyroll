@@ -22,7 +22,7 @@ and verified versions.
 | **M7** Player UX: OSD, track menus, trickplay, skip segments, next-up, progress reporting, resume | **Done.** On the HTPC: movie and episode flows, resume points and watched state on the server, next-episode autoplay (D49) |
 | **M8** Display features: refresh-rate matching, audio passthrough, hotplug/TV standby, power menu | **Done** except two retests: on the HTPC 24p plays at 24 Hz, the power menu works, a TV power cycle is survived; open: sound after the power cycle, passthrough (D58) |
 | M9 HDR10, native DRM, overlay-plane video | **Deferred** to newer hardware (e.g. an Intel N150): the HD 530 can neither decode HEVC 10-bit nor send HDR metadata through its adapter (D59) |
-| M10 Hardening: error states, soak test, restart, install | In progress |
+| **M10** Hardening: error states, soak test, restart, install | **Built**, awaiting the HTPC checklist (`docs/M10-HARDWARE-CHECKLIST.md`) |
 
 The app connects to your Jellyfin server and shows its home screen: My
 Media, Continue Watching, Next Up, the latest additions to each library and
@@ -161,6 +161,8 @@ devices are readable. The service user gets the group from `install.sh`.
 | `--bench-pacing SECS` | Continuous animation. Prints CPU/GPU/present p50/p99, missed vsyncs and allocating frames, and exits 1 if a spec §2 budget is exceeded |
 | `--bench-idle SECS` | Static screen. Fails if anything redraws or CPU ≥ 1% |
 | `--bench-upload` | Time the ways of uploading artwork to the GPU on this machine, then exit |
+| `--soak HOURS` | Drive the UI for HOURS against the built-in mock server (throwaway profile), log memory every minute to `soak.csv`, exit 1 if it keeps growing. Ctrl+C stops early with a summary |
+| `--soak-media FILE` | With `--soak`: play FILE for a minute in every cycle |
 | `--bench-scroll SECS` | Scroll a 10,000-item library grid (built-in mock server, no account needed) and check the same budgets as `--bench-pacing` |
 | `--print-diagnostics` | SDL/GL/driver/display modes, DRI/CEC/input devices, mpv version, and which codecs the GPU decodes in hardware |
 | `--play FILE_OR_URL` | Play a video (M3 harness). Space pause, ←/→ seek 10 s, ↑/↓ 60 s, `i` decoder diagnostics, Esc stop |

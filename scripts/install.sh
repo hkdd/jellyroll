@@ -44,15 +44,23 @@ done
 
 # 2. Binary and unit. The unit hardcodes User=jellyroll; rewrite it if overridden.
 run install -Dm755 "$BIN" /usr/local/bin/jellyroll
-if [[ "$APP_USER" == "jellyroll" ]]; then
+APP_HOME="$(getent passwd "$APP_USER" | cut -d: -f6 || true)"
+APP_HOME="${APP_HOME:-/home/$APP_USER}"
+if [[ "$APP_USER" == "jellyroll" && "$APP_HOME" == "/home/jellyroll" ]]; then
   run install -Dm644 "$UNIT_SRC" /etc/systemd/system/jellyroll.service
 else
-  echo "+ install unit with User=$APP_USER"
+  echo "+ install unit with User=$APP_USER, home $APP_HOME"
   if [[ $DRY -eq 0 ]]; then
-    sed "s/^User=jellyroll$/User=$APP_USER/" "$UNIT_SRC" > /etc/systemd/system/jellyroll.service
+    sed -e "s/^User=jellyroll$/User=$APP_USER/" -e "s#/home/jellyroll#$APP_HOME#g" \
+      "$UNIT_SRC" > /etc/systemd/system/jellyroll.service
     chmod 644 /etc/systemd/system/jellyroll.service
   fi
 fi
+# The unit makes the filesystem read-only except these (they must exist).
+for d in "$APP_HOME/.local" "$APP_HOME/.local/share" "$APP_HOME/.local/share/jellyroll" \
+         "$APP_HOME/.cache" "$APP_HOME/.cache/jellyroll"; do
+  [[ -d "$d" ]] || run install -d -m 755 -o "$APP_USER" -g "$APP_USER" "$d"
+done
 
 # 2b. Power menu: let the user restart/shut down without a password
 #     (logind via polkit; spec 5.5).
@@ -68,8 +76,6 @@ else
 fi
 
 # 3. Example config, only if the user has none (never overwrite edits).
-APP_HOME="$(getent passwd "$APP_USER" | cut -d: -f6 || true)"
-APP_HOME="${APP_HOME:-/home/$APP_USER}"
 CFG_DIR="$APP_HOME/.config/jellyroll"
 if [[ ! -e "$CFG_DIR/config.toml" ]]; then
   run install -d -m 755 -o "$APP_USER" -g "$APP_USER" "$APP_HOME/.config" "$CFG_DIR"

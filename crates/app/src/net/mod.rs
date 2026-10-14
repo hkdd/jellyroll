@@ -49,6 +49,9 @@ pub enum Cmd {
     /// A playback report (start/progress/stop), sent in order and retried
     /// until delivered (spec 7.2).
     Report(Box<jellyfin_api::playback::Report>),
+    /// Answers once every command sent before it has been handled (a
+    /// report queued is a report saved to disk): for a clean exit.
+    Flush(std::sync::mpsc::Sender<()>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -271,6 +274,13 @@ impl NetHandle {
     /// the UI re-sends image wants as it scrolls anyway).
     pub fn send(&self, c: Cmd) -> bool {
         self.cmd.try_send(c).is_ok()
+    }
+
+    /// Waits (up to `timeout`) until the network thread has handled every
+    /// command sent so far. False if it didn't answer in time.
+    pub fn flush(&self, timeout: std::time::Duration) -> bool {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.send(Cmd::Flush(tx)) && rx.recv_timeout(timeout).is_ok()
     }
 
     pub fn try_recv(&mut self) -> Option<Event> {

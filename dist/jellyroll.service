@@ -31,14 +31,26 @@ WatchdogSec=20
 Type=notify
 NotifyAccess=main
 
-# Hardening (spec 12). Enabled options are compatible with KMS/input access
-# by design; the commented ones must be validated on the reference hardware
-# before enabling (see docs/DECISIONS.md).
+# Hardening (spec 12, D61). None of these touch /dev (DRM, input, CEC,
+# sound) or /run (D-Bus for logind, PipeWire), so display, input, audio
+# and the power menu keep working. The filesystem is read-only except the
+# app's data directory and ~/.cache (also Mesa's shader cache) (scripts/install.sh creates them,
+# and rewrites /home/jellyroll for another user). If something breaks on
+# your hardware, comment out ProtectSystem/ProtectHome first.
 NoNewPrivileges=yes
 PrivateTmp=yes
-#ProtectSystem=strict
-#ReadWritePaths=/home/jellyroll/.config/jellyroll /home/jellyroll/.local/share/jellyroll /home/jellyroll/.cache/jellyroll
-#ProtectHome=read-only
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/jellyroll/.local/share/jellyroll /home/jellyroll/.cache
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target

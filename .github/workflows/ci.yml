@@ -66,6 +66,14 @@ jobs:
       - name: startup bench (Xvfb)
         run: xvfb-run -a -s "-screen 0 1920x1080x24" env BIN=target/release/jellyroll scripts/bench-startup.sh 5 --dev
 
+      # Soak smoke test: the --soak script drives the UI (with playback) for
+      # two minutes without derailing or crashing. The memory verdict needs
+      # hours and real hardware (docs/M10-HARDWARE-CHECKLIST.md).
+      - name: soak smoke test (Xvfb)
+        run: |
+          scripts/make-test-clips.sh /tmp/soakclips 640x360 20
+          xvfb-run -a -s "-screen 0 1920x1080x24" timeout 300 target/release/jellyroll --dev --soak 0.035 --soak-media /tmp/soakclips/h264-360p.mp4
+
       # Playback smoke test: a short clip must play to the end and exit 0.
       # There is no GPU here, so mpv decodes in software (the app warns); the
       # playback benchmark's pass/fail is for real hardware only.
