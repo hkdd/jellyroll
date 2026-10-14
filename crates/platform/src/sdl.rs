@@ -115,6 +115,9 @@ pub struct SdlPlatform {
     info: PlatformInfo,
     /// SDL user event type used by the waker.
     wake_type: u32,
+    /// In a desktop window: output modes belong to the compositor.
+    dev_window: bool,
+    hotplug: Option<(crate::hotplug::Watcher, std::sync::mpsc::Receiver<PlatformEvent>)>,
 }
 
 fn mode_info(m: &sdl3::video::DisplayMode) -> ModeInfo {
@@ -270,6 +273,8 @@ impl SdlPlatform {
                 gl,
                 info,
                 wake_type,
+                dev_window: opts.dev_window,
+                hotplug: None,
             });
         }
         Err(format!("no usable GL context: {last_err}"))
@@ -451,8 +456,48 @@ impl Platform for SdlPlatform {
     }
 
     fn current_mode(&self) -> Option<ModeInfo> {
+        // A mode set with `set_mode`, else the desktop mode.
+        if let Some(m) = self.window.display_mode() {
+            return Some(mode_info(&m));
+        }
+        self.desktop_mode()
+    }
+
+    fn desktop_mode(&self) -> Option<ModeInfo> {
         let display = self.window.get_display().ok()?;
         display.get_mode().ok().map(|m| mode_info(&m))
+    }
+
+    fn set_mode(&mut self, mode: Option<&ModeInfo>) -> Result<(), String> {
+        if self.dev_window {
+            return Err("output modes can't be changed in a window (--dev)".into());
+        }
+        let sdl_mode = match mode {
+            None => None,
+            Some(want) => {
+                let display = self.window.get_display().map_err(|e| e.to_string())?;
+                let modes = display.get_fullscreen_modes().map_err(|e| e.to_string())?;
+                let found = modes.into_iter().find(|m| {
+                    m.w == want.width
+                        && m.h == want.height
+                        && m.refresh_rate_numerator == want.refresh_num
+                        && m.refresh_rate_denominator == want.refresh_den
+                });
+                Some(found.ok_or_else(|| format!("no output mode {want:?}"))?)
+            }
+        };
+        // KMSDRM applies it with a modeset on the next swap.
+        self.window.set_display_mode(sdl_mode).map_err(|e| e.to_string())
+    }
+
+    fn reapply_mode(&mut self) -> Result<(), String> {
+        if self.dev_window {
+            return Ok(());
+        }
+        // Setting the fullscreen mode, even the same one, makes KMSDRM
+        // recreate its surfaces and modeset on the next swap.
+        let mode = self.window.display_mode();
+        self.window.set_display_mode(mode).map_err(|e| e.to_string())
     }
 
     fn display_modes(&self) -> Vec<ModeInfo> {
@@ -468,6 +513,9 @@ impl Platform for SdlPlatform {
             self.handle(ev, out);
         }
         if let Some((_, rx)) = &self.cec {
+            out.extend(rx.try_iter());
+        }
+        if let Some((_, rx)) = &self.hotplug {
             out.extend(rx.try_iter());
         }
     }
@@ -488,6 +536,10 @@ impl Platform for SdlPlatform {
             return;
         }
         let t0 = std::time::Instant::now();
+        if !self.dev_window {
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.hotplug = crate::hotplug::start(tx, self.waker()).map(|w| (w, rx));
+        }
         // Gamepads are optional: a missing subsystem only disables them.
         // Pads already plugged in arrive as hotplug events.
         self.gamepads = match self._sdl.gamepad() {

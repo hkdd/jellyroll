@@ -13,11 +13,12 @@ use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 use jellyroll_platform::alloc_counter;
-use jellyroll_platform::{GpuTimer, Platform, PlatformEvent};
+use jellyroll_platform::{GpuTimer, ModeInfo, Platform, PlatformEvent};
 use jellyroll_render::Renderer;
 
 use crate::args::{Bench, Options};
 use crate::home::HomeApp;
+use crate::home::player::{Outcome as PlayerOutcome, Tick as PlayerTick};
 use crate::hud::{CPU_BUDGET_MS, GPU_BUDGET_MS, Hud};
 use crate::input::{self, Input, InputAction, KeyRepeat};
 use crate::net::{NetConfig, NetHandle};
@@ -188,9 +189,14 @@ pub fn run<P: Platform, R: Renderer>(
     let mut view = match net {
         Some(cfg) if !opts.demo && opts.play.is_none() => {
             let cap = config.config.cache.textures_mb << 20;
+            let save_to = cfg.data_dir.as_deref().map(crate::ui_prefs::path);
             let ui = crate::home::UiSetting {
                 resolution: config.config.display.ui_resolution,
-                save_to: cfg.data_dir.as_deref().map(crate::ui_prefs::path),
+                prefs: save_to.as_deref().map(crate::ui_prefs::load).unwrap_or_default(),
+                display: config.config.display.clone(),
+                audio: config.config.audio.clone(),
+                save_to,
+                allow_exit: opts.allow_exit,
             };
             match NetHandle::start(cfg, p.waker()) {
                 Ok(h) => {
@@ -242,6 +248,12 @@ pub fn run<P: Platform, R: Renderer>(
     // (with --play, the app exits instead).
     let browsing = opts.play.is_none() && matches!(view, View::Home(_));
     let mut stop_playback = false;
+    // Refresh-rate matching (spec 5.2): the mode set for playback (None:
+    // the desktop mode), and a play request waiting for a mode switch to
+    // be presented (and the TV given time) before mpv starts.
+    let mut playing_mode: Option<ModeInfo> = None;
+    let mut pending_play: Option<PendingPlay> = None;
+    let switch_delay = Duration::from_millis(config.config.display.refresh_switch_delay_ms);
     let mut last_present: Option<Instant> = None;
     let mut alloc_warned = false;
 
@@ -253,9 +265,13 @@ pub fn run<P: Platform, R: Renderer>(
             earliest(systemd.next_deadline(), bench_end),
         );
         let deadline = earliest(deadline, script.as_ref().and_then(|s| s.next_deadline()));
-        let (deadline, animating) = match &playback {
-            Some(pb) => (earliest(deadline, pb.osd.next_deadline(now)), pb.playing()),
-            None => (earliest(deadline, view.next_deadline()), view.is_animating(now)),
+        let deadline = earliest(deadline, pending_play.as_ref().map(|pp| pp.at));
+        let (deadline, animating) = match (&playback, &view) {
+            (Some(pb), View::Home(h)) if h.has_player() => {
+                (earliest(deadline, h.player_deadline(now)), pb.playing())
+            }
+            (Some(pb), _) => (earliest(deadline, pb.osd.next_deadline(now)), pb.playing()),
+            (None, _) => (earliest(deadline, view.next_deadline()), view.is_animating(now)),
         };
         let timeout = wait_timeout(dirty, animating, deadline, now);
         events.clear();
@@ -338,6 +354,33 @@ pub fn run<P: Platform, R: Renderer>(
                     hud.toggle(now);
                     dirty = true;
                 }
+                PlatformEvent::OutputConnected { connected: false } => {
+                    // TV off or cable out (spec 5.2): pause, keep running.
+                    tracing::warn!("display disconnected; pausing playback");
+                    if let Some(pb) = playback.as_mut()
+                        && !pb.player.state.paused
+                    {
+                        pb.player.toggle_pause();
+                    }
+                }
+                PlatformEvent::OutputConnected { connected: true } => {
+                    tracing::info!("display connected again; setting the output mode");
+                    if let Err(e) = p.reapply_mode() {
+                        tracing::warn!("re-modeset failed: {e}");
+                    }
+                    // HDMI audio went away with the display; reopen it.
+                    if let Some(pb) = playback.as_mut() {
+                        tracing::info!("reopening the audio output");
+                        pb.player.reload_audio();
+                    }
+                    dirty = true;
+                }
+                PlatformEvent::AudioSinkChanged => {
+                    if let Some(pb) = playback.as_mut() {
+                        tracing::info!("HDMI audio sink changed; reopening the audio output");
+                        pb.player.reload_audio();
+                    }
+                }
                 PlatformEvent::CecStandby => {
                     // The TV is going to standby: pause playback (spec 5.4).
                     if let Some(pb) = playback.as_mut()
@@ -366,8 +409,20 @@ pub fn run<P: Platform, R: Renderer>(
                             dirty |= view.on_action(InputAction::TextInput(c), now);
                         }
                     }
+                    // Keys wait while the output switches modes for a video
+                    // (a moment; the player is not running yet).
+                    Some(Input::Press { .. }) if pending_play.is_some() => {}
                     Some(Input::Press { button, action: Some(a) }) => {
                         repeat.press(button, a, now);
+                        if let (Some(pb), View::Home(h)) = (playback.as_mut(), &mut view)
+                            && h.has_player()
+                        {
+                            match h.player_action(a, pb, now) {
+                                PlayerOutcome::Stop => stop_playback = true,
+                                PlayerOutcome::Continue { redraw } => dirty |= redraw,
+                            }
+                            continue;
+                        }
                         if let Some(pb) = playback.as_mut() {
                             match pb.on_action(a, now) {
                                 Outcome::Exit if browsing => stop_playback = true,
@@ -392,7 +447,36 @@ pub fn run<P: Platform, R: Renderer>(
                 },
             }
         }
-        if let Some(pb) = playback.as_mut() {
+        let mut next_episode = false;
+        if let (Some(pb), View::Home(h)) = (playback.as_mut(), &mut view)
+            && h.has_player()
+        {
+            // The browsing player (M7): input, reports, the end and the
+            // next episode are the player UI's.
+            if let Some(a) = repeat.tick(now) {
+                match h.player_action(a, pb, now) {
+                    PlayerOutcome::Stop => stop_playback = true,
+                    PlayerOutcome::Continue { redraw } => dirty |= redraw,
+                }
+            }
+            dirty |= pb.poll(now);
+            match h.player_tick(pb, now) {
+                PlayerTick::Continue { redraw } => dirty |= redraw,
+                PlayerTick::Finished => {
+                    if let Some((reason, error)) = &pb.ended {
+                        match error {
+                            Some(e) => tracing::warn!("playback ended: {reason:?}: {e}"),
+                            None => tracing::info!("playback ended: {reason:?}"),
+                        }
+                    }
+                    stop_playback = true;
+                }
+                PlayerTick::Next(_) => next_episode = true,
+            }
+            let overlay = h.player_overlay_visible(now, &pb.player.state);
+            dirty |= pb.playing() || overlay != overlay_shown;
+            overlay_shown = overlay;
+        } else if let Some(pb) = playback.as_mut() {
             if let Some(a) = repeat.tick(now)
                 && let Outcome::Continue { redraw } = pb.on_action(a, now)
             {
@@ -444,6 +528,12 @@ pub fn run<P: Platform, R: Renderer>(
                 }
             }
             dirty |= view.update(now);
+            if let View::Home(h) = &mut view
+                && h.take_exit()
+            {
+                systemd.stopping();
+                return Exit::Quit;
+            }
             p.set_text_input(view.wants_text());
             if let View::Home(h) = &mut view
                 && let Some(scale) = h.take_render_scale()
@@ -455,20 +545,10 @@ pub fn run<P: Platform, R: Renderer>(
             if let View::Home(h) = &mut view
                 && let Some(req) = h.take_play()
             {
-                let popts = jellyroll_video::PlayerOptions {
-                    http_header: Some(format!("Authorization: {}", req.authorization)),
-                    start_secs: Some(req.start_secs),
-                    ..Default::default()
-                };
-                match Playback::start_with(p, &req.url, &req.title, popts, now) {
-                    Ok(pb) => {
-                        playback = Some(pb);
-                        overlay_shown = false;
-                        repeat.reset();
-                        dirty = true;
-                    }
-                    Err(e) => tracing::error!("playback: {e}"),
-                }
+                pending_play = Some(prepare_play(p, req, &mut playing_mode, switch_delay, now));
+                overlay_shown = false;
+                repeat.reset();
+                dirty = true;
             }
             if view.is_animating(now) {
                 dirty = true;
@@ -481,8 +561,35 @@ pub fn run<P: Platform, R: Renderer>(
         } else {
             0
         };
+        if next_episode {
+            // Straight into the next episode: no stop back to the page.
+            playback = None;
+            r.reset_gl_state();
+            repeat.reset();
+            if let View::Home(h) = &mut view
+                && let Some(req) = h.take_play()
+            {
+                pending_play = Some(prepare_play(p, req, &mut playing_mode, switch_delay, now));
+            }
+            overlay_shown = false;
+            dirty = true;
+        }
+        // Start a waiting request once its mode switch is on screen.
+        if pending_play.as_ref().is_some_and(|pp| !pp.needs_present && now >= pp.at)
+            && let Some(pp) = pending_play.take()
+        {
+            playback = start_play(p, pp.req, pp.matched, now);
+            if playback.is_none() {
+                restore_mode(p, &mut playing_mode);
+                if let View::Home(h) = &mut view {
+                    h.playback_finished(now);
+                }
+            }
+            dirty = true;
+        }
         if std::mem::take(&mut stop_playback) {
             playback = None;
+            restore_mode(p, &mut playing_mode);
             // mpv changed GL state; Skia must not trust its cache.
             r.reset_gl_state();
             repeat.reset();
@@ -496,7 +603,6 @@ pub fn run<P: Platform, R: Renderer>(
         }
 
         // ---- draw ------------------------------------------------------
-        let timing = gpu_timer.as_mut().is_some_and(|t| t.begin(p.gl()));
         let mut hud_allocs = load_allocs;
         let mut loading = load_allocs > 0;
         if let Some(pb) = playback.as_mut() {
@@ -504,19 +610,38 @@ pub fn run<P: Platform, R: Renderer>(
             p.gl().reset_to_defaults();
             pb.player.render(fb);
             r.reset_gl_state();
+        }
+        // The GPU timer measures our drawing only: it starts after mpv's
+        // frame, because mpv times its own passes with GL_TIME_ELAPSED
+        // queries and only one can be active at a time (an open one of ours
+        // made each of mpv's fail with GL_INVALID_OPERATION).
+        let timing = gpu_timer.as_mut().is_some_and(|t| t.begin(p.gl()));
+        if let Some(pb) = playback.as_mut() {
             let submit_start = Instant::now();
             stats.record_ms.push(ms(submit_start - frame_start));
-            if (pb.osd.any_visible(now, &pb.player.state) || hud.visible) && r.begin_frame(fb) {
+            let home = matches!(&view, View::Home(h) if h.has_player());
+            let overlay =
+                if home { overlay_shown } else { pb.osd.any_visible(now, &pb.player.state) };
+            if (overlay || hud.visible) && r.begin_frame(fb) {
                 // OSD text (time) and HUD lines change while playing; keep
                 // their shaping out of the steady-state allocation check.
                 let a0 = alloc_counter::allocations();
-                pb.osd.draw(r, now, &pb.player.state, &pb.drops, safe_area);
+                match &mut view {
+                    View::Home(h) if home => h.draw_player(r, &pb.player.state, now, safe_area),
+                    _ => pb.osd.draw(r, now, &pb.player.state, &pb.drops, safe_area),
+                }
                 let (lw, lh) = r.logical_size();
                 hud.draw(r, &stats, lw * (1.0 - safe_area), lh * safe_area);
                 hud_allocs = alloc_counter::allocations() - a0;
                 r.end_frame();
             }
             stats.submit_ms.push(ms(submit_start.elapsed()));
+        } else if pending_play.is_some() {
+            // The output is switching modes for the video: black frames.
+            if r.begin_frame(fb) {
+                r.clear(jellyroll_render::Color::BLACK);
+                r.end_frame();
+            }
         } else if r.begin_frame(fb) {
             match &mut view {
                 View::Demo(scene) => {
@@ -572,6 +697,13 @@ pub fn run<P: Platform, R: Renderer>(
         // ---- present -----------------------------------------------------
         p.swap();
         let presented = Instant::now();
+        if let Some(pp) = pending_play.as_mut()
+            && pp.needs_present
+        {
+            // The modeset happened in that swap; now give the TV its time.
+            pp.needs_present = false;
+            pp.at = presented + pp.settle;
+        }
         if let Some(pb) = playback.as_mut() {
             pb.player.report_swap();
         }
@@ -618,6 +750,113 @@ pub fn run<P: Platform, R: Renderer>(
             tracing::info!(ms = t.as_millis() as u64, "first frame presented");
             systemd.ready(t);
             p.start_input_devices();
+        }
+    }
+}
+
+/// Starts mpv for a request from the browsing UI.
+/// A play request waiting for the output mode to change.
+struct PendingPlay {
+    req: crate::home::PlayRequest,
+    /// The output now runs at a mode matching the video.
+    matched: bool,
+    /// A mode switch was requested: it happens at the next swap.
+    needs_present: bool,
+    /// After the switch is presented: wait this long (TV resync).
+    settle: Duration,
+    /// Start no earlier than this.
+    at: Instant,
+}
+
+/// Picks the output mode for a request (spec 5.2) and asks for it.
+/// Playback starts once the switch has been presented (`PendingPlay`);
+/// consecutive videos at the same rate keep the mode without a switch.
+fn prepare_play<P: Platform>(
+    p: &mut P,
+    req: crate::home::PlayRequest,
+    playing_mode: &mut Option<ModeInfo>,
+    settle: Duration,
+    now: Instant,
+) -> PendingPlay {
+    let desktop = p.desktop_mode();
+    let target = match (req.match_refresh, req.fps, &desktop) {
+        (true, Some(fps), Some(d)) => crate::refresh::pick(&p.display_modes(), d, fps).cloned(),
+        _ => None,
+    };
+    // None: the desktop mode.
+    let want =
+        target.clone().filter(|t| !desktop.as_ref().is_some_and(|d| crate::refresh::same(t, d)));
+    let unchanged = match (&want, &*playing_mode) {
+        (None, None) => true,
+        (Some(a), Some(b)) => crate::refresh::same(a, b),
+        _ => false,
+    };
+    let mut pending =
+        PendingPlay { matched: target.is_some(), needs_present: false, settle, at: now, req };
+    if pending.req.match_refresh && target.is_none() {
+        tracing::info!(fps = pending.req.fps, "no output mode matches this video's frame rate");
+    }
+    if unchanged {
+        return pending;
+    }
+    match p.set_mode(want.as_ref()) {
+        Ok(()) => {
+            let to = want.as_ref().or(desktop.as_ref());
+            tracing::info!(
+                fps = pending.req.fps,
+                hz = to.map(crate::refresh::hz),
+                mode = ?to,
+                "output mode for playback"
+            );
+            *playing_mode = want;
+            pending.needs_present = true;
+        }
+        Err(e) => {
+            tracing::warn!("refresh-rate switch failed: {e}");
+            // Still at the previous mode: matched only if that fits.
+            pending.matched = match (&target, &*playing_mode, &desktop) {
+                (Some(t), Some(m), _) | (Some(t), None, Some(m)) => crate::refresh::same(t, m),
+                _ => false,
+            };
+        }
+    }
+    pending
+}
+
+/// Back to the desktop mode after playback, if it was changed.
+fn restore_mode<P: Platform>(p: &mut P, playing_mode: &mut Option<ModeInfo>) {
+    if playing_mode.take().is_some() {
+        match p.set_mode(None) {
+            Ok(()) => tracing::info!("output mode restored"),
+            Err(e) => tracing::warn!("restoring the output mode failed: {e}"),
+        }
+    }
+}
+
+/// Starts mpv for a request from the browsing UI. `matched`: the output
+/// refresh fits the video, so mpv can resample to the display (spec 7.1).
+fn start_play<P: Platform>(
+    p: &P,
+    req: crate::home::PlayRequest,
+    matched: bool,
+    now: Instant,
+) -> Option<Playback> {
+    let popts = jellyroll_video::PlayerOptions {
+        http_header: Some(format!("Authorization: {}", req.authorization)),
+        start_secs: Some(req.start_secs),
+        audio_track: req.audio_track,
+        sub_track: req.sub_track,
+        video_sync: if matched { "display-resample" } else { "audio" }.into(),
+        audio_device: req.audio.device,
+        audio_spdif: req.audio.spdif,
+        audio_channels: req.audio.channels,
+        ..Default::default()
+    };
+    match Playback::start_with(p, &req.url, &req.title, popts, now) {
+        Ok(pb) => Some(pb),
+        Err(e) => {
+            tracing::error!("playback: {e}");
+            None
         }
     }
 }

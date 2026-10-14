@@ -22,6 +22,8 @@ USAGE: jellyroll-mock [OPTIONS]
   --version V         Jellyfin version to report (default 10.11.0)
   --no-quick-connect  Report Quick Connect as disabled
   --no-discovery      Don't answer LAN discovery on UDP 7359
+  --media FILE        Video every movie and episode streams (player testing)
+  --media-secs N      Its length in seconds (default 60)
 ";
 
 fn main() {
@@ -50,6 +52,8 @@ fn main() {
             "--version" => cfg.version = val("--version"),
             "--no-quick-connect" => cfg.quick_connect_enabled = false,
             "--no-discovery" => discover = false,
+            "--media" => cfg.media = Some(val("--media").into()),
+            "--media-secs" => cfg.media_secs = num(val("--media-secs")) as u32,
             "-h" | "--help" => {
                 print!("{USAGE}");
                 return;

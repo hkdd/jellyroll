@@ -31,6 +31,26 @@ double_buffer = false
 # above 1080p. The Settings page can change this, and its choice wins over
 # this file.
 ui_resolution = "native"
+# Switch the TV to the video's frame rate while it plays (23.976 fps at
+# 23.976 or 24 Hz, 25 at 50 Hz, 29.97 at 59.94 Hz) and back afterwards.
+# Settings can turn it off for each output resolution.
+match_refresh = true
+# Some TVs take a second or two to show a new mode; wait this long after
+# switching before playback starts so the beginning isn't missed (0-10000).
+refresh_switch_delay_ms = 0
+
+[audio]
+# Audio output, as mpv names it: "auto", "pipewire", "alsa/hdmi:CARD=PCH,DEV=0"...
+# `jellyroll --print-diagnostics` lists them. Settings can change this.
+device = "auto"
+# Send Dolby/DTS audio to the receiver undecoded (bitstream). Only for a
+# receiver or TV that decodes them; Settings sets it per output.
+passthrough = false
+# Formats sent undecoded when passthrough is on ("dts-hd" covers DTS).
+passthrough_codecs = "ac3,eac3,dts-hd,truehd"
+# Channels for decoded audio: "auto" (what the device reports), "stereo",
+# "5.1", "7.1".
+channels = "auto"
 
 [input]
 # HDMI-CEC: control jellyroll with the TV remote (needs a CEC-capable GPU
@@ -56,5 +76,6 @@ textures_mb = 512
 [debug]
 # Show the perf HUD at startup (F3 toggles).
 hud = false
-# Let Esc/Back on the top level quit (always on with --dev).
+# Offer "Exit to console" in the power menu (Back on the home screen);
+# always on with --dev.
 allow_exit = false

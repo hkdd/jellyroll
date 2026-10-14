@@ -154,7 +154,9 @@ impl Client {
     /// For endpoints that answer 204 No Content.
     pub async fn send_no_content<T>(&self, req: &Request<T>) -> Result<()> {
         let mut rb = self.request(req.method, &req.path);
-        if req.method != Method::Get && req.body.is_none() {
+        if let Some(body) = &req.body {
+            rb = rb.header("Content-Type", "application/json").body(body.clone());
+        } else if req.method != Method::Get {
             rb = rb.header("Content-Length", "0");
         }
         Self::execute(rb).await.map(|_| ())

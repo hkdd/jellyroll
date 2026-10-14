@@ -171,11 +171,17 @@ pub trait Renderer {
     fn fill_rect(&mut self, r: Rect, c: Color);
     fn fill_rrect(&mut self, r: Rect, radius: f32, c: Color);
     fn stroke_rrect(&mut self, r: Rect, radius: f32, width: f32, c: Color);
+    /// Connected line segments with round ends and joins (icons such as a
+    /// check mark).
+    fn polyline(&mut self, pts: &[Point], width: f32, c: Color);
     fn fill_gradient(&mut self, r: Rect, radius: f32, g: &Gradient);
     /// Soft drop shadow under a rounded rect. Pre-baked into a cached
     /// texture; never a per-frame blur.
     fn shadow(&mut self, r: Rect, radius: f32, blur: f32, c: Color);
     fn image(&mut self, img: ImageId, dst: Rect, radius: f32, opacity: f32);
+    /// Draws the `src` part of an image (in image pixels) into `dst`, e.g.
+    /// one tile of a trickplay sheet.
+    fn image_region(&mut self, img: ImageId, src: Rect, dst: Rect);
     /// Draws text with its top-left at `origin`. Shaping is cached by
     /// (text, style); static labels are never re-shaped.
     fn text(&mut self, text: &str, style: &TextStyle, origin: Point, c: Color) -> TextMetrics;

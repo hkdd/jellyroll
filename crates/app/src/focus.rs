@@ -81,7 +81,6 @@ impl FocusGraph {
 
     /// Explicit navigation edge, checked before the spatial search (e.g.
     /// wrapping at the end of a library grid row in M6).
-    #[allow(dead_code)]
     pub fn set_override(&mut self, from: NodeId, dir: Dir, to: NodeId) {
         self.overrides.insert((from, dir), to);
     }

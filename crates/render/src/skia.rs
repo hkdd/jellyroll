@@ -524,6 +524,17 @@ impl Renderer for SkiaRenderer {
         self.canvas().draw_rrect(rrect(r, radius), &p);
     }
 
+    fn polyline(&mut self, pts: &[Point], width: f32, c: Color) {
+        let mut p = paint(c);
+        p.set_style(sk::PaintStyle::Stroke);
+        p.set_stroke_width(width);
+        p.set_stroke_cap(sk::paint::Cap::Round);
+        let canvas = self.canvas();
+        for w in pts.windows(2) {
+            canvas.draw_line((w[0].x, w[0].y), (w[1].x, w[1].y), &p);
+        }
+    }
+
     fn fill_gradient(&mut self, r: Rect, radius: f32, g: &Gradient) {
         let end = if g.vertical { (r.x, r.bottom()) } else { (r.right(), r.y) };
         let colors = [sk_color(g.from), sk_color(g.to)];
@@ -598,6 +609,20 @@ impl Renderer for SkiaRenderer {
             .unwrap_or_default();
         p.set_shader(image.to_shader((sk::TileMode::Clamp, sk::TileMode::Clamp), sampling, &m));
         self.canvas().draw_rrect(rrect(dst, radius), &p);
+    }
+
+    fn image_region(&mut self, img: ImageId, src: Rect, dst: Rect) {
+        let Some(Some(entry)) = self.images.get(img.0 as usize) else { return };
+        let image = entry.image.clone();
+        let sampling = sk::SamplingOptions::new(sk::FilterMode::Linear, sk::MipmapMode::None);
+        let p = sk::Paint::default();
+        self.canvas().draw_image_rect_with_sampling_options(
+            &image,
+            Some((&sk_rect(src), sk::canvas::SrcRectConstraint::Strict)),
+            sk_rect(dst),
+            sampling,
+            &p,
+        );
     }
 
     fn text(&mut self, text: &str, style: &TextStyle, origin: Point, c: Color) -> TextMetrics {

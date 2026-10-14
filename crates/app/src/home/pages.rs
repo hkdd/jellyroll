@@ -18,8 +18,8 @@ pub enum Open {
     },
     Search,
     Settings,
-    /// Change the UI resolution (Settings).
-    UiResolution(crate::config::UiResolution),
+    /// A choice made in Settings.
+    Setting(Change),
     /// Direct-play an item (D19), from `start_ticks` (resume).
     Play {
         id: String,
@@ -27,6 +27,18 @@ pub enum Open {
         start_ticks: i64,
         title: String,
     },
+}
+
+/// A setting changed on the Settings page; HomeApp applies and saves it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Change {
+    UiResolution(crate::config::UiResolution),
+    /// Refresh-rate matching at the current output resolution.
+    MatchRefresh(bool),
+    AudioDevice(String),
+    /// Passthrough on the current audio device.
+    Passthrough(bool),
+    Channels(String),
 }
 
 /// Collects a page's requests while it handles input or data.

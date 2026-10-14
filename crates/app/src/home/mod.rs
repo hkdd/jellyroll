@@ -5,11 +5,15 @@
 //! which images and data it needs, and hands playback requests to the
 //! frame loop.
 
+mod blade;
 mod detail;
 mod library;
 pub mod model;
 mod osk;
 mod pages;
+pub mod player;
+pub mod playinfo;
+mod power_menu;
 mod search;
 mod server_entry;
 mod settings;
@@ -24,7 +28,7 @@ mod widgets;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use jellyroll_render::{Point, Renderer, TextStyle, Weight};
+use jellyroll_render::{Color, Point, Rect, Renderer, TextStyle, Weight};
 use jellyroll_video::va::DecodeCaps;
 
 use crate::config::UiResolution;
@@ -32,7 +36,7 @@ use crate::input::InputAction;
 use crate::net::{Cmd, Event, Fetch, Fetched, NetHandle, Status};
 use detail::DetailView;
 use library::LibraryView;
-use pages::{Ctx, Open};
+use pages::{Change, Ctx, Open};
 use search::SearchView;
 use server_entry::ServerEntry;
 use settings::SettingsView;
@@ -42,10 +46,11 @@ use textures::Textures;
 use view::HomeView;
 use widgets::{Viewport, Wants};
 
-/// Per-frame texture upload budget (spec 9).
-/// Per-frame image upload time: the frame's other work at 4K is ~2 ms on
-/// the reference HTPC, and the CPU budget is 4 ms (spec 2).
+/// Per-frame image upload time (spec 9): the frame's other work at 4K is
+/// ~2 ms on the reference HTPC, and the CPU budget is 4 ms (spec 2).
 const UPLOAD_BUDGET: Duration = Duration::from_micros(1500);
+/// How long a toast stays up.
+const TOAST_FOR: Duration = Duration::from_secs(6);
 /// Network events handled per loop iteration (bounds the work per frame).
 const EVENTS_PER_FRAME: usize = 64;
 /// How often image requests are rebuilt while images keep arriving.
@@ -75,6 +80,25 @@ pub struct PlayRequest {
     pub authorization: String,
     pub start_secs: f64,
     pub title: String,
+    /// Initial mpv `aid`/`sid` (from the server's default tracks).
+    pub audio_track: Option<String>,
+    pub sub_track: Option<String>,
+    /// Video frame rate, for refresh-rate matching.
+    pub fps: Option<f64>,
+    /// Filled from settings when the request is taken (`take_play`).
+    pub match_refresh: bool,
+    pub audio: AudioOut,
+}
+
+/// Audio output settings for a playback (config, then Settings).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AudioOut {
+    /// mpv `audio-device`; None: mpv's default.
+    pub device: Option<String>,
+    /// mpv `audio-spdif` (bitstream formats); None: decode everything.
+    pub spdif: Option<String>,
+    /// mpv `audio-channels`; None: mpv's default.
+    pub channels: Option<String>,
 }
 
 pub struct HomeApp {
@@ -91,10 +115,22 @@ pub struct HomeApp {
     next_id: u64,
     /// What the GPU decodes (probed once in the background).
     caps: Arc<OnceLock<Option<DecodeCaps>>>,
+    /// mpv's audio outputs (probed once in the background).
+    audio_devices: Arc<OnceLock<Vec<crate::audio::AudioDevice>>>,
     /// Device facts for Settings (versions, GPU, display).
     about: Vec<(String, String)>,
-    /// Stream fetch in flight: (request id, start, title).
-    play_req: Option<(u64, i64, String)>,
+    /// Play fetch in flight (request id).
+    play_req: Option<u64>,
+    /// The player while something plays (M7).
+    player: Option<player::PlayerUi>,
+    /// Trickplay sheets last requested (texture keys).
+    player_wants: Vec<u64>,
+    /// A short message over the page (e.g. why something won't play).
+    toast: Option<(String, Instant)>,
+    /// Open over everything else (spec 5.5).
+    power: Option<power_menu::PowerMenu>,
+    /// Exit chosen in the power menu, for the frame loop.
+    exit_requested: bool,
     play: Option<PlayRequest>,
     /// The Quick Connect screen the password form came from.
     qc: Option<Status>,
@@ -115,10 +151,51 @@ pub struct HomeApp {
     purge_textures: bool,
 }
 
-/// The UI resolution in effect and where a choice made in Settings is saved.
+/// The UI resolution in effect, the other choices made in Settings, the
+/// config defaults they override, and where the choices are saved.
 pub struct UiSetting {
     pub resolution: UiResolution,
+    pub prefs: crate::ui_prefs::UiPrefs,
+    pub display: crate::config::Display,
+    pub audio: crate::config::Audio,
     pub save_to: Option<std::path::PathBuf>,
+    /// The power menu offers exiting to the console (dev, --allow-exit).
+    pub allow_exit: bool,
+}
+
+impl UiSetting {
+    fn save(&self) {
+        if let Some(p) = &self.save_to {
+            crate::ui_prefs::save(p, &self.prefs);
+        }
+    }
+
+    /// Refresh-rate matching at an output resolution ("3840x2160").
+    pub fn match_refresh(&self, res: &str) -> bool {
+        self.prefs.match_refresh.get(res).copied().unwrap_or(self.display.match_refresh)
+    }
+
+    pub fn audio_device(&self) -> String {
+        self.prefs.audio_device.clone().unwrap_or_else(|| self.audio.device.clone())
+    }
+
+    pub fn passthrough(&self, device: &str) -> bool {
+        self.prefs.passthrough.get(device).copied().unwrap_or(self.audio.passthrough)
+    }
+
+    pub fn audio_channels(&self) -> String {
+        self.prefs.audio_channels.clone().unwrap_or_else(|| self.audio.channels.clone())
+    }
+
+    pub fn audio_out(&self) -> AudioOut {
+        let device = self.audio_device();
+        let some = |v: String| (!v.is_empty() && v != "auto").then_some(v);
+        AudioOut {
+            spdif: self.passthrough(&device).then(|| self.audio.passthrough_codecs.clone()),
+            channels: some(self.audio_channels()),
+            device: some(device),
+        }
+    }
 }
 
 impl HomeApp {
@@ -135,6 +212,17 @@ impl HomeApp {
         let _ = std::thread::Builder::new().name("va-probe".into()).spawn(move || {
             let _ = c.set(jellyroll_video::va::probe().ok());
         });
+        // mpv's audio outputs, for Settings (probing takes a moment).
+        let audio_devices = Arc::new(OnceLock::new());
+        let d = audio_devices.clone();
+        let _ = std::thread::Builder::new().name("audio-probe".into()).spawn(move || {
+            let list = crate::audio::devices().unwrap_or_else(|e| {
+                tracing::warn!("{e}");
+                Vec::new()
+            });
+            tracing::info!(n = list.len(), "audio outputs found");
+            let _ = d.set(list);
+        });
         let mut a = Self {
             net,
             screen: Screen::Blank,
@@ -147,8 +235,14 @@ impl HomeApp {
             last_wants: Vec::new(),
             next_id: 0,
             caps,
+            audio_devices,
             about,
             play_req: None,
+            player: None,
+            player_wants: Vec::new(),
+            toast: None,
+            power: None,
+            exit_requested: false,
             play: None,
             qc: None,
             load_work: 0,
@@ -212,10 +306,9 @@ impl HomeApp {
     fn open(&mut self, o: Open, now: Instant) {
         let vp = self.vp;
         let page = match o {
-            Open::Play { id, media_source, start_ticks, title } => {
-                let req =
-                    self.with_ctx(now, |_, ctx| ctx.fetch(Fetch::Stream { id, media_source }));
-                self.play_req = Some((req, start_ticks, title));
+            Open::Play { id, start_ticks, .. } => {
+                let req = self.with_ctx(now, |_, ctx| ctx.fetch(Fetch::Play { id, start_ticks }));
+                self.play_req = Some(req);
                 return;
             }
             Open::Library { id, title, collection } => self.with_ctx(now, |_, ctx| {
@@ -230,11 +323,19 @@ impl HomeApp {
                     .as_ref()
                     .map(|h| (h.data.user_name.clone(), h.data.server_name.clone()))
                     .unwrap_or_default();
-                let res = self.resolution_choice();
-                Page::Settings(Box::new(SettingsView::new(vp, &user, &server, self.about(), res)))
+                let devices = self.audio_devices.get().cloned().unwrap_or_default();
+                let values = self.settings_values();
+                Page::Settings(Box::new(SettingsView::new(
+                    vp,
+                    &user,
+                    &server,
+                    self.about(),
+                    values,
+                    devices,
+                )))
             }
-            Open::UiResolution(r) => {
-                self.set_resolution(r);
+            Open::Setting(c) => {
+                self.apply_setting(c);
                 return;
             }
         };
@@ -251,12 +352,45 @@ impl HomeApp {
         })
     }
 
+    /// What Settings shows.
+    fn settings_values(&self) -> settings::Values {
+        let device = self.ui.audio_device();
+        settings::Values {
+            resolution: self.resolution_choice(),
+            match_refresh: self.ui.match_refresh(&self.output_key()),
+            output: self.output_key(),
+            passthrough: self.ui.passthrough(&device),
+            audio_device: device,
+            channels: self.ui.audio_channels(),
+        }
+    }
+
+    fn apply_setting(&mut self, c: Change) {
+        tracing::info!(?c, "setting changed");
+        match c {
+            Change::UiResolution(r) => self.set_resolution(r),
+            Change::MatchRefresh(on) => {
+                let key = self.output_key();
+                self.ui.prefs.match_refresh.insert(key, on);
+            }
+            Change::AudioDevice(d) => self.ui.prefs.audio_device = Some(d),
+            Change::Passthrough(on) => {
+                let d = self.ui.audio_device();
+                self.ui.prefs.passthrough.insert(d, on);
+            }
+            Change::Channels(ch) => self.ui.prefs.audio_channels = Some(ch),
+        }
+        self.ui.save();
+        let values = self.settings_values();
+        if let Some(Page::Settings(v)) = self.stack.last_mut() {
+            v.set_values(values);
+        }
+    }
+
     fn set_resolution(&mut self, r: UiResolution) {
         let before = self.ui.resolution.render_scale(self.fb.1);
         self.ui.resolution = r;
-        if let Some(p) = &self.ui.save_to {
-            crate::ui_prefs::save(p, &crate::ui_prefs::UiPrefs { ui_resolution: Some(r) });
-        }
+        self.ui.prefs.ui_resolution = Some(r);
         let after = r.render_scale(self.fb.1);
         if after != before {
             tracing::info!(?r, render_scale = after, "UI resolution changed");
@@ -373,19 +507,26 @@ impl HomeApp {
     }
 
     fn fetched(&mut self, id: u64, result: Fetched, now: Instant) -> bool {
-        if let Some((req, start_ticks, title)) = self.play_req.take() {
-            if req == id {
-                if let Fetched::Stream { url, authorization } = result {
-                    self.play = Some(PlayRequest {
-                        url,
-                        authorization,
-                        start_secs: start_ticks as f64 / 1e7,
-                        title,
-                    });
+        if self.play_req == Some(id) {
+            self.play_req = None;
+            match result {
+                Fetched::Play(p) => {
+                    let (ui, req) = player::PlayerUi::new(*p, now);
+                    self.player = Some(ui);
+                    self.play = Some(req);
                 }
-                return true;
+                Fetched::Failed(e) => {
+                    tracing::warn!("can't play: {e}");
+                    self.toast = Some((e, now + TOAST_FOR));
+                }
+                _ => {}
             }
-            self.play_req = Some((req, start_ticks, title));
+            return true;
+        }
+        if let Some(pl) = &mut self.player
+            && pl.on_fetched(id, &result)
+        {
+            return true;
         }
         let mut used = false;
         self.with_ctx(now, |me, ctx| {
@@ -403,11 +544,105 @@ impl HomeApp {
 
     /// A playback request for the frame loop, once its stream URL is known.
     pub fn take_play(&mut self) -> Option<PlayRequest> {
-        self.play.take()
+        let mut req = self.play.take()?;
+        req.match_refresh = self.ui.match_refresh(&self.output_key());
+        req.audio = self.ui.audio_out();
+        Some(req)
+    }
+
+    /// The output resolution, as refresh-matching choices are keyed.
+    fn output_key(&self) -> String {
+        format!("{}x{}", self.fb.0, self.fb.1)
+    }
+
+    /// Something is playing through the player UI.
+    pub fn has_player(&self) -> bool {
+        self.player.is_some()
+    }
+
+    /// Input during playback.
+    pub fn player_action(
+        &mut self,
+        a: InputAction,
+        pb: &mut crate::playback::Playback,
+        now: Instant,
+    ) -> player::Outcome {
+        let out = self.with_ctx(now, |me, ctx| match me.player.as_mut() {
+            Some(pl) => pl.on_action(a, pb, now, ctx),
+            None => player::Outcome::Stop,
+        });
+        self.update_player_wants();
+        out
+    }
+
+    /// Per-frame playback work (reports, countdowns, the end). On `Next`,
+    /// `take_play` has the next episode's request.
+    pub fn player_tick(
+        &mut self,
+        pb: &mut crate::playback::Playback,
+        now: Instant,
+    ) -> player::Tick {
+        let t = self.with_ctx(now, |me, ctx| match me.player.as_mut() {
+            Some(pl) => pl.tick(pb, now, ctx),
+            None => player::Tick::Finished,
+        });
+        if let player::Tick::Next(n) = &t {
+            let (ui, req) = player::PlayerUi::new((**n).clone(), now);
+            tracing::info!(title = %req.title, "playing the next episode");
+            self.player = Some(ui);
+            self.play = Some(req);
+        }
+        self.update_player_wants();
+        t
+    }
+
+    fn update_player_wants(&mut self) {
+        let Some(pl) = &self.player else { return };
+        let jobs = pl.wants();
+        let keys: Vec<u64> =
+            jobs.iter().filter(|j| !self.textures.known(j.key)).map(|j| j.key).collect();
+        if keys != self.player_wants {
+            let jobs = jobs.into_iter().filter(|j| keys.contains(&j.key)).collect();
+            if self.net.send(Cmd::WantImages(jobs)) {
+                self.player_wants = keys;
+            }
+        }
+    }
+
+    pub fn player_overlay_visible(
+        &self,
+        now: Instant,
+        st: &jellyroll_video::PlaybackState,
+    ) -> bool {
+        self.player.as_ref().is_some_and(|p| p.overlay_visible(now, st))
+            || self.textures.uploads_pending()
+    }
+
+    pub fn player_deadline(&self, now: Instant) -> Option<Instant> {
+        self.player.as_ref().and_then(|p| p.next_deadline(now))
+    }
+
+    /// Draws the player's overlay (and uploads any trickplay sheets).
+    pub fn draw_player<R: Renderer>(
+        &mut self,
+        r: &mut R,
+        st: &jellyroll_video::PlaybackState,
+        now: Instant,
+        safe_area: f32,
+    ) {
+        if self.textures.uploads_pending() {
+            self.textures.pump(r, UPLOAD_BUDGET);
+        }
+        self.textures.begin_frame();
+        if let Some(pl) = &mut self.player {
+            pl.draw(r, &mut self.textures, st, now, safe_area);
+        }
     }
 
     /// Playback ended: refresh what it changed (resume points, watched).
     pub fn playback_finished(&mut self, now: Instant) {
+        self.player = None;
+        self.player_wants.clear();
         self.send_all(vec![Cmd::Refresh]);
         self.with_ctx(now, |me, ctx| {
             if let Some(Page::Detail(d)) = me.stack.last_mut() {
@@ -429,6 +664,29 @@ impl HomeApp {
     /// Applies an action. Returns true if it was used (a redraw is due and
     /// Back must not quit the app).
     pub fn on_action(&mut self, a: InputAction, now: Instant) -> bool {
+        if let Some(m) = &mut self.power {
+            match m.on_action(a) {
+                power_menu::Outcome::Stay => {}
+                power_menu::Outcome::Close => self.power = None,
+                power_menu::Outcome::Exit => self.exit_requested = true,
+            }
+            return true;
+        }
+        let used = self.screen_action(a, now);
+        // Back with nothing left to go back to: the power menu.
+        if !used && a == InputAction::Back {
+            self.power = Some(power_menu::PowerMenu::new(self.ui.allow_exit));
+            return true;
+        }
+        used
+    }
+
+    /// Exit to the console was chosen (dev only).
+    pub fn take_exit(&mut self) -> bool {
+        std::mem::take(&mut self.exit_requested)
+    }
+
+    fn screen_action(&mut self, a: InputAction, now: Instant) -> bool {
         match &mut self.screen {
             Screen::Entry(e) => {
                 let (used, cmd) = e.on_action(a);
@@ -492,7 +750,7 @@ impl HomeApp {
                     Some(Page::Library(v)) => v.on_action(a, now, ctx),
                     Some(Page::Detail(v)) => v.on_action(a, now, ctx),
                     Some(Page::Search(v)) => v.on_action(a, now, ctx),
-                    Some(Page::Settings(v)) => v.on_action(a, ctx),
+                    Some(Page::Settings(v)) => v.on_action(a, now, ctx),
                     None => me.home.as_mut().is_some_and(|h| h.on_action(a, now, ctx)),
                 });
                 if !used && a == InputAction::Back && !self.stack.is_empty() {
@@ -514,11 +772,21 @@ impl HomeApp {
             return false;
         }
         let tex = &self.textures;
-        let mut dirty = match self.stack.last_mut() {
-            Some(Page::Detail(v)) => v.update(now, tex),
-            Some(_) => false,
-            None => self.home.as_mut().is_some_and(|h| h.update(now, tex)),
-        };
+        let mut devices_arrived = self.power.as_mut().is_some_and(|m| m.update());
+        if let (Some(Page::Settings(v)), Some(list)) =
+            (self.stack.last_mut(), self.audio_devices.get())
+            && !v.has_devices()
+            && !list.is_empty()
+        {
+            v.set_devices(list.clone());
+            devices_arrived = true;
+        }
+        let mut dirty = devices_arrived
+            || match self.stack.last_mut() {
+                Some(Page::Detail(v)) => v.update(now, tex),
+                Some(_) => false,
+                None => self.home.as_mut().is_some_and(|h| h.update(now, tex)),
+            };
         dirty |= self.with_ctx(now, |me, ctx| match me.stack.last_mut() {
             Some(Page::Search(v)) => v.update(now, ctx),
             _ => false,
@@ -564,17 +832,29 @@ impl HomeApp {
             Some(Page::Library(v)) => v.is_animating(now),
             Some(Page::Detail(v)) => v.is_animating(now),
             Some(Page::Search(v)) => v.is_animating(now),
-            Some(Page::Settings(_)) => false,
+            Some(Page::Settings(v)) => v.is_animating(now),
             None => self.home.as_ref().is_some_and(|h| h.is_animating(now)),
         }
     }
 
     /// When the loop must wake even without input (debounced search).
     pub fn next_deadline(&self) -> Option<Instant> {
-        match self.stack.last() {
+        let page = match self.stack.last() {
             _ if self.uploaded => Some(self.wants_at),
             Some(Page::Search(v)) if matches!(self.screen, Screen::Browse) => v.next_deadline(),
             _ => None,
+        };
+        // The toast's end needs a redraw too, as does a power request's
+        // answer.
+        let now = Instant::now();
+        let toast = self.toast.as_ref().map(|t| t.1);
+        let toast = match (toast, self.power.as_ref().and_then(|m| m.next_deadline(now))) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        match (page, toast) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
         }
     }
 
@@ -647,6 +927,26 @@ impl HomeApp {
                     theme::TEXT,
                 );
             }
+        }
+        if let Some((msg, until)) = &self.toast {
+            if now < *until {
+                let (lw, lh) = r.logical_size();
+                let style = TextStyle::new(24.0, Weight::Bold).max_width(lw * 0.6);
+                let m = r.measure_text(msg, &style);
+                let rect = Rect::new(
+                    (lw - m.width) / 2.0 - 24.0,
+                    lh - lh * safe - m.height - 60.0,
+                    m.width + 48.0,
+                    m.height + 28.0,
+                );
+                r.fill_rrect(rect, 12.0, Color::rgba(14, 16, 22, 240));
+                r.text(msg, &style, Point::new(rect.x + 24.0, rect.y + 14.0), theme::NOTICE);
+            } else {
+                self.toast = None;
+            }
+        }
+        if let Some(m) = &self.power {
+            m.draw(r);
         }
     }
 }

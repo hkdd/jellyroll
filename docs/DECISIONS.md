@@ -659,9 +659,185 @@ Decided:
   and GPU p99 ~6.5 ms, with steady 60 fps, 0 missed vsyncs and 0
   allocating frames; frames with nothing new to load are within budget.
 
+## Decisions made in M7
+
+**D45: Playback requests: direct play only, verified API.** Checked
+against the pinned 12.2 spec (D31): `POST /Items/{id}/PlaybackInfo` with
+a device profile allowing every codec in the containers mpv plays and
+`EnableTranscoding=false` (D19), then `/Videos/{id}/stream?static=true`.
+A media source the server won't send as-is is a clear error ("transcoding
+is off"), never a transcode. The item fetch brings `Chapters` and
+`Trickplay`; `/MediaSegments/{id}` (10.10+) the intro/recap/preview/
+commercial/outro ranges (missing on older servers: no skip buttons);
+`/Shows/{id}/Episodes?startItemId=&limit=2` the next episode.
+
+**D46: Tracks are chosen by the app, mapped to mpv by order.** The
+server's default audio/subtitle (from the user's language preferences) is
+applied at load through mpv's `aid`/`sid` (spec 7.1: `sub-auto=no`).
+Jellyfin indexes streams globally; mpv numbers each type from 1 in stream
+order, so an embedded track's mpv id is its position among embedded tracks
+of its type. External subtitles (sidecar files the server delivers with
+`DeliveryMethod=External`) are added with `sub-add` when chosen and take
+the next ids. All track and seek changes go through mpv's async commands
+(D20: the render thread never waits for mpv). Subtitles are styled for
+the couch (larger, outlined, sized to the video).
+
+**D47: Playback reports go through a persistent retry queue.** Start,
+progress (every 10 s and on pause, seek or track change) and stopped
+(EOF reports the full duration, so the server marks the item watched) are
+queued on the network thread, sent in order, and retried with backoff
+(5 s to 2 min). Consecutive progress reports for one session coalesce.
+The queue is written to `~/.local/share/jellyroll/pending-reports.json`
+while anything is unsent, so quitting offline doesn't lose where you
+stopped; it is sent on the next start once signed in. Reports the server
+rejects for good (4xx other than 401/408/429) are dropped and logged.
+Found while testing: `Client::send_no_content` didn't send JSON bodies;
+fixed, with an end-to-end test against the mock.
+
+**D48: The player UI lives in the browsing app; the frame loop owns
+mpv.** `PlayerUi` (home/player.rs) has the network, image cache and page
+stack it needs; the frame loop keeps the GL context and mpv (`Playback`)
+and asks the UI what to do each frame. Keys: Left/Right scrub (held:
+10 s, then 30 s, then 60 s steps), committed 0.7 s after the last press
+or with Select; trickplay thumbnails above the target (tile sheets through
+the image pipeline, drawn with the new `Renderer::image_region`); Down or
+Menu opens audio and subtitle lists; Select skips the current segment,
+plays the next episode now, or pauses; Info shows codec, decoder, play
+method and drops; Next/Prev jump between chapters; Back closes, cancels,
+dismisses the next-episode card, or stops. The next-episode card appears
+at the credits segment (else 30 s before the end) with a 10 s countdown in
+playback time, then plays it without returning to the page; Back on the
+card plays to the end and stops. `--play FILE` keeps the minimal M3 OSD.
+
+**D49: M7 HTPC results and follow-ups.** All M7 walkthrough steps passed
+on the HTPC (movie: OSD, scrub, tracks, info, resume point on the server;
+episode: skip, next-up autoplay, watched state); the offline step was
+skipped. Fixes from the run:
+- Rows: Left and Right stay in the focused row, and Right on the last card
+  wraps to the row's first card (user preference). The page's spatial
+  graph used to pick the nearest card of the next row.
+- Series page: selecting a season loaded its episodes below the fold, so
+  nothing visibly changed. Focus now moves to the season's episodes when
+  they arrive (unless the user moved off the seasons meanwhile).
+- mpv logged `OpenGL error INVALID_OPERATION` on every playback. Our GPU
+  frame timer held a `GL_TIME_ELAPSED` query open across mpv's render, and
+  mpv times its own passes with the same query type (only one may be
+  active). The timer now starts after mpv's frame, so it measures our
+  drawing only; with mpv's `gpu-debug` on, no GL errors remain. Timestamp
+  queries would include mpv's work, but on llvmpipe they read near zero,
+  so the measured method stays as in the M6 benchmarks.
+
+Verified on the HTPC: season select, row wrap, and 0 `INVALID_OPERATION`
+lines in a playback log. M7 is accepted.
+
+**D50: Refresh-rate matching through SDL (spec 5.2, open question 1).**
+SDL 3.4.18's KMSDRM backend switches modes: `SDL_SetWindowFullscreenMode`
+records the mode and the next swap does `drmModeSetCrtc` with it, so no
+native DRM backend is needed for this. The frame rate comes from the
+server's stream info (`AverageFrameRate`, else `RealFrameRate`) before mpv
+starts, so the switch happens first: black frames until the modeset is
+presented, then `display.refresh_switch_delay_ms` (default 0) for slow
+TVs, then mpv. The pick (`refresh::pick`) keeps the current resolution
+and wants a refresh that is a whole multiple of the frame rate: exact
+(< 0.05%) before close (< 0.15%: 24 Hz for 23.976 when there is no
+23.976 Hz mode), then the preferred multiple (film at its own rate, other
+rates at the smallest multiple of at least 47 Hz: 25 to 50, 29.97 to
+59.94). Nothing fits: play at the current mode. The mode is kept when
+the next episode autoplays at the same rate, and the desktop mode comes
+back when the UI does. `video-sync=display-resample` only when the mode
+matches, else `audio` (spec 7.1). On/off is remembered per output
+resolution in `ui.json` (default on, config `display.match_refresh`).
+Not possible in a desktop window (`--dev`).
+
+**D51: Audio output, passthrough, power menu.** mpv lists outputs
+(`audio-device-list`, from a short-lived mpv with no video, probed in the
+background at startup). Settings picks the device, passthrough per
+device (`audio-spdif`, default formats `ac3,eac3,dts-hd,truehd`) and
+channels (`audio-channels`); they apply from the next video. Passthrough
+over PipeWire needs the sink configured for IEC958; an ALSA HDMI device
+(`alsa/hdmi:...`) passes it straight through, at the cost of exclusive
+use. The power menu opens with Back where there is nothing left to go
+back to (it replaces "Back at the top quits", which is now its Exit item
+with `--allow-exit`/`--dev`). It focuses Cancel first. Restart and Shut
+down call logind's `Reboot`/`PowerOff` non-interactively over D-Bus
+(`zbus`, its own short-lived runtime per call so the render thread never
+waits); `CanReboot`/`CanPowerOff` answers of "challenge"/"no" are
+explained on screen. logind's default policy already allows the active
+local session; `docs/polkit-jellyroll.rules` (installed by
+`scripts/install.sh`) also covers "other sessions are open" (SSH).
+
+**D52: Display hotplug.** KMSDRM does not report connector changes, so a
+thread polls `/sys/class/drm/card*-*/status` every second (cached values;
+reading does not probe the TV). All connectors disconnected: playback
+pauses (like CEC standby). Connected again: the current mode is set again
+(`SDL_SetWindowFullscreenMode` with the same mode makes KMSDRM recreate
+its surfaces and modeset on the next swap) and the screen is redrawn.
+Rendering continues while disconnected: the kernel keeps the CRTC
+running, so page flips still complete. To be confirmed on the HTPC with
+a TV power cycle (many TVs keep the hotplug line up in standby, in which
+case nothing changes at all).
+
+**D53: One way to choose (request after the M8 run).** A choice
+among several values opens a list that slides in from the right (`Blade`:
+dimmed page, current value marked, opens on it, Up/Down wrap, Select
+picks, Back/Left closes): Settings' interface resolution, audio output and
+channels; the library's Sort and Genre. Buttons that open one end with
+"›". On/off settings are toggles with a switch drawn in the button and
+flip on Select: match refresh rate, passthrough, the library's Unwatched
+and Favorites. Nothing cycles through values any more (cycling >10 audio
+outputs was slow and unforgiving). The player's audio/subtitle panel was
+already a list on the right.
+
+**D54: Audio after a TV power cycle.** On the HTPC, after the TV was
+turned off and on, the movie kept playing with no sound: the connector
+never reported a disconnect, but the HDMI audio path (TV/soundbar) was
+re-established, and mpv's open stream stayed silent. The hotplug thread
+also fingerprints the HDMI audio sinks' ELD (`/proc/asound/card*/eld#*`)
+and reports a change; during playback, a change (or a display reconnect)
+makes mpv reopen its audio output (`ao-reload`). To be confirmed on the
+HTPC.
+
+**D55: Multi-select genres, reversible sort (by request).** The
+Genre list is checkboxes: Select ticks or unticks and the list stays open;
+closing it (Back) applies the selection, so the grid reloads once, not per
+tick. It opens with the selected genres first (above a divider) so they
+are easy to untick, and "Clear all" above them when two or more are
+selected (it clears and closes). Several genres show items in any of them
+(Jellyfin's `genres=A|B`). The Sort list starts with a "Reverse order"
+checkbox above the sorts; the A-Z column is hidden while the name sort is
+reversed (the jump index assumes ascending names). The bar shows "Sort:
+Name, reversed" and "Genres: Drama +2".
+
+**D56: Browsing gaps found on the HTPC.** (1) A description cut to
+three lines can take focus (Up from the buttons) and then grows in place
+to the full text over the page (D57). (2) People are selectable: a
+person's page shows their biography and their movies and shows
+(`/Items?personIds=`, newest first); no Play or Mark watched there. (3)
+Playlists and collections (box sets, folders) open a page listing what
+they contain (`/Playlists/{id}/Items`, `/Items?parentId=`); they used to
+open an empty item page. (4) Watched items get a check mark in an accent
+circle, top right of the card, everywhere cards are drawn (the font has
+no check glyph; the renderer gained `polyline`).
+
+**D57: The description expands where it is (chosen after review).** A More
+button read as unrelated to the text. Of three options (focus it and open
+a side panel; focus it and Enter expands it in place; focus alone expands
+it), the last was chosen: the cut description is a focus-graph node
+above the buttons; on focus it grows (180 ms) to the whole text on a dark
+panel (no outline), drawn over the buttons and rows, and shrinks
+when focus leaves. Down goes back to where focus came from, not the
+spatially nearest button. Short descriptions are not focusable.
+
+**D58: M8 status at merge.** Verified on the HTPC: refresh-rate
+matching (24p plays at 24 Hz), the power menu (Restart reboots), surviving
+a TV power cycle (playback continued). Open: sound after a TV power cycle
+with the ELD-triggered audio reopen (D54), and passthrough to a receiver
+(no Dolby/DTS-capable receiver tested yet). Merged with M7 in one PR.
+
 ## Dependency approvals
 
 | Crate | Status |
 |---|---|
 | `toml` | Approved 2026-10-13 (D11) |
 | `tokio`, `reqwest` (rustls), `serde_json`, `image`, `fast_image_resize`, `redb` | Listed in spec §3; versions in `docs/VERSIONS.md` (M5) |
+| `zbus` | Listed in spec §3 (logind power actions); version in `docs/VERSIONS.md` (M8) |

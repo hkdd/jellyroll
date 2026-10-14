@@ -16,7 +16,8 @@ use super::status::wrap;
 use super::strings as s;
 use super::textures::Textures;
 use super::theme::{NOTICE, TEXT, TEXT_DIM};
-use super::widgets::{self, Backdrop, RowList, Viewport, Wants};
+use super::widgets::{self, Backdrop, RowList, Step, Viewport, Wants};
+use crate::anim::Tween;
 use crate::focus::{Dir, FocusGraph, NodeId};
 use crate::input::InputAction;
 use crate::net::{Fetch, Fetched};
@@ -24,6 +25,10 @@ use crate::net::{Fetch, Fetched};
 const ROWS_TOP: f32 = 700.0;
 const BUTTONS_Y: f32 = 590.0;
 const BUTTON_H: f32 = 52.0;
+/// The overview's node in the focus graph (buttons are 0.., cards higher).
+const OVERVIEW_NODE: NodeId = 1 << 20;
+const EXPAND_IN: std::time::Duration = std::time::Duration::from_millis(180);
+const EXPAND_OUT: std::time::Duration = std::time::Duration::from_millis(120);
 const TEXT_W: f32 = 1150.0;
 
 const TITLE: TextStyle = TextStyle::new(56.0, Weight::Bold).max_width(TEXT_W);
@@ -66,9 +71,27 @@ pub struct DetailView {
     season_title: String,
     seasons_req: Option<u64>,
     episodes_req: Option<u64>,
+    /// A season was selected: focus its episodes when they arrive (they
+    /// are below the fold, so otherwise nothing visible changes).
+    focus_episodes: bool,
     similar_req: Option<u64>,
+    /// A person's movies and shows, or what a playlist/collection holds.
+    contents: Vec<Card>,
+    contents_req: Option<u64>,
     toggle_req: Option<u64>,
     overview: Option<Vec<String>>,
+    /// The overview didn't fit in its lines: it can take focus, and then
+    /// shows in full over the page (D57).
+    overview_cut: bool,
+    /// The whole overview, wrapped (for the expanded view).
+    overview_full: Vec<String>,
+    /// Where the overview is on the page (its focus-graph node).
+    overview_rect: Rect,
+    overview_focus: bool,
+    /// Where focus came to the overview from: Down goes back there.
+    overview_from: NodeId,
+    /// 0 collapsed .. 1 expanded.
+    expand: Tween,
     /// Decode warning, filled once the detail and the GPU caps are known.
     warning: Option<String>,
     unsupported: Vec<bool>,
@@ -102,9 +125,18 @@ impl DetailView {
             season_title: s::EPISODES.into(),
             seasons_req: None,
             episodes_req: None,
+            focus_episodes: false,
             similar_req: None,
+            contents: Vec::new(),
+            contents_req: None,
             toggle_req: None,
             overview: None,
+            overview_cut: false,
+            overview_full: Vec::new(),
+            overview_rect: Rect::default(),
+            overview_focus: false,
+            overview_from: 0,
+            expand: Tween::settled(0.0, now),
             warning: None,
             unsupported: Vec::new(),
         }
@@ -130,6 +162,7 @@ impl DetailView {
         let Some(d) = &self.detail else { return };
         let mut b = Vec::new();
         let playable = matches!(d.card.kind, Kind::Movie | Kind::Episode | Kind::Other);
+        let watchable = d.card.kind != Kind::Person;
         if playable {
             if d.resume_ticks > 0 {
                 let label = format!("{}{}", s::RESUME_PREFIX, ticks_to_hms(d.resume_ticks));
@@ -139,10 +172,12 @@ impl DetailView {
                 b.push((Action::Play { start_ticks: 0 }, s::PLAY.into()));
             }
         }
-        b.push((
-            Action::Watched,
-            if d.played { s::MARK_UNWATCHED } else { s::MARK_WATCHED }.into(),
-        ));
+        if watchable {
+            b.push((
+                Action::Watched,
+                if d.played { s::MARK_UNWATCHED } else { s::MARK_WATCHED }.into(),
+            ));
+        }
         b.push((
             Action::Favorite,
             if d.favorite { s::REMOVE_FAVORITE } else { s::ADD_FAVORITE }.into(),
@@ -173,6 +208,19 @@ impl DetailView {
 
     fn set_rows(&mut self, now: Instant) {
         let mut rows = Vec::new();
+        if !self.contents.is_empty() {
+            let title = match self.detail.as_ref().map(|d| d.card.kind) {
+                Some(Kind::Person) => s::FILMOGRAPHY,
+                Some(Kind::Playlist) => s::IN_PLAYLIST,
+                _ => s::IN_COLLECTION,
+            };
+            rows.push(Row {
+                key: "contents".into(),
+                title: title.into(),
+                shape: Shape::Poster,
+                cards: self.contents.clone(),
+            });
+        }
         if !self.seasons.is_empty() {
             rows.push(Row {
                 key: "seasons".into(),
@@ -216,13 +264,26 @@ impl DetailView {
         self.rebuild_graph();
     }
 
+    /// Focus the episodes row: the episode in progress, else the first.
+    fn focus_episode_row(&mut self, now: Instant) {
+        let Some(r) = self.rows.rows.iter().position(|r| r.key == "episodes") else { return };
+        let c = self.episodes.iter().position(|e| e.progress.is_some()).unwrap_or(0);
+        self.rows.take_focus((r, c), &self.vp, now);
+        self.rebuild_graph();
+    }
+
     fn rebuild_graph(&mut self) {
         let mut nodes = self.rows.nodes(&self.vp);
         if self.buttons_ready {
             nodes.extend(self.buttons.iter().enumerate().map(|(i, b)| (i as NodeId, b.rect)));
         }
+        if self.overview_cut && self.overview_rect.w > 0.0 {
+            nodes.push((OVERVIEW_NODE, self.overview_rect));
+        }
         self.graph.set_nodes(nodes);
+        self.graph.set_override(OVERVIEW_NODE, Dir::Down, self.overview_from);
         let id = match self.button_focus {
+            _ if self.overview_focus => OVERVIEW_NODE,
             Some(i) => i as NodeId,
             None => widgets::card_node(self.rows.focus.0, self.rows.focus.1),
         };
@@ -231,9 +292,29 @@ impl DetailView {
 
     pub fn on_action(&mut self, a: InputAction, now: Instant, ctx: &mut Ctx) -> bool {
         if let Some(dir) = Dir::from_action(a) {
-            let step = self.rows.step(dir, &self.vp);
-            let Some(id) = step.or_else(|| self.graph.navigate(dir)) else { return false };
+            let from = self.graph.focused();
+            let id = match self.rows.step(dir, &self.vp) {
+                Step::To(id) => id,
+                Step::Stay => return true,
+                Step::Free => match self.graph.navigate(dir) {
+                    Some(id) => id,
+                    None => return false,
+                },
+            };
+            let to_overview = id == OVERVIEW_NODE;
+            if to_overview && let Some(f) = from {
+                self.overview_from = f;
+            }
+            if to_overview != self.overview_focus {
+                self.overview_focus = to_overview;
+                let d = if to_overview { EXPAND_IN } else { EXPAND_OUT };
+                self.expand.retarget(f32::from(u8::from(to_overview)), now, d);
+            }
             match widgets::card_of(id) {
+                _ if to_overview => {
+                    self.button_focus = None;
+                    self.rows.release_focus(now);
+                }
                 Some(rc) => {
                     self.button_focus = None;
                     self.rows.take_focus(rc, &self.vp, now);
@@ -248,6 +329,9 @@ impl DetailView {
         }
         if a != InputAction::Select {
             return false;
+        }
+        if self.overview_focus {
+            return true;
         }
         let Some(d) = &self.detail else { return false };
         if let Some(i) = self.button_focus {
@@ -282,9 +366,10 @@ impl DetailView {
                     self.season_title = card.title.clone();
                     self.episodes_req =
                         Some(ctx.fetch(Fetch::Episodes { series, season: card.id.clone() }));
+                    self.focus_episodes = true;
                 }
             }
-            (_, Kind::Person | Kind::Library) => return false,
+            (_, Kind::Library) => return false,
             _ => ctx.open = Some(Open::Detail { id: card.id.clone() }),
         }
         true
@@ -315,6 +400,17 @@ impl DetailView {
                             }
                             _ => {}
                         }
+                        let id = d.card.id.clone();
+                        self.contents_req = match d.card.kind {
+                            Kind::Person => Some(ctx.fetch(Fetch::Filmography(id))),
+                            Kind::Playlist => {
+                                Some(ctx.fetch(Fetch::Contents { id, playlist: true }))
+                            }
+                            Kind::Folder => {
+                                Some(ctx.fetch(Fetch::Contents { id, playlist: false }))
+                            }
+                            _ => None,
+                        };
                         if matches!(d.card.kind, Kind::Movie | Kind::Series) {
                             self.similar_req = Some(ctx.fetch(Fetch::Similar(d.card.id.clone())));
                         }
@@ -353,6 +449,20 @@ impl DetailView {
             if let Fetched::Cards(c) = result {
                 self.episodes = c.clone();
                 self.set_rows(now);
+                // Unless the user moved off the seasons meanwhile.
+                let on_seasons = self.button_focus.is_none()
+                    && self.rows.rows.get(self.rows.focus.0).is_some_and(|r| r.key == "seasons");
+                if std::mem::take(&mut self.focus_episodes) && on_seasons {
+                    self.focus_episode_row(now);
+                }
+            }
+            return true;
+        }
+        if self.contents_req == Some(id) {
+            self.contents_req = None;
+            if let Fetched::Cards(c) = result {
+                self.contents = c.clone();
+                self.set_rows(now);
             }
             return true;
         }
@@ -387,7 +497,9 @@ impl DetailView {
     }
 
     pub fn is_animating(&self, now: Instant) -> bool {
-        self.rows.is_animating(now) || self.backdrop.is_animating(now)
+        self.rows.is_animating(now)
+            || self.backdrop.is_animating(now)
+            || self.expand.is_animating(now)
     }
 
     pub fn wants(&self, w: &mut Wants) {
@@ -402,6 +514,21 @@ impl DetailView {
         tex: &mut Textures,
         caps: Option<&DecodeCaps>,
     ) {
+        // The overview first: whether it fits decides if it takes focus.
+        if self.overview.is_none()
+            && let Some(d) = &self.detail
+        {
+            let mut lines = wrap(r, &d.card.overview, &BODY, TEXT_W);
+            self.overview_full = lines.clone();
+            if lines.len() > 3 {
+                lines.truncate(3);
+                if let Some(l) = lines.last_mut() {
+                    l.push('…');
+                }
+                self.overview_cut = true;
+            }
+            self.overview = Some(lines);
+        }
         self.layout_buttons(r);
         let (lw, lh) = r.logical_size();
         let (sx, sy) = (self.vp.sx(), self.vp.sy());
@@ -416,16 +543,6 @@ impl DetailView {
             );
             return;
         };
-        if self.overview.is_none() {
-            let mut lines = wrap(r, &d.card.overview, &BODY, TEXT_W);
-            if lines.len() > 3 {
-                lines.truncate(3);
-                if let Some(l) = lines.last_mut() {
-                    l.push('…');
-                }
-            }
-            self.overview = Some(lines);
-        }
         if self.warning.is_none() {
             self.unsupported = d
                 .badges
@@ -479,6 +596,7 @@ impl DetailView {
             r.text(&d.tagline, &META, Point::new(sx, y), TEXT);
             y += 36.0;
         }
+        let overview_top = y;
         if let Some(lines) = &self.overview {
             for l in lines {
                 if y > BUTTONS_Y - 34.0 {
@@ -488,12 +606,41 @@ impl DetailView {
                 y += 32.0;
             }
         }
+        let overview_rect =
+            Rect::new(sx - 14.0, overview_top - 4.0, TEXT_W + 28.0, y - overview_top + 8.0);
 
         for (i, b) in self.buttons.iter().enumerate() {
             widgets::draw_button(r, b.rect, &b.label, self.button_focus == Some(i), false);
         }
         self.rows.draw(r, now, tex, &self.vp);
-        let _ = lh;
+        if self.overview_cut && overview_rect != self.overview_rect {
+            self.overview_rect = overview_rect;
+            self.rebuild_graph();
+        }
+        self.draw_overview_focus(r, now, overview_top, lh - sy);
+    }
+
+    /// The focused overview: the whole text, grown down over the page.
+    fn draw_overview_focus<R: Renderer>(&self, r: &mut R, now: Instant, top: f32, bottom: f32) {
+        let t = self.expand.value(now);
+        if !self.overview_cut || t <= 0.001 {
+            return;
+        }
+        let base = self.overview_rect;
+        let full_h = self.overview_full.len() as f32 * 32.0 + 20.0;
+        let h = (base.h + (full_h - base.h) * t).min(bottom - base.y);
+        let rect = Rect::new(base.x, base.y, base.w, h);
+        r.fill_rrect(rect, 12.0, Color::rgba(14, 16, 22, (236.0 * t) as u8));
+        r.push_clip(rect, 12.0);
+        let mut y = top;
+        for l in &self.overview_full {
+            if y > rect.bottom() {
+                break;
+            }
+            r.text(l, &BODY, Point::new(base.x + 14.0, y), TEXT);
+            y += 32.0;
+        }
+        r.pop();
     }
 }
 
@@ -516,6 +663,7 @@ mod tests {
             image: None,
             backdrop: None,
             progress: None,
+            played: false,
         }
     }
 
@@ -615,5 +763,97 @@ mod tests {
         // Cast arrived first; focus (where Down from the buttons goes) is
         // still the first row, Seasons.
         assert_eq!(v.rows.focus, (0, 0));
+
+        // Right to Season 2 (buttons are not laid out here, so focus is
+        // on the rows), Select: its episodes load and focus moves to them.
+        v.on_action(InputAction::Right, t, &mut ctx);
+        assert_eq!(v.rows.focus, (0, 1));
+        assert!(v.on_action(InputAction::Select, t, &mut ctx));
+        let Some(crate::net::Cmd::Fetch { id: eid, req }) = ctx.cmds.pop() else { panic!() };
+        assert_eq!(req, Fetch::Episodes { series: "show".into(), season: "s2".into() });
+        let eps = vec![card("e5", Kind::Episode), card("e6", Kind::Episode)];
+        v.on_fetched(eid, &Fetched::Cards(eps), t, &mut ctx);
+        assert_eq!(v.rows.focus, (1, 0), "first episode of season 2");
+        assert_eq!(v.rows.rows[1].title, "s2");
+    }
+
+    fn contents_fetch(ctx: &Ctx) -> Option<Fetch> {
+        ctx.cmds.iter().find_map(|c| match c {
+            crate::net::Cmd::Fetch {
+                req: r @ (Fetch::Filmography(_) | Fetch::Contents { .. }),
+                ..
+            } => Some(r.clone()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn person_page_lists_their_work() {
+        let t = Instant::now();
+        let mut next = 0;
+        let mut ctx = Ctx::new(&mut next);
+        let mut v = DetailView::new("actor".into(), VP, t, &mut ctx);
+        let (id, _) = take_fetch(&mut ctx);
+        let mut d = detail(Kind::Person, 0);
+        d.card.id = "actor".into();
+        v.on_fetched(id, &Fetched::Detail(Box::new(d)), t, &mut ctx);
+        assert_eq!(contents_fetch(&ctx), Some(Fetch::Filmography("actor".into())));
+        let labels: Vec<&str> = v.buttons.iter().map(|b| b.label.as_str()).collect();
+        assert_eq!(labels, [s::ADD_FAVORITE], "no Play or Mark watched on a person");
+        let Some(crate::net::Cmd::Fetch { id, .. }) = ctx
+            .cmds
+            .iter()
+            .find(|c| matches!(c, crate::net::Cmd::Fetch { req: Fetch::Filmography(_), .. }))
+        else {
+            panic!()
+        };
+        let id = *id;
+        v.on_fetched(id, &Fetched::Cards(vec![card("m1", Kind::Movie)]), t, &mut ctx);
+        assert_eq!(v.rows.rows[0].key, "contents");
+        assert_eq!(v.rows.rows[0].title, s::FILMOGRAPHY);
+    }
+
+    #[test]
+    fn playlists_and_collections_list_their_items() {
+        for (kind, playlist) in [(Kind::Playlist, true), (Kind::Folder, false)] {
+            let t = Instant::now();
+            let mut next = 0;
+            let mut ctx = Ctx::new(&mut next);
+            let mut v = DetailView::new("pl".into(), VP, t, &mut ctx);
+            let (id, _) = take_fetch(&mut ctx);
+            let mut d = detail(kind, 0);
+            d.card.id = "pl".into();
+            v.on_fetched(id, &Fetched::Detail(Box::new(d)), t, &mut ctx);
+            assert_eq!(contents_fetch(&ctx), Some(Fetch::Contents { id: "pl".into(), playlist }));
+            assert!(v.buttons.iter().all(|b| !matches!(b.action, Action::Play { .. })));
+        }
+    }
+
+    #[test]
+    fn a_cut_overview_takes_focus_and_expands() {
+        let t = Instant::now();
+        let mut next = 0;
+        let mut ctx = Ctx::new(&mut next);
+        let mut v = DetailView::new("item".into(), VP, t, &mut ctx);
+        let (id, _) = take_fetch(&mut ctx);
+        v.on_fetched(id, &Fetched::Detail(Box::new(detail(Kind::Movie, 0))), t, &mut ctx);
+        // As drawing finds it: cut, above the buttons.
+        v.overview_cut = true;
+        v.overview_rect = Rect::new(34.0, 300.0, 1178.0, 108.0);
+        for (i, b) in v.buttons.iter_mut().enumerate() {
+            b.rect = Rect::new(48.0 + i as f32 * 220.0, BUTTONS_Y, 200.0, BUTTON_H);
+        }
+        v.buttons_ready = true;
+        v.button_focus = Some(0);
+        v.rebuild_graph();
+        assert!(v.on_action(InputAction::Up, t, &mut ctx));
+        assert!(v.overview_focus);
+        assert_eq!(v.button_focus, None);
+        assert!(v.is_animating(t), "grows open");
+        assert!(v.on_action(InputAction::Select, t, &mut ctx), "Select does nothing there");
+        assert!(ctx.open.is_none());
+        v.on_action(InputAction::Down, t, &mut ctx);
+        assert!(!v.overview_focus);
+        assert_eq!(v.button_focus, Some(0));
     }
 }

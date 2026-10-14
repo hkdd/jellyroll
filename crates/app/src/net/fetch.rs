@@ -74,6 +74,35 @@ async fn run(c: &Client, user: &str, f: Fetch) -> Fetched {
     }
 }
 
+/// The item (chapters, trickplay, series), its PlaybackInfo and media
+/// segments at once, then the next episode for an episode.
+async fn play(c: &Client, user: &str, id: &str, start_ticks: i64) -> Result<Fetched, Error> {
+    let item_req = ep::item(user, id);
+    let info_req = jellyfin_api::playback::playback_info(user, id);
+    let seg_req = jellyfin_api::playback::media_segments(id);
+    let (item, info, segs) = tokio::join!(c.send(&item_req), c.send(&info_req), c.send(&seg_req));
+    let (item, info) = (item?, info?);
+    // Older servers or none detected: no skip buttons.
+    let segs = segs.ok().and_then(|s| s.items).unwrap_or_default();
+    let next = match (&item.series_id, item.r#type) {
+        (Some(series), Some(jellyfin_api::dto::BaseItemKind::Episode)) => c
+            .send(&ep::episodes_from(user, series, id))
+            .await
+            .ok()
+            .and_then(|r| r.items)
+            .and_then(|v| v.into_iter().nth(1)),
+        _ => None,
+    };
+    Ok(match crate::home::playinfo::build(&item, &info, &segs, next.as_ref(), start_ticks) {
+        Ok(info) => Fetched::Play(Box::new(super::PlayFetched {
+            info,
+            base_url: c.base_url().to_string(),
+            authorization: c.token_header(),
+        })),
+        Err(e) => Fetched::Failed(e),
+    })
+}
+
 async fn fetch(c: &Client, user: &str, f: Fetch) -> Result<Fetched, Error> {
     Ok(match f {
         Fetch::Items { query, shape } => {
@@ -111,6 +140,16 @@ async fn fetch(c: &Client, user: &str, f: Fetch) -> Result<Fetched, Error> {
             let r = c.send(&ep::similar(user, &id, 16)).await?;
             Fetched::Cards(cards(&r.items.unwrap_or_default(), Shape::Poster))
         }
+        Fetch::Filmography(id) => {
+            let r = c.send(&ep::filmography(user, &id)).await?;
+            Fetched::Cards(cards(&r.items.unwrap_or_default(), Shape::Poster))
+        }
+        Fetch::Contents { id, playlist } => {
+            let req =
+                if playlist { ep::playlist_items(user, &id) } else { ep::children(user, &id) };
+            let r = c.send(&req).await?;
+            Fetched::Cards(cards(&r.items.unwrap_or_default(), Shape::Poster))
+        }
         Fetch::Genres(parent) => {
             let r = c.send(&ep::genres(user, &parent)).await?;
             Fetched::Names(r.items.unwrap_or_default().into_iter().filter_map(|g| g.name).collect())
@@ -129,9 +168,6 @@ async fn fetch(c: &Client, user: &str, f: Fetch) -> Result<Fetched, Error> {
                 played: d.played.unwrap_or(on),
             }
         }
-        Fetch::Stream { id, media_source } => Fetched::Stream {
-            url: format!("{}{}", c.base_url(), ep::stream_path(&id, &media_source)),
-            authorization: c.token_header(),
-        },
+        Fetch::Play { id, start_ticks } => play(c, user, &id, start_ticks).await?,
     })
 }

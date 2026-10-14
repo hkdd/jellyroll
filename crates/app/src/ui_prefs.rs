@@ -1,6 +1,7 @@
 //! Settings chosen in the app (the Settings page), kept apart from the
 //! user's config.toml, which the app never rewrites. They win over it.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,15 @@ use crate::net::store::atomic_write;
 #[serde(default)]
 pub struct UiPrefs {
     pub ui_resolution: Option<UiResolution>,
+    /// Refresh-rate matching on or off, per output resolution
+    /// ("3840x2160"); missing: the config default.
+    pub match_refresh: BTreeMap<String, bool>,
+    /// mpv audio device; None: the config's.
+    pub audio_device: Option<String>,
+    /// Passthrough on or off, per audio device; missing: the config's.
+    pub passthrough: BTreeMap<String, bool>,
+    /// mpv `audio-channels`; None: the config's.
+    pub audio_channels: Option<String>,
 }
 
 pub fn path(data_dir: &Path) -> PathBuf {
@@ -47,7 +57,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("jellyroll-ui-prefs-{}", std::process::id()));
         let p = path(&dir);
         assert_eq!(load(&p), UiPrefs::default());
-        save(&p, &UiPrefs { ui_resolution: Some(UiResolution::Native) });
+        save(&p, &UiPrefs { ui_resolution: Some(UiResolution::Native), ..Default::default() });
         assert_eq!(load(&p).ui_resolution, Some(UiResolution::Native));
         std::fs::write(&p, b"not json").unwrap();
         assert_eq!(load(&p), UiPrefs::default());

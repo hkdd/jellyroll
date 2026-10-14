@@ -4,6 +4,7 @@
 
 mod anim;
 mod args;
+mod audio;
 mod bench_scroll;
 mod config;
 mod diagnostics;
@@ -19,6 +20,8 @@ mod osd;
 mod perf;
 mod playback;
 mod posters;
+mod power;
+mod refresh;
 mod scene;
 mod systemd;
 mod ui_prefs;

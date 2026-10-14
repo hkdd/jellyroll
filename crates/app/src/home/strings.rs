@@ -12,10 +12,10 @@ pub const LOADING: &str = "Loading…";
 pub const NOTHING_HERE: &str = "Nothing here yet.";
 pub const NO_MATCHES: &str = "Nothing matches these filters.";
 
-pub const SORT_NAME: &str = "Sort: Name";
-pub const SORT_ADDED: &str = "Sort: Date added";
-pub const SORT_YEAR: &str = "Sort: Year";
-pub const SORT_RATING: &str = "Sort: Rating";
+pub const SORT_NAME: &str = "Name";
+pub const SORT_ADDED: &str = "Date added";
+pub const SORT_YEAR: &str = "Year";
+pub const SORT_RATING: &str = "Rating";
 pub const FILTER_UNWATCHED: &str = "Unwatched";
 pub const FILTER_FAVORITES: &str = "Favorites";
 pub const GENRE_ALL: &str = "Genre: All";
@@ -32,6 +32,9 @@ pub const SEASONS: &str = "Seasons";
 pub const EPISODES: &str = "Episodes";
 pub const CAST: &str = "Cast & crew";
 pub const MORE_LIKE_THIS: &str = "More like this";
+pub const FILMOGRAPHY: &str = "Movies & shows";
+pub const IN_PLAYLIST: &str = "In this playlist";
+pub const IN_COLLECTION: &str = "In this collection";
 pub const NO_HW_DECODE: &str = "This device can't decode %s in hardware: it would play in software, \
      if at all (see Settings for what this GPU decodes).";
 
@@ -54,8 +57,39 @@ pub const ABOUT: &str = "About this device";
 pub const DISPLAY: &str = "Display";
 pub const UI_RES_1080: &str = "Interface: 1080p, upscaled (smoother)";
 pub const UI_RES_NATIVE: &str = "Interface: full resolution (sharpest)";
-pub const UI_RES_HINT: &str =
-    "Select to switch. Video always plays at the display's full resolution.";
+pub const MATCH_REFRESH: &str = "Match refresh rate";
+pub const SORT_TITLE: &str = "Sort by";
+pub const GENRE_TITLE: &str = "Genre";
+pub const REVERSE_ORDER: &str = "Reverse order";
+pub const SORT_LABEL: &str = "Sort: %s";
+pub const SORT_REVERSED: &str = "Sort: %s, reversed";
+pub const CLEAR_ALL: &str = "Clear all";
+pub const GENRES_MORE: &str = "Genres: %s +%s";
+pub const UI_RES_TITLE: &str = "Interface resolution";
+pub const UI_RES_OPT_NATIVE: &str = "Full resolution (sharpest)";
+pub const UI_RES_OPT_1080: &str = "1080p, upscaled (smoother)";
+pub const AUDIO_OUTPUT_TITLE: &str = "Audio output";
+pub const CHANNELS_TITLE: &str = "Channels for decoded audio";
+pub const DISPLAY_HINT: &str = "Select to change. Matching plays each video at its own frame rate (films at 24 Hz); set for %s.";
+pub const AUDIO_OUTPUT: &str = "Output: %s";
+pub const AUDIO_AUTO: &str = "automatic";
+pub const PASSTHROUGH: &str = "Passthrough";
+pub const CHANNELS_LABEL: &str = "Channels: %s";
+pub const CHANNELS_AUTO: &str = "auto";
+pub const CHANNELS_STEREO: &str = "stereo";
+pub const AUDIO_HINT: &str = "Passthrough (set per output) sends Dolby and DTS audio undecoded, \
+     for a receiver that decodes them. Applies from the next video.";
+
+pub const POWER_TITLE: &str = "Power";
+pub const EXIT_APP: &str = "Exit to console";
+pub const REBOOT: &str = "Restart";
+pub const POWER_OFF: &str = "Shut down";
+pub const CANCEL: &str = "Cancel";
+pub const RESTARTING: &str = "Restarting…";
+pub const SHUTTING_DOWN: &str = "Shutting down…";
+pub const POWER_NOT_ALLOWED: &str =
+    "This user may not do that. Install the polkit rule from docs/polkit-jellyroll.rules.";
+pub const POWER_FAILED: &str = "That didn't work: %s";
 
 pub const SIGN_IN_PASSWORD: &str = "Sign in with password";
 pub const NEW_CODE: &str = "New code";
@@ -64,6 +98,25 @@ pub const PASSWORD: &str = "Password";
 pub const SIGN_IN: &str = "Sign in";
 pub const SIGNING_IN: &str = "Signing in…";
 pub const USERS_ON_SERVER: &str = "Users on this server";
+
+pub const PLAYER_HINT: &str =
+    "Left/Right: seek    Down: audio & subtitles    Info: details    Back: stop";
+pub const PAUSED: &str = "Paused";
+pub const BUFFERING: &str = "Buffering…";
+pub const AUDIO: &str = "Audio";
+pub const SUBTITLES: &str = "Subtitles";
+pub const SUBTITLES_OFF: &str = "Off";
+pub const SKIP_INTRO: &str = "Skip intro";
+pub const SKIP_RECAP: &str = "Skip recap";
+pub const SKIP_PREVIEW: &str = "Skip preview";
+pub const SKIP_COMMERCIAL: &str = "Skip ad";
+pub const SKIP_CREDITS: &str = "Skip credits";
+pub const UP_NEXT: &str = "Up next";
+pub const PLAY_NOW_HINT: &str = "Select: play now    Back: cancel";
+pub const PLAYING_IN: &str = "Playing in %s";
+pub const STARTING: &str = "Starting…";
+pub const SOFTWARE_DECODE: &str =
+    "Software decoding: this device has no hardware decoder for this video";
 
 /// `%s` substitution, in order.
 pub fn fill(template: &str, args: &[&str]) -> String {
@@ -109,6 +162,9 @@ pub const ALL: &[&str] = &[
     EPISODES,
     CAST,
     MORE_LIKE_THIS,
+    FILMOGRAPHY,
+    IN_PLAYLIST,
+    IN_COLLECTION,
     NO_HW_DECODE,
     SEARCH_TITLE,
     SEARCH_HINT,
@@ -128,7 +184,37 @@ pub const ALL: &[&str] = &[
     DISPLAY,
     UI_RES_1080,
     UI_RES_NATIVE,
-    UI_RES_HINT,
+    MATCH_REFRESH,
+    SORT_TITLE,
+    GENRE_TITLE,
+    REVERSE_ORDER,
+    SORT_LABEL,
+    SORT_REVERSED,
+    CLEAR_ALL,
+    GENRES_MORE,
+    UI_RES_TITLE,
+    UI_RES_OPT_NATIVE,
+    UI_RES_OPT_1080,
+    AUDIO_OUTPUT_TITLE,
+    CHANNELS_TITLE,
+    "  ›",
+    DISPLAY_HINT,
+    AUDIO_OUTPUT,
+    AUDIO_AUTO,
+    PASSTHROUGH,
+    CHANNELS_LABEL,
+    CHANNELS_AUTO,
+    CHANNELS_STEREO,
+    AUDIO_HINT,
+    POWER_TITLE,
+    EXIT_APP,
+    REBOOT,
+    POWER_OFF,
+    CANCEL,
+    RESTARTING,
+    SHUTTING_DOWN,
+    POWER_NOT_ALLOWED,
+    POWER_FAILED,
     SIGN_IN_PASSWORD,
     NEW_CODE,
     USERNAME,
@@ -136,6 +222,22 @@ pub const ALL: &[&str] = &[
     SIGN_IN,
     SIGNING_IN,
     USERS_ON_SERVER,
+    PLAYER_HINT,
+    PAUSED,
+    BUFFERING,
+    AUDIO,
+    SUBTITLES,
+    SUBTITLES_OFF,
+    SKIP_INTRO,
+    SKIP_RECAP,
+    SKIP_PREVIEW,
+    SKIP_COMMERCIAL,
+    SKIP_CREDITS,
+    UP_NEXT,
+    PLAY_NOW_HINT,
+    PLAYING_IN,
+    STARTING,
+    SOFTWARE_DECODE,
 ];
 
 #[cfg(test)]

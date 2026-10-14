@@ -22,6 +22,8 @@ toml = { version = "=0.9.8", default-features = false, features = ["std", "serde
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["fmt", "std", "ansi"] }
 tracing-journald = "=0.3.2"
+# logind power actions over D-Bus (spec 5.5).
+zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
 
 
 [features]

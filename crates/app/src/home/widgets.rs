@@ -223,6 +223,9 @@ pub fn draw_card<R: Renderer>(
         r.fill_rrect(track, 2.5, Color::rgba(0, 0, 0, 160));
         r.fill_rrect(Rect::new(track.x, track.y, track.w * p, track.h), 2.5, ACCENT);
     }
+    if card.played {
+        draw_watched(r, rect);
+    }
     if focus > 0.01 {
         r.stroke_rrect(rect.inset(-3.0), RADIUS + 3.0, 3.0, Color::WHITE.with_alpha(focus));
     }
@@ -240,6 +243,23 @@ pub fn draw_card<R: Renderer>(
             r.text(&card.subtitle, &sub_style, Point::new(base.x, ty + 26.0), TEXT_DIM);
         }
     }
+}
+
+/// The watched mark: a check in an accent circle, top right of a card.
+pub fn draw_watched<R: Renderer>(r: &mut R, card: Rect) {
+    let d = 34.0;
+    let c = Rect::new(card.right() - d - 8.0, card.y + 8.0, d, d);
+    r.fill_rrect(c, d / 2.0, ACCENT);
+    let (x, y) = (c.x, c.y);
+    r.polyline(
+        &[
+            Point::new(x + d * 0.28, y + d * 0.52),
+            Point::new(x + d * 0.44, y + d * 0.68),
+            Point::new(x + d * 0.73, y + d * 0.36),
+        ],
+        3.5,
+        Color::WHITE,
+    );
 }
 
 pub const BUTTON: TextStyle = TextStyle::new(24.0, Weight::Bold);
@@ -267,6 +287,38 @@ pub fn draw_button<R: Renderer>(r: &mut R, rect: Rect, label: &str, focused: boo
 /// Button width that fits `label`.
 pub fn button_width<R: Renderer>(r: &mut R, label: &str) -> f32 {
     r.measure_text(label, &BUTTON).width + 56.0
+}
+
+/// Extra width a toggle needs for its switch.
+pub const TOGGLE_EXTRA: f32 = 70.0;
+
+/// Toggle button width that fits `label` and the switch.
+pub fn toggle_width<R: Renderer>(r: &mut R, label: &str) -> f32 {
+    button_width(r, label) + TOGGLE_EXTRA
+}
+
+/// An on/off setting (D53): the label, then a switch that shows the state
+/// (accent and knob right when on). Select flips it; no list opens.
+pub fn draw_toggle<R: Renderer>(r: &mut R, rect: Rect, label: &str, on: bool, focused: bool) {
+    let (bg, fg) =
+        if focused { (Color::WHITE, BG) } else { (Color::rgba(255, 255, 255, 26), TEXT) };
+    r.fill_rrect(rect, rect.h / 2.0, bg);
+    let style = BUTTON.max_width(rect.w - 28.0 - TOGGLE_EXTRA);
+    let m = r.measure_text(label, &style);
+    let p = Point::new((rect.x + 28.0).round(), (rect.y + (rect.h - m.height) / 2.0).round());
+    r.text(label, &style, p, fg);
+    let (sw, sh) = (46.0, 26.0);
+    let track = Rect::new(rect.right() - sw - 20.0, rect.y + (rect.h - sh) / 2.0, sw, sh);
+    let off_track = if focused { Color::rgba(0, 0, 0, 60) } else { Color::rgba(255, 255, 255, 50) };
+    r.fill_rrect(track, sh / 2.0, if on { ACCENT } else { off_track });
+    let d = sh - 6.0;
+    let kx = if on { track.right() - d - 3.0 } else { track.x + 3.0 };
+    r.fill_rrect(Rect::new(kx, track.y + 3.0, d, d), d / 2.0, Color::WHITE);
+}
+
+/// A button that opens a list (a `Blade`): the label ends with a chevron.
+pub fn list_label(label: &str) -> String {
+    format!("{label}  ›")
 }
 
 /// Full-screen backdrop with a crossfade when it changes.
@@ -338,6 +390,17 @@ pub struct RowList {
     pub active: bool,
     /// Logical y of the focused row's label.
     pub top: f32,
+}
+
+/// What a direction does from the focused card (`RowList::step`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Step {
+    /// Focus moves to this node.
+    To(NodeId),
+    /// Focus stays where it is.
+    Stay,
+    /// Not the rows' call: the page's focus graph decides.
+    Free,
 }
 
 impl RowList {
@@ -470,23 +533,35 @@ impl RowList {
         out
     }
 
-    /// Where a direction goes from the focused card when it must stay in
-    /// the rows: Up from a lower row is the row above. The rows above the
-    /// focused one are scrolled up under whatever sits over the rows (a
-    /// keyboard, buttons), so the whole-page graph could pick that instead.
-    pub fn step(&self, dir: Dir, vp: &Viewport) -> Option<NodeId> {
+    /// Where a direction goes from the focused card when the rows decide
+    /// it. Left and Right stay in the row, and Right from the last card
+    /// wraps to the first; the whole-page graph would pick the nearest
+    /// card of another row. Up from a lower row is the row above: the rows
+    /// above the focused one are scrolled up under whatever sits over the
+    /// rows (a keyboard, buttons), so the graph could pick that instead.
+    pub fn step(&self, dir: Dir, vp: &Viewport) -> Step {
         let (row, col) = self.focus;
-        if !self.active || dir != Dir::Up || row == 0 {
-            return None;
+        let len = self.rows.get(row).map_or(0, |r| r.cards.len());
+        if !self.active || len == 0 {
+            return Step::Free;
         }
-        let mut g = FocusGraph::new();
-        let nodes = self
-            .nodes(vp)
-            .into_iter()
-            .filter(|(id, _)| card_of(*id).is_some_and(|(r, _)| r == row || r + 1 == row));
-        g.set_nodes(nodes);
-        g.focus(card_node(row, col));
-        g.navigate(dir)
+        match dir {
+            Dir::Right if col + 1 < len => Step::To(card_node(row, col + 1)),
+            Dir::Right if len > 1 => Step::To(card_node(row, 0)),
+            Dir::Left if col > 0 => Step::To(card_node(row, col - 1)),
+            Dir::Left | Dir::Right => Step::Stay,
+            Dir::Up if row > 0 => {
+                let mut g = FocusGraph::new();
+                let nodes = self
+                    .nodes(vp)
+                    .into_iter()
+                    .filter(|(id, _)| card_of(*id).is_some_and(|(r, _)| r == row || r + 1 == row));
+                g.set_nodes(nodes);
+                g.focus(card_node(row, col));
+                g.navigate(dir).map_or(Step::Free, Step::To)
+            }
+            _ => Step::Free,
+        }
     }
 
     /// Back to the first card, scrolled to the top (while focus is
@@ -619,10 +694,49 @@ pub fn row_height(shape: Shape) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::home::model::Kind;
 
     #[test]
     fn card_node_ids_round_trip() {
         assert_eq!(card_of(card_node(3, 1234)), Some((3, 1234)));
         assert_eq!(card_of(7), None);
+    }
+
+    fn row(key: &str, n: usize) -> Row {
+        let cards = (0..n)
+            .map(|i| Card {
+                id: format!("{key}{i}"),
+                kind: Kind::Movie,
+                collection: None,
+                title: String::new(),
+                subtitle: String::new(),
+                meta: String::new(),
+                overview: String::new(),
+                image: None,
+                backdrop: None,
+                progress: None,
+                played: false,
+            })
+            .collect();
+        Row { key: key.into(), title: key.into(), shape: Shape::Poster, cards }
+    }
+
+    #[test]
+    fn left_right_stay_in_the_row_and_right_wraps() {
+        let vp = Viewport { lw: 1920.0, safe: 0.025, scale: 1.0 };
+        let t = Instant::now();
+        let mut l = RowList::new(vec![row("a", 3), row("b", 12), row("c", 1)], 0.0, &vp, t);
+        l.take_focus((1, 10), &vp, t);
+        assert_eq!(l.step(Dir::Right, &vp), Step::To(card_node(1, 11)));
+        l.take_focus((1, 11), &vp, t);
+        assert_eq!(l.step(Dir::Right, &vp), Step::To(card_node(1, 0)), "wraps to this row");
+        assert_eq!(l.step(Dir::Left, &vp), Step::To(card_node(1, 10)));
+        l.take_focus((1, 0), &vp, t);
+        assert_eq!(l.step(Dir::Left, &vp), Step::Stay, "not into a scrolled row");
+        assert_eq!(l.step(Dir::Down, &vp), Step::Free);
+        l.take_focus((2, 0), &vp, t);
+        assert_eq!(l.step(Dir::Right, &vp), Step::Stay, "a single card");
+        l.release_focus(t);
+        assert_eq!(l.step(Dir::Right, &vp), Step::Free, "focus is elsewhere");
     }
 }

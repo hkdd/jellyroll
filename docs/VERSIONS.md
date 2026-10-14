@@ -89,6 +89,7 @@ Crate versions checked with `cargo info` against crates.io on 2026-10-13
 | `fast_image_resize` | 6.1.0 | default features |
 | `redb` | 4.3.0 | `begin_read` moved to the `ReadableDatabase` trait in 4.x (D30) |
 | `rusqlite` | 0.40.2 | Benchmarked only (D30), not a dependency |
+| `zbus` | 5.19.0 (2026-08-09, newest on crates.io 2026-10-13) | M8, logind power actions. `default-features = false`, `tokio`; a short-lived current-thread runtime per call (D51) |
 
 ## Fonts
 
@@ -99,9 +100,3 @@ fonttools 4.66.1. All are SIL OFL 1.1 (`assets/fonts/OFL.txt`).
 |---|---|---|
 | NotoSans-{Regular,Bold}.ttf | notofonts/notofonts.github.io @ `4e15001b9fb484cc871d7b2ad930cd2226edf260`, unhinted TTF, subset to Latin/Latin Extended/Greek/Cyrillic/punctuation/symbols | ~230 KB each |
 | NotoSansJP-{Regular,Bold}.otf | notofonts/noto-cjk @ `f8d157532fbfaeda587e826d4cd5b21a49186f7c`, `Sans/SubsetOTF/JP`, subset to kana, CJK punctuation, full/half-width forms and all JIS X 0208 kanji (levels 1 and 2) | ~1.7 MB each |
-
-## Not yet verified (pin when the milestone starts)
-
-| Item | Milestone |
-|---|---|
-| `zbus` | M8 |

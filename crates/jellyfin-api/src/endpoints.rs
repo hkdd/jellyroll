@@ -32,11 +32,11 @@ pub struct Request<T> {
 }
 
 impl<T> Request<T> {
-    fn new(method: Method, path: String) -> Self {
+    pub(crate) fn new(method: Method, path: String) -> Self {
         Self { method, path, body: None, _response: PhantomData }
     }
 
-    fn json(mut self, body: serde_json::Value) -> Self {
+    pub(crate) fn json(mut self, body: serde_json::Value) -> Self {
         self.body = Some(body.to_string());
         self
     }
@@ -175,7 +175,8 @@ pub struct ItemsQuery {
     pub descending: bool,
     pub unplayed: bool,
     pub favorites: bool,
-    pub genre: Option<String>,
+    /// Items in any of these genres.
+    pub genres: Vec<String>,
     pub year: Option<i32>,
     pub search: Option<String>,
     /// Only items whose sort name sorts before this (alphabet jump: with
@@ -203,7 +204,7 @@ pub fn items(user_id: &str, q: &ItemsQuery) -> Request<BaseItemDtoQueryResult> {
         .param("sortBy", q.sort_by.as_deref().unwrap_or("SortName"))
         .param("sortOrder", if q.descending { "Descending" } else { "Ascending" })
         .opt("filters", (!filters.is_empty()).then(|| filters.join(",")))
-        .opt("genres", q.genre.as_deref())
+        .opt("genres", (!q.genres.is_empty()).then(|| q.genres.join("|")))
         .opt("years", q.year)
         .opt("searchTerm", q.search.as_deref())
         .opt("nameLessThan", q.name_less_than.as_deref())
@@ -247,6 +248,21 @@ pub fn episodes(
     Request::new(Method::Get, q.0)
 }
 
+/// The episode `start_item_id` and the one after it in series order
+/// (across seasons): what plays next.
+pub fn episodes_from(
+    user_id: &str,
+    series_id: &str,
+    start_item_id: &str,
+) -> Request<BaseItemDtoQueryResult> {
+    let q = Query::new(&show_path(series_id, "Episodes"))
+        .param("userId", user_id)
+        .param("startItemId", start_item_id)
+        .param("limit", 2)
+        .images();
+    Request::new(Method::Get, q.0)
+}
+
 pub fn similar(user_id: &str, item_id: &str, limit: u32) -> Request<BaseItemDtoQueryResult> {
     let mut path = String::from("/Items/");
     encode_component(&mut path, item_id);
@@ -255,6 +271,39 @@ pub fn similar(user_id: &str, item_id: &str, limit: u32) -> Request<BaseItemDtoQ
         .param("userId", user_id)
         .param("limit", limit)
         .param("fields", ROW_FIELDS);
+    Request::new(Method::Get, q.0)
+}
+
+/// A person's movies and shows, newest first (a cast member's page).
+pub fn filmography(user_id: &str, person_id: &str) -> Request<BaseItemDtoQueryResult> {
+    let q = Query::new("/Items")
+        .param("userId", user_id)
+        .param("personIds", person_id)
+        .param("recursive", true)
+        .param("includeItemTypes", "Movie,Series")
+        .param("sortBy", "ProductionYear,SortName")
+        .param("sortOrder", "Descending")
+        .param("limit", 100)
+        .images();
+    Request::new(Method::Get, q.0)
+}
+
+/// A playlist's entries, in playlist order.
+pub fn playlist_items(user_id: &str, playlist_id: &str) -> Request<BaseItemDtoQueryResult> {
+    let mut path = String::from("/Playlists/");
+    encode_component(&mut path, playlist_id);
+    path.push_str("/Items");
+    let q = Query::new(&path).param("userId", user_id).param("limit", 500).images();
+    Request::new(Method::Get, q.0)
+}
+
+/// The items in a folder or collection (box set), in the server's order.
+pub fn children(user_id: &str, parent_id: &str) -> Request<BaseItemDtoQueryResult> {
+    let q = Query::new("/Items")
+        .param("userId", user_id)
+        .param("parentId", parent_id)
+        .param("limit", 500)
+        .images();
     Request::new(Method::Get, q.0)
 }
 
@@ -375,13 +424,13 @@ mod tests {
             include_types: Some("Movie".into()),
             unplayed: true,
             favorites: true,
-            genre: Some("Sci-Fi".into()),
+            genres: vec!["Sci-Fi".into(), "Drama".into()],
             start: 200,
             limit: 100,
             ..Default::default()
         };
         let p = items("u", &q).path;
-        assert!(p.starts_with("/Items?userId=u&parentId=lib&recursive=true&includeItemTypes=Movie&sortBy=SortName&sortOrder=Ascending&filters=IsUnplayed%2CIsFavorite&genres=Sci-Fi&startIndex=200&limit=100"), "{p}");
+        assert!(p.starts_with("/Items?userId=u&parentId=lib&recursive=true&includeItemTypes=Movie&sortBy=SortName&sortOrder=Ascending&filters=IsUnplayed%2CIsFavorite&genres=Sci-Fi%7CDrama&startIndex=200&limit=100"), "{p}");
         assert!(p.ends_with("enableTotalRecordCount=true"), "{p}");
         let idx = ItemsQuery { name_less_than: Some("M".into()), ..Default::default() };
         assert!(items("u", &idx).path.contains("nameLessThan=M&startIndex=0&limit=0"));

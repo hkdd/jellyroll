@@ -7,6 +7,12 @@
 //! It implements only the endpoints jellyroll calls, with the field names
 //! and shapes of the Jellyfin API version in docs/VERSIONS.md. Minimal
 //! HTTP/1.1: one request per connection.
+//!
+//! Playback (M7): with `media` set, every movie and episode streams that
+//! file (byte ranges, so mpv can seek) and lasts `media_secs`; items have
+//! chapters, trickplay tiles, intro/credits segments, two audio tracks and
+//! an external subtitle. Playback reports are recorded: they update resume
+//! positions and `GET /Mock/Reports` lists them (tests assert on them).
 
 #![forbid(unsafe_code)]
 
@@ -21,6 +27,15 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
 pub const TOKEN: &str = "mock-token";
+/// A description long enough to be cut on the detail page (its More).
+const LONG_OVERVIEW: &str = "A lighthouse keeper on a remote island finds a radio that \
+    receives tomorrow's weather, and slowly realizes the storms it forecasts are not \
+    natural. As the village below grows dependent on the warnings, she must decide \
+    whether to keep listening, to share what she hears, or to break the radio before \
+    it breaks her. Along the way an old friend returns, a ship goes missing, and the \
+    island's oldest story turns out to be a set of instructions. Filmed over three \
+    winters on the north coast, with a score recorded inside the lighthouse itself.";
+
 pub const SERVER_ID: &str = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
 pub const USER_ID: &str = "5e7a1c0de5e7a1c0de5e7a1c0de5e7a1";
 pub const QUICK_CONNECT_CODE: &str = "424242";
@@ -36,6 +51,10 @@ pub struct MockConfig {
     /// Added to every response, to see loading states.
     pub latency: Duration,
     pub quick_connect_enabled: bool,
+    /// A video file every movie and episode streams (M7).
+    pub media: Option<std::path::PathBuf>,
+    /// Its duration in seconds (items report this runtime).
+    pub media_secs: u32,
 }
 
 impl Default for MockConfig {
@@ -47,6 +66,8 @@ impl Default for MockConfig {
             approve_after: 2,
             latency: Duration::ZERO,
             quick_connect_enabled: true,
+            media: None,
+            media_secs: 60,
         }
     }
 }
@@ -57,6 +78,12 @@ struct Server {
     polls: AtomicU32,
     /// Requests seen, by path (tests assert on them).
     log: Mutex<Vec<String>>,
+    /// Playback reports received, in order.
+    reports: Mutex<Vec<Value>>,
+    /// Resume positions from the last progress/stopped report, by item.
+    positions: Mutex<HashMap<String, i64>>,
+    /// The `media` file, read on first use.
+    media: Mutex<Option<Arc<Vec<u8>>>>,
 }
 
 // ---- synthetic library -------------------------------------------------------
@@ -157,7 +184,8 @@ fn images(id: &str, kinds: &[&str]) -> (Value, Value) {
 }
 
 impl Library {
-    fn new(movies: usize) -> Self {
+    /// `runtime`: every playable item's length in ticks (the `media` file).
+    fn new(movies: usize, runtime: Option<i64>) -> Self {
         let views = vec![
             view("Movies", "movies", 1),
             view("Shows", "tvshows", 2),
@@ -175,14 +203,18 @@ impl Library {
                         "Id": i, "Name": name, "Type": "Movie", "MediaType": "Video", "IsFolder": false,
                         "ProductionYear": 1990 + (n % 35) as i32, "OfficialRating": rating,
                         "CommunityRating": 6.0 + (n % 30) as f64 / 10.0,
-                        "RunTimeTicks": (85 + (n % 60) as i64) * 600_000_000,
-                        "Overview": format!("Synthetic movie number {n} from the mock server."),
+                        "RunTimeTicks": runtime.unwrap_or((85 + (n % 60) as i64) * 600_000_000),
+                        "Overview": if n % 2 == 0 {
+                            format!("Synthetic movie number {n} from the mock server. {}", LONG_OVERVIEW)
+                        } else {
+                            format!("Synthetic movie number {n} from the mock server.")
+                        },
                         "SortName": name.to_lowercase(),
                         "Genres": [GENRES[n % GENRES.len()], GENRES[(n + 3) % GENRES.len()]],
                         "DateCreated": format!("2024-01-01T00:00:{:02}Z", n % 60),
                         "PrimaryImageAspectRatio": 0.6667,
                         "ImageTags": tags, "ImageBlurHashes": hashes, "BackdropImageTags": [format!("b{n}")],
-                        "UserData": { "Played": false, "PlaybackPositionTicks": 0, "PlayCount": 0, "IsFavorite": n % 7 == 0 },
+                        "UserData": { "Played": n % 4 == 1, "PlaybackPositionTicks": 0, "PlayCount": 0, "IsFavorite": n % 7 == 0 },
                     }),
                 }
             })
@@ -213,11 +245,14 @@ impl Library {
                 (0..8).map(move |e| {
                     let i = id(0x30, s * 100 + e);
                     let (tags, hashes) = images(&i, &["Primary"]);
+                    // Two seasons of four.
+                    let season = e / 4 + 1;
                     Item {
                         json: json!({
                             "Id": i, "Name": format!("Chapter {}", e + 1), "Type": "Episode", "MediaType": "Video",
                             "SeriesName": sname, "SeriesId": sid, "SeriesPrimaryImageTag": format!("t{}", &sid[sid.len() - 6..]),
-                            "ParentIndexNumber": 1, "IndexNumber": e + 1, "RunTimeTicks": 45i64 * 600_000_000,
+                            "SeasonId": format!("{sid}s{season}"),
+                            "ParentIndexNumber": season, "IndexNumber": e % 4 + 1, "RunTimeTicks": runtime.unwrap_or(45i64 * 600_000_000),
                             "ProductionYear": 2022, "Overview": "A synthetic episode.",
                             "PrimaryImageAspectRatio": 1.7778, "ImageTags": tags, "ImageBlurHashes": hashes,
                             "ParentBackdropItemId": sid, "ParentBackdropImageTags": sbd,
@@ -295,20 +330,84 @@ fn detail(item: &Value) -> Value {
         .collect();
     v["People"] = json!(people);
     v["Taglines"] = json!(["Synthetic, but convincing."]);
+    if matches!(item["Type"].as_str(), Some("Movie" | "Episode")) {
+        chapters_and_trickplay(&mut v);
+    }
     v["MediaStreams"] = if n.is_multiple_of(2) {
         json!([
-            { "Type": "Video", "Codec": "hevc", "BitDepth": 10, "Width": 3840, "Height": 2160, "VideoRangeType": "HDR10", "Index": 0 },
+            { "Type": "Video", "Codec": "hevc", "BitDepth": 10, "Width": 3840, "Height": 2160, "VideoRangeType": "HDR10", "Index": 0, "AverageFrameRate": 23.976, "RealFrameRate": 23.976 },
             { "Type": "Audio", "Codec": "truehd", "Channels": 8, "IsDefault": true, "AudioSpatialFormat": "DolbyAtmos", "Index": 1 },
             { "Type": "Subtitle", "Codec": "subrip", "Index": 2 }
         ])
     } else {
         json!([
-            { "Type": "Video", "Codec": "h264", "BitDepth": 8, "Width": 1920, "Height": 1080, "VideoRangeType": "SDR", "Index": 0 },
+            { "Type": "Video", "Codec": "h264", "BitDepth": 8, "Width": 1920, "Height": 1080, "VideoRangeType": "SDR", "Index": 0, "AverageFrameRate": 25.0, "RealFrameRate": 50.0 },
             { "Type": "Audio", "Codec": "eac3", "Channels": 6, "IsDefault": true, "Index": 1 }
         ])
     };
     v
 }
+
+/// An item's playback: one media source (the item id) with two audio
+/// tracks, an embedded subtitle and an external one (M7).
+fn playback_info(item: &Value) -> Value {
+    let id = item["Id"].as_str().unwrap_or_default();
+    json!({
+        "PlaySessionId": format!("ps-{id}"),
+        "MediaSources": [{
+            "Id": id, "Protocol": "Http", "Container": "mkv",
+            "SupportsDirectPlay": true, "SupportsDirectStream": true, "SupportsTranscoding": false,
+            "RunTimeTicks": item["RunTimeTicks"],
+            "DefaultAudioStreamIndex": 1, "DefaultSubtitleStreamIndex": -1,
+            "MediaStreams": [
+                { "Type": "Video", "Codec": "h264", "Width": 1280, "Height": 720, "Index": 0, "AverageFrameRate": 23.976, "RealFrameRate": 23.976 },
+                { "Type": "Audio", "Codec": "aac", "Channels": 2, "Language": "eng",
+                  "DisplayTitle": "English - AAC - Stereo - Default", "IsDefault": true, "Index": 1 },
+                { "Type": "Audio", "Codec": "aac", "Channels": 2, "Language": "eng",
+                  "DisplayTitle": "Commentary - AAC - Stereo", "Title": "Commentary", "Index": 2 },
+                { "Type": "Subtitle", "Codec": "subrip", "Language": "eng", "DisplayTitle": "English - SUBRIP",
+                  "IsTextSubtitleStream": true, "DeliveryMethod": "Embed", "Index": 3 },
+                { "Type": "Subtitle", "Codec": "srt", "Language": "fre", "DisplayTitle": "Français - SRT - External",
+                  "IsExternal": true, "IsTextSubtitleStream": true, "DeliveryMethod": "External",
+                  "DeliveryUrl": format!("/Videos/{id}/{id}/Subtitles/4/0/Stream.srt"), "Index": 4 },
+            ],
+        }],
+    })
+}
+
+/// Intro at 10-20% of the runtime, credits in the last 10% (episodes) or
+/// 5% (movies).
+fn segments(item: &Value) -> Vec<Value> {
+    let id = item["Id"].as_str().unwrap_or_default();
+    let rt = item["RunTimeTicks"].as_i64().unwrap_or(0);
+    let mut v = vec![json!({ "Id": format!("{id}i"), "ItemId": id, "Type": "Intro",
+                             "StartTicks": rt / 10, "EndTicks": rt / 5 })];
+    let tail = if item["Type"] == "Episode" { rt / 10 } else { rt / 20 };
+    v.push(json!({ "Id": format!("{id}o"), "ItemId": id, "Type": "Outro",
+                   "StartTicks": rt - tail, "EndTicks": rt }));
+    v
+}
+
+/// Trickplay at 320 px: one 10x10 sheet of 320x180 tiles per 100
+/// thumbnails, one thumbnail every 10 s.
+const TRICK_W: u32 = 320;
+const TRICK_H: u32 = 180;
+const TRICK_INTERVAL_MS: i64 = 10_000;
+
+fn chapters_and_trickplay(item: &mut Value) {
+    let id = item["Id"].as_str().unwrap_or_default().to_string();
+    let rt = item["RunTimeTicks"].as_i64().unwrap_or(0);
+    item["Chapters"] = json!((0..5)
+        .map(|i| json!({ "StartPositionTicks": rt / 5 * i, "Name": format!("Chapter {}", i + 1) }))
+        .collect::<Vec<_>>());
+    let count = (rt / 10_000 / TRICK_INTERVAL_MS).max(1);
+    item["Trickplay"] = json!({ id: { TRICK_W.to_string(): {
+        "Width": TRICK_W, "Height": TRICK_H, "TileWidth": 10, "TileHeight": 10,
+        "ThumbnailCount": count, "Interval": TRICK_INTERVAL_MS, "Bandwidth": 50_000,
+    }}});
+}
+
+const SUBTITLES: &str = "1\r\n00:00:02,000 --> 00:00:30,000\r\nSous-titres externes (mock)\r\n\r\n";
 
 fn query_result(items: Vec<Value>) -> Value {
     let n = items.len();
@@ -322,12 +421,16 @@ struct Request {
     path: String,
     query: HashMap<String, String>,
     authorized: bool,
+    /// `Range: bytes=N-` start offset.
+    range_start: Option<u64>,
 }
 
 struct Response {
     status: u16,
     content_type: &'static str,
     body: Vec<u8>,
+    /// `Content-Range` for partial content (206).
+    content_range: Option<String>,
 }
 
 impl Response {
@@ -336,11 +439,16 @@ impl Response {
             status: 200,
             content_type: "application/json; charset=utf-8",
             body: v.to_string().into_bytes(),
+            content_range: None,
         }
     }
 
     fn status(status: u16) -> Self {
-        Self { status, content_type: "text/plain", body: Vec::new() }
+        Self { status, content_type: "text/plain", body: Vec::new(), content_range: None }
+    }
+
+    fn bytes(content_type: &'static str, body: Vec<u8>) -> Self {
+        Self { status: 200, content_type, body, content_range: None }
     }
 }
 
@@ -383,12 +491,22 @@ fn parse_request(head: &str) -> Option<Request> {
             (k.to_ascii_lowercase(), percent_decode(v))
         })
         .collect();
-    let authorized = lines.any(|l| {
-        l.split_once(':').is_some_and(|(k, v)| {
-            k.eq_ignore_ascii_case("authorization") && v.contains(&format!("Token=\"{TOKEN}\""))
-        })
-    });
-    Some(Request { method, path: path.to_string(), query, authorized })
+    let mut authorized = false;
+    let mut range_start = None;
+    for l in lines {
+        let Some((k, v)) = l.split_once(':') else { continue };
+        if k.eq_ignore_ascii_case("authorization") && v.contains(&format!("Token=\"{TOKEN}\"")) {
+            authorized = true;
+        }
+        if k.eq_ignore_ascii_case("range") {
+            range_start = v
+                .trim()
+                .strip_prefix("bytes=")
+                .and_then(|r| r.split('-').next())
+                .and_then(|n| n.parse().ok());
+        }
+    }
+    Some(Request { method, path: path.to_string(), query, authorized, range_start })
 }
 
 impl Server {
@@ -485,7 +603,14 @@ impl Server {
             ("GET", p) if p.starts_with("/Items/") => {
                 let id = &p["/Items/".len()..];
                 match lib.find(id) {
-                    Some(i) => Response::json(detail(&i.json)),
+                    Some(i) => {
+                        let mut d = detail(&i.json);
+                        if let Some(t) = self.positions.lock().ok().and_then(|p| p.get(id).copied())
+                        {
+                            d["UserData"]["PlaybackPositionTicks"] = json!(t);
+                        }
+                        Response::json(d)
+                    }
                     None => Response::status(404),
                 }
             }
@@ -499,13 +624,23 @@ impl Server {
             }
             ("GET", p) if p.starts_with("/Shows/") && p.ends_with("/Episodes") => {
                 let series = p.trim_start_matches("/Shows/").trim_end_matches("/Episodes");
-                let season1 = req.query.get("seasonid").is_some_and(|s| s.ends_with("s1"));
-                let eps: Vec<Value> = lib
-                    .episodes
-                    .iter()
-                    .filter(|e| season1 && e.json["SeriesId"] == series)
-                    .map(|e| e.json.clone())
-                    .collect();
+                let all = lib.episodes.iter().filter(|e| e.json["SeriesId"] == series);
+                let eps: Vec<Value> = match req.query.get("startitemid") {
+                    // From an episode on, in series order (what plays next).
+                    Some(start) => all
+                        .skip_while(|e| e.json["Id"] != *start)
+                        .take(limit(100))
+                        .map(|e| e.json.clone())
+                        .collect(),
+                    None => {
+                        let season = req.query.get("seasonid").map(|s| Value::from(s.as_str()));
+                        all.filter(|e| {
+                            season.is_none() || e.json.get("SeasonId") == season.as_ref()
+                        })
+                        .map(|e| e.json.clone())
+                        .collect()
+                    }
+                };
                 Response::json(query_result(eps))
             }
             ("GET", "/Genres") => {
@@ -525,6 +660,31 @@ impl Server {
                 )
             }
             ("POST", "/Sessions/Logout") => Response::status(204),
+            ("POST", p) if p.starts_with("/Sessions/Playing") => self.report(p, body),
+            ("GET", "/Mock/Reports") => Response::json(Value::Array(
+                self.reports.lock().map(|r| r.clone()).unwrap_or_default(),
+            )),
+            ("POST", p) if p.starts_with("/Items/") && p.ends_with("/PlaybackInfo") => {
+                let id = p.trim_start_matches("/Items/").trim_end_matches("/PlaybackInfo");
+                match lib.find(id) {
+                    Some(i) => Response::json(playback_info(&i.json)),
+                    None => Response::status(404),
+                }
+            }
+            ("GET", p) if p.starts_with("/MediaSegments/") => {
+                let id = &p["/MediaSegments/".len()..];
+                match lib.find(id) {
+                    Some(i) => Response::json(query_result(segments(&i.json))),
+                    None => Response::status(404),
+                }
+            }
+            ("GET", p) if p.starts_with("/Videos/") && p.contains("/Trickplay/") => {
+                self.trickplay_tile(p)
+            }
+            ("GET", p) if p.starts_with("/Videos/") && p.contains("/Subtitles/") => {
+                Response::bytes("text/plain; charset=utf-8", SUBTITLES.as_bytes().to_vec())
+            }
+            ("GET", p) if p.starts_with("/Videos/") && p.ends_with("/stream") => self.stream(req),
             _ => Response::status(404),
         }
     }
@@ -546,7 +706,7 @@ impl Server {
         let fav = filters.contains("IsFavorite") || q("isfavorite") == Some("true");
         let unplayed = filters.contains("IsUnplayed");
         let term = q("searchterm").map(str::to_lowercase);
-        let genre = q("genres");
+        let genres: Vec<&str> = q("genres").map(|g| g.split('|').collect()).unwrap_or_default();
         let before = q("namelessthan").map(str::to_lowercase);
         let mut v: Vec<&Value> = src
             .iter()
@@ -559,9 +719,10 @@ impl Server {
                     .is_none_or(|t| j["Name"].as_str().unwrap_or("").to_lowercase().contains(t))
             })
             .filter(|j| {
-                genre.is_none_or(|g| {
-                    j["Genres"].as_array().is_some_and(|a| a.iter().any(|x| x == g))
-                })
+                genres.is_empty()
+                    || j["Genres"]
+                        .as_array()
+                        .is_some_and(|a| a.iter().any(|x| genres.iter().any(|g| x == *g)))
             })
             .filter(|j| before.as_ref().is_none_or(|b| sort_name(j).as_str() < b.as_str()))
             .collect();
@@ -587,6 +748,95 @@ impl Server {
         let limit: usize = q("limit").and_then(|s| s.parse().ok()).unwrap_or(100);
         let page: Vec<Value> = v.into_iter().skip(start).take(limit).cloned().collect();
         Response::json(json!({ "Items": page, "TotalRecordCount": total, "StartIndex": start }))
+    }
+
+    /// Records a playback report; progress and stop set the resume point.
+    fn report(&self, path: &str, body: &[u8]) -> Response {
+        let Ok(v) = serde_json::from_slice::<Value>(body) else { return Response::status(400) };
+        let kind = match path {
+            "/Sessions/Playing" => "Start",
+            "/Sessions/Playing/Progress" => "Progress",
+            "/Sessions/Playing/Stopped" => "Stopped",
+            _ => return Response::status(404),
+        };
+        if let (Some(item), Some(t)) = (v["ItemId"].as_str(), v["PositionTicks"].as_i64())
+            && kind != "Start"
+            && let Ok(mut p) = self.positions.lock()
+        {
+            // Like the server: past 90% the item is watched and the resume
+            // point is cleared.
+            let rt = self.lib.find(item).and_then(|i| i.json["RunTimeTicks"].as_i64()).unwrap_or(0);
+            let watched = rt > 0 && t * 10 >= rt * 9;
+            p.insert(item.to_string(), if watched { 0 } else { t });
+        }
+        if let Ok(mut r) = self.reports.lock() {
+            r.push(
+                json!({ "Kind": kind, "ItemId": v["ItemId"], "PositionTicks": v["PositionTicks"],
+                           "IsPaused": v["IsPaused"], "PlaySessionId": v["PlaySessionId"],
+                           "AudioStreamIndex": v["AudioStreamIndex"],
+                           "SubtitleStreamIndex": v["SubtitleStreamIndex"] }),
+            );
+        }
+        Response::status(204)
+    }
+
+    /// The `media` file, from `Range` on (mpv seeks with ranges).
+    fn stream(&self, req: &Request) -> Response {
+        let Some(path) = &self.cfg.media else { return Response::status(404) };
+        let data = {
+            let Ok(mut m) = self.media.lock() else { return Response::status(500) };
+            if m.is_none() {
+                match std::fs::read(path) {
+                    Ok(d) => *m = Some(Arc::new(d)),
+                    Err(_) => return Response::status(404),
+                }
+            }
+            m.clone().unwrap_or_default()
+        };
+        let total = data.len() as u64;
+        let start = req.range_start.unwrap_or(0).min(total);
+        let ct = match path.extension().and_then(|e| e.to_str()) {
+            Some("mkv") => "video/x-matroska",
+            Some("webm") => "video/webm",
+            _ => "video/mp4",
+        };
+        let mut r = Response::bytes(ct, data[start as usize..].to_vec());
+        if req.range_start.is_some() {
+            r.status = 206;
+            r.content_range = Some(format!("bytes {start}-{}/{total}", total.saturating_sub(1)));
+        }
+        r
+    }
+
+    /// A trickplay sheet: tiles shaded by their position in the video,
+    /// with a bar marking it, so seeking shows distinct previews.
+    fn trickplay_tile(&self, path: &str) -> Response {
+        let parts: Vec<&str> = path.split('/').collect();
+        let (Some(item), Some(index)) = (parts.get(2), parts.get(5)) else {
+            return Response::status(404);
+        };
+        let sheet: u32 = index.trim_end_matches(".jpg").parse().unwrap_or(0);
+        let base = color(item);
+        let (w, h) = (TRICK_W * 10, TRICK_H * 10);
+        let img = image::RgbImage::from_fn(w, h, |x, y| {
+            let tile = sheet * 100 + (y / TRICK_H) * 10 + x / TRICK_W;
+            let (tx, ty) = (x % TRICK_W, y % TRICK_H);
+            let marker = (tile * 7) % TRICK_W;
+            let k = 0.35 + 0.65 * ((tile % 20) as f32 / 20.0);
+            if ty > TRICK_H - 24 && tx < marker {
+                return image::Rgb([240, 240, 240]);
+            }
+            image::Rgb([
+                (base[0] as f32 * k) as u8,
+                (base[1] as f32 * k) as u8,
+                (base[2] as f32 * k) as u8,
+            ])
+        });
+        let mut png = Vec::new();
+        if img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).is_err() {
+            return Response::status(500);
+        }
+        Response::bytes("image/png", png)
     }
 
     fn qc(&self, authenticated: bool) -> Value {
@@ -653,7 +903,7 @@ impl Server {
         if img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).is_err() {
             return Response::status(500);
         }
-        Response { status: 200, content_type: "image/png", body: png }
+        Response::bytes("image/png", png)
     }
 }
 
@@ -700,12 +950,18 @@ async fn connection(server: Arc<Server>, mut sock: TcpStream) {
     };
     let reason = match resp.status {
         200 => "OK",
+        206 => "Partial Content",
         401 => "Unauthorized",
         404 => "Not Found",
         _ => "Error",
     };
+    let range = resp
+        .content_range
+        .as_ref()
+        .map(|r| format!("Content-Range: {r}\r\nAccept-Ranges: bytes\r\n"))
+        .unwrap_or_default();
     let header = format!(
-        "HTTP/1.1 {} {reason}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} {reason}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{range}Connection: close\r\n\r\n",
         resp.status,
         resp.content_type,
         resp.body.len()
@@ -717,11 +973,15 @@ async fn connection(server: Arc<Server>, mut sock: TcpStream) {
 
 /// Serves HTTP on `listener` until the task is dropped.
 pub async fn serve(listener: TcpListener, cfg: MockConfig) {
+    let runtime = cfg.media.as_ref().map(|_| cfg.media_secs as i64 * 10_000_000);
     let server = Arc::new(Server {
-        lib: Library::new(cfg.movies),
+        lib: Library::new(cfg.movies, runtime),
         cfg,
         polls: AtomicU32::new(0),
         log: Mutex::default(),
+        reports: Mutex::default(),
+        positions: Mutex::default(),
+        media: Mutex::default(),
     });
     loop {
         let Ok((sock, _)) = listener.accept().await else { continue };
@@ -778,9 +1038,92 @@ mod tests {
 
     #[test]
     fn library_scales() {
-        let l = Library::new(10_000);
+        let l = Library::new(10_000, None);
         assert_eq!(l.movies.len(), 10_000);
         assert!(l.find(&id(0x10, 9_999)).is_some());
         assert_eq!(blurhash([0, 0, 0]), "000000");
+    }
+
+    fn server(media: Option<std::path::PathBuf>) -> Server {
+        let cfg = MockConfig { media, media_secs: 30, ..Default::default() };
+        Server {
+            lib: Library::new(8, cfg.media.as_ref().map(|_| 300_000_000)),
+            cfg,
+            polls: AtomicU32::new(0),
+            log: Mutex::default(),
+            reports: Mutex::default(),
+            positions: Mutex::default(),
+            media: Mutex::default(),
+        }
+    }
+
+    fn req(method: &str, target: &str, range: Option<u64>) -> Request {
+        let mut r = parse_request(&format!(
+            "{method} {target} HTTP/1.1\r\nAuthorization: MediaBrowser Token=\"mock-token\""
+        ))
+        .unwrap();
+        r.range_start = range;
+        r
+    }
+
+    fn body(r: &Response) -> Value {
+        serde_json::from_slice(&r.body).unwrap()
+    }
+
+    #[test]
+    fn playback_routes() {
+        let s = server(None);
+        let movie = id(0x10, 0);
+        let info =
+            body(&s.handle(&req("POST", &format!("/Items/{movie}/PlaybackInfo"), None), b"{}"));
+        assert_eq!(info["MediaSources"][0]["Id"], movie.as_str());
+        assert_eq!(info["MediaSources"][0]["MediaStreams"][4]["IsExternal"], true);
+        let d = body(&s.handle(&req("GET", &format!("/Items/{movie}"), None), b""));
+        assert_eq!(d["Chapters"].as_array().unwrap().len(), 5);
+        assert_eq!(d["Trickplay"][&movie]["320"]["TileWidth"], 10);
+        let seg = body(&s.handle(&req("GET", &format!("/MediaSegments/{movie}"), None), b""));
+        assert_eq!(seg["Items"][0]["Type"], "Intro");
+        let ep = id(0x30, 3);
+        let series = id(0x20, 0);
+        let next = body(&s.handle(
+            &req("GET", &format!("/Shows/{series}/Episodes?startItemId={ep}&limit=2"), None),
+            b"",
+        ));
+        assert_eq!(next["Items"][0]["Id"], ep.as_str());
+        assert_eq!(next["Items"][1]["Id"], id(0x30, 4).as_str());
+        let tile =
+            s.handle(&req("GET", &format!("/Videos/{movie}/Trickplay/320/0.jpg"), None), b"");
+        assert_eq!((tile.status, tile.content_type), (200, "image/png"));
+    }
+
+    #[test]
+    fn reports_set_resume_positions() {
+        let s = server(None);
+        let movie = id(0x10, 1);
+        let r = s.handle(
+            &req("POST", "/Sessions/Playing/Stopped", None),
+            json!({ "ItemId": movie, "PositionTicks": 1234 }).to_string().as_bytes(),
+        );
+        assert_eq!(r.status, 204);
+        let d = body(&s.handle(&req("GET", &format!("/Items/{movie}"), None), b""));
+        assert_eq!(d["UserData"]["PlaybackPositionTicks"], 1234);
+        let reps = body(&s.handle(&req("GET", "/Mock/Reports", None), b""));
+        assert_eq!(reps[0]["Kind"], "Stopped");
+    }
+
+    #[test]
+    fn stream_supports_ranges() {
+        let f =
+            std::env::temp_dir().join(format!("jellyroll-mock-media-{}.mp4", std::process::id()));
+        std::fs::write(&f, b"0123456789").unwrap();
+        let s = server(Some(f.clone()));
+        let movie = id(0x10, 0);
+        let full = s.handle(&req("GET", &format!("/Videos/{movie}/stream"), None), b"");
+        assert_eq!((full.status, full.body.len()), (200, 10));
+        let part = s.handle(&req("GET", &format!("/Videos/{movie}/stream"), Some(4)), b"");
+        assert_eq!(part.status, 206);
+        assert_eq!(part.body, b"456789");
+        assert_eq!(part.content_range.as_deref(), Some("bytes 4-9/10"));
+        let _ = std::fs::remove_file(f);
     }
 }

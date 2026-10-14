@@ -48,6 +48,10 @@ pub enum Kind {
     Library,
     /// A cast/crew member.
     Person,
+    /// A playlist: its page lists the entries.
+    Playlist,
+    /// A collection (box set) or plain folder: its page lists the items.
+    Folder,
     #[default]
     Other,
 }
@@ -60,6 +64,9 @@ impl Kind {
             Some(BaseItemKind::Season) => Kind::Season,
             Some(BaseItemKind::Episode) => Kind::Episode,
             Some(BaseItemKind::CollectionFolder | BaseItemKind::UserView) => Kind::Library,
+            Some(BaseItemKind::Playlist) => Kind::Playlist,
+            Some(BaseItemKind::Person) => Kind::Person,
+            Some(BaseItemKind::BoxSet | BaseItemKind::Folder) => Kind::Folder,
             _ => Kind::Other,
         }
     }
@@ -83,6 +90,9 @@ pub struct Card {
     pub backdrop: Option<Art>,
     /// Playback progress 0..1 for partially watched items.
     pub progress: Option<f32>,
+    /// Watched (a series: every episode).
+    #[serde(default)]
+    pub played: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -224,6 +234,7 @@ pub fn card(item: &BaseItemDto, shape: Shape) -> Option<Card> {
         image: card_image(item, shape),
         backdrop: backdrop(item),
         progress,
+        played: item.user_data.as_ref().and_then(|u| u.played).unwrap_or(false),
     })
 }
 
@@ -416,6 +427,7 @@ fn person(p: &jellyfin_api::dto::BaseItemPerson) -> Option<Card> {
         overview: String::new(),
         backdrop: None,
         progress: None,
+        played: false,
     })
 }
 
