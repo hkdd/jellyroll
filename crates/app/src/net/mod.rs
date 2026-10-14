@@ -158,6 +158,11 @@ pub enum Fetch {
         playlist: bool,
     },
     Genres(String),
+    /// The years present in a library (of these item types).
+    Years {
+        parent: String,
+        include_types: Option<String>,
+    },
     SetFavorite {
         id: String,
         on: bool,

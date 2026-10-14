@@ -699,6 +699,21 @@ impl Server {
                 };
                 Response::json(query_result(eps))
             }
+            ("GET", "/Years") => {
+                let lib = &self.lib;
+                let src: &[Item] = match req.query.get("parentid") {
+                    Some(p) if *p == lib.views[0]["Id"] => &lib.movies,
+                    Some(p) if *p == lib.views[1]["Id"] => &lib.series,
+                    Some(p) if *p == lib.views[2]["Id"] => &lib.albums,
+                    _ => &[],
+                };
+                let mut ys: Vec<i64> =
+                    src.iter().filter_map(|i| i.json["ProductionYear"].as_i64()).collect();
+                ys.sort_unstable_by(|a, b| b.cmp(a));
+                ys.dedup();
+                let v = ys.iter().map(|y| json!({ "Name": y.to_string(), "Id": y.to_string() }));
+                Response::json(query_result(v.collect()))
+            }
             ("GET", "/Genres") => {
                 let g: Vec<Value> = GENRES.iter().map(|g| json!({ "Name": g, "Id": g })).collect();
                 Response::json(query_result(g))
@@ -787,11 +802,17 @@ impl Server {
         let unplayed = filters.contains("IsUnplayed");
         let term = q("searchterm").map(str::to_lowercase);
         let genres: Vec<&str> = q("genres").map(|g| g.split('|').collect()).unwrap_or_default();
+        let years: Vec<i64> = q("years")
+            .map(|y| y.split(',').filter_map(|y| y.trim().parse().ok()).collect())
+            .unwrap_or_default();
         let before = q("namelessthan").map(str::to_lowercase);
         let mut v: Vec<&Value> = src
             .iter()
             .map(|i| &i.json)
             .filter(|j| types.is_empty() || types.iter().any(|t| j["Type"] == *t))
+            .filter(|j| {
+                years.is_empty() || j["ProductionYear"].as_i64().is_some_and(|y| years.contains(&y))
+            })
             .filter(|j| !fav || j["UserData"]["IsFavorite"] == true)
             .filter(|j| !unplayed || j["UserData"]["Played"] != true)
             .filter(|j| {

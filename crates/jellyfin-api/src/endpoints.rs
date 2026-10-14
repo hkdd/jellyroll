@@ -177,7 +177,8 @@ pub struct ItemsQuery {
     pub favorites: bool,
     /// Items in any of these genres.
     pub genres: Vec<String>,
-    pub year: Option<i32>,
+    /// Items from any of these years (production year).
+    pub years: Vec<i32>,
     pub search: Option<String>,
     /// Only items whose sort name sorts before this (alphabet jump: with
     /// `limit` 0, the total count is the index of the first item at or
@@ -205,7 +206,11 @@ pub fn items(user_id: &str, q: &ItemsQuery) -> Request<BaseItemDtoQueryResult> {
         .param("sortOrder", if q.descending { "Descending" } else { "Ascending" })
         .opt("filters", (!filters.is_empty()).then(|| filters.join(",")))
         .opt("genres", (!q.genres.is_empty()).then(|| q.genres.join("|")))
-        .opt("years", q.year)
+        .opt(
+            "years",
+            (!q.years.is_empty())
+                .then(|| q.years.iter().map(|y| y.to_string()).collect::<Vec<_>>().join(",")),
+        )
         .opt("searchTerm", q.search.as_deref())
         .opt("nameLessThan", q.name_less_than.as_deref())
         .param("startIndex", q.start)
@@ -314,6 +319,24 @@ pub fn genres(user_id: &str, parent_id: &str) -> Request<BaseItemDtoQueryResult>
         .param("parentId", parent_id)
         .param("sortBy", "SortName")
         .param("enableTotalRecordCount", false);
+    Request::new(Method::Get, q.0)
+}
+
+/// The production years present in a library (for the year filter), as
+/// items whose names are the years.
+pub fn years(
+    user_id: &str,
+    parent_id: &str,
+    include_types: Option<&str>,
+) -> Request<BaseItemDtoQueryResult> {
+    let q = Query::new("/Years")
+        .param("userId", user_id)
+        .param("parentId", parent_id)
+        .opt("includeItemTypes", include_types)
+        .param("recursive", true)
+        .param("sortBy", "SortName")
+        .param("sortOrder", "Descending")
+        .param("enableImages", false);
     Request::new(Method::Get, q.0)
 }
 
@@ -446,6 +469,13 @@ mod tests {
         let p = items("u", &q).path;
         assert!(p.starts_with("/Items?userId=u&parentId=lib&recursive=true&includeItemTypes=Movie&sortBy=SortName&sortOrder=Ascending&filters=IsUnplayed%2CIsFavorite&genres=Sci-Fi%7CDrama&startIndex=200&limit=100"), "{p}");
         assert!(p.ends_with("enableTotalRecordCount=true"), "{p}");
+        let decade = ItemsQuery { years: vec![1990, 1991], ..Default::default() };
+        assert!(items("u", &decade).path.contains("&years=1990%2C1991&"));
+        let y = years("u", "lib", Some("Movie")).path;
+        assert!(
+            y.starts_with("/Years?userId=u&parentId=lib&includeItemTypes=Movie&recursive=true"),
+            "{y}"
+        );
         let idx = ItemsQuery { name_less_than: Some("M".into()), ..Default::default() };
         assert!(items("u", &idx).path.contains("nameLessThan=M&startIndex=0&limit=0"));
         assert_eq!(set_favorite("u", "i", false).method, Method::Delete);

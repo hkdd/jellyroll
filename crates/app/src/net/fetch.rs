@@ -168,6 +168,10 @@ async fn fetch(c: &Client, user: &str, f: Fetch) -> Result<Fetched, Error> {
             let r = c.send(&ep::genres(user, &parent)).await?;
             Fetched::Names(r.items.unwrap_or_default().into_iter().filter_map(|g| g.name).collect())
         }
+        Fetch::Years { parent, include_types } => {
+            let r = c.send(&ep::years(user, &parent, include_types.as_deref())).await?;
+            Fetched::Names(r.items.unwrap_or_default().into_iter().filter_map(|y| y.name).collect())
+        }
         Fetch::SetFavorite { id, on } => {
             let d = c.send(&ep::set_favorite(user, &id, on)).await?;
             Fetched::UserData {

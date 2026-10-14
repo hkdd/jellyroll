@@ -958,6 +958,14 @@ an account signs nobody out; Back returns to whoever was watching.
 - The mock server has a second user, `kid` (password sign-in, no
   password).
 
+**D66: Year filter by decade (spec 10.1).** Library grids get "Year: All ›"
+after Genre. It opens the slide-in list with "All years" and each decade
+the library actually has (from `GET /Years` for the library and its item
+types), newest first; picking one filters to that decade's ten years
+(`years=` on the item query). Decades rather than single years: a list of
+70 years is slow to pick from with a remote, and "something from the
+90s" is how people browse.
+
 ## Dependency approvals
 
 | Crate | Status |
