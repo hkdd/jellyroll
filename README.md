@@ -20,7 +20,7 @@ and verified versions.
 | **M5** Jellyfin client: discovery, Quick Connect, auth, home data, images with caching; mock server | **Done.** On the HTPC against a Jellyfin 12.2 server: real home screen, cached start in ~0.4 s, first frame 393 ms. See `docs/DECISIONS.md` |
 | **M6** Browsing: libraries (10k-item grids), detail pages, search, settings, password sign-in; play from the server | **Built.** On the HTPC: search and series pages verified; scroll benchmark 0 missed vsyncs, 0 allocating frames; native 4K over the CPU/GPU budgets on frames that load artwork (accepted, D44; 1080p upscaled in Settings). Rest of the walkthrough: `docs/M6-HARDWARE-CHECKLIST.md` |
 | **M7** Player UX: OSD, track menus, trickplay, skip segments, next-up, progress reporting, resume | **Done.** On the HTPC: movie and episode flows, resume points and watched state on the server, next-episode autoplay (D49) |
-| **M8** Display features: refresh-rate matching, audio passthrough, hotplug/TV standby, power menu | **Built**, awaiting the HTPC checklist (`docs/M8-HARDWARE-CHECKLIST.md`) |
+| **M8** Display features: refresh-rate matching, audio passthrough, hotplug/TV standby, power menu | **Done** except two retests: on the HTPC 24p plays at 24 Hz, the power menu works, a TV power cycle is survived; open: sound after the power cycle, passthrough (D58) |
 | M9, M10 | Not started |
 
 The app connects to your Jellyfin server and shows its home screen: My

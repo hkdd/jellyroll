@@ -828,6 +828,12 @@ panel (no outline), drawn over the buttons and rows, and shrinks
 when focus leaves. Down goes back to where focus came from, not the
 spatially nearest button. Short descriptions are not focusable.
 
+**D58: M8 status at merge.** Verified on the HTPC: refresh-rate
+matching (24p plays at 24 Hz), the power menu (Restart reboots), surviving
+a TV power cycle (playback continued). Open: sound after a TV power cycle
+with the ELD-triggered audio reopen (D54), and passthrough to a receiver
+(no Dolby/DTS-capable receiver tested yet). Merged with M7 in one PR.
+
 ## Dependency approvals
 
 | Crate | Status |
