@@ -835,6 +835,7 @@ impl HomeApp {
         safe_area: f32,
     ) {
         if self.textures.uploads_pending() {
+            let _upload = tracing::trace_span!("upload").entered();
             self.textures.pump(r, UPLOAD_BUDGET);
         }
         self.textures.begin_frame();
@@ -1125,6 +1126,7 @@ impl HomeApp {
         self.textures.begin_frame();
         self.last_upload_ms = 0.0;
         if self.textures.uploads_pending() {
+            let _upload = tracing::trace_span!("upload").entered();
             let t = Instant::now();
             if self.textures.pump(r, UPLOAD_BUDGET) {
                 // Newly loaded (or evicted) images change what to request.

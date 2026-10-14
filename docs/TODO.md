@@ -9,9 +9,10 @@ priority order; strike through or delete when done.
 3. ~~**Multiple users and servers (spec 8).**~~ Built (D65).
 4. ~~**Library year filter (spec 10.1).**~~ Built (D66).
 5. ~~**Settings (spec 7.1, 10.1):** playback, caches.~~ Built (D67).
-6. **Config extras (spec 11):** hwdec override, input key remapping.
-7. **Developer tracing (spec 13):** spans around update/layout/draw/
-   upload/swap; optional Tracy or tracing-chrome behind a feature flag.
+6. ~~**Config extras (spec 11):** hwdec override, input key remapping.~~
+   Dropped 2026-10-14: other changes coming make it
+   unnecessary.
+7. ~~**Developer tracing (spec 13).**~~ Built (D68).
 
 Deferred:
 - M9 (HDR10 passthrough, native DRM backend, overlay-plane video, spec

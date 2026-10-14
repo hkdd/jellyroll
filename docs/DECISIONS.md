@@ -986,6 +986,31 @@ values were checked against mpv 0.37 here and current mpv's manual.
   reloads the home screen. The page shows how much artwork is on disk.
 - The Settings page now scrolls to keep the focused row visible.
 
+**D68: Developer tracing (spec 13).** The frame loop opens TRACE-level
+spans around each stage of a loop iteration: `wait` (for input), then
+`frame` containing `net` (network events), `update` (input, animation,
+requests), `video` (mpv's render), `draw` (recording the UI, with
+`upload` for artwork and `submit` for Skia's flush) and `swap`; the
+network thread's artwork decoding is `decode`. Layout has no span of its
+own: it happens inside `update` and `draw`.
+- The log's level filter is now per layer instead of global, so these
+  spans stay disabled at their call sites under the usual `info` level (a
+  cached check; no allocation: the scroll benchmark's allocation count is
+  unchanged).
+- Recording uses `tracing-chrome` 0.7.2 behind the `profile` cargo
+  feature: `--trace FILE` writes Chrome trace JSON (one track per thread)
+  for ui.perfetto.dev or chrome://tracing. The spec offers Tracy or
+  tracing-chrome; tracing-chrome is pure Rust and needs no viewer of a
+  matching version, where Tracy builds a C++ client that must match the
+  Tracy GUI. It records jellyroll's spans plus info-level events, not
+  dependencies' trace output. Without the feature, `--trace` prints how
+  to build with it and is ignored.
+- Measured under Xvfb (`--bench-scroll 10`): with tracing compiled in
+  but off, 0 allocating frames and steady-frame CPU p50 2.2 ms, as before
+  the spans (2.3 ms). With `--trace`, recording allocates, so a traced
+  run's allocation check is meaningless; its 10 s trace was 17.7k events,
+  2.6 MB, 7 threads.
+
 ## Dependency approvals
 
 | Crate | Status |
@@ -994,3 +1019,4 @@ values were checked against mpv 0.37 here and current mpv's manual.
 | `tokio`, `reqwest` (rustls), `serde_json`, `image`, `fast_image_resize`, `redb` | Listed in spec §3; versions in `docs/VERSIONS.md` (M5) |
 | `zbus` | Listed in spec §3 (logind power actions); version in `docs/VERSIONS.md` (M8) |
 | `tokio-tungstenite` (and `futures-util` for its stream traits) | Approved 2026-10-14 (D63) |
+| `tracing-chrome` | Named in spec §13 (optional profiling); `profile` feature only (D68) |

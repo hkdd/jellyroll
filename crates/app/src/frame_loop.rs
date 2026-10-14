@@ -287,13 +287,18 @@ pub fn run<P: Platform, R: Renderer>(
         };
         let timeout = wait_timeout(dirty, animating, deadline, now);
         events.clear();
-        if timeout.is_zero() {
-            p.poll_events(&mut events);
-        } else {
-            // Going idle: the next present will not be back-to-back.
-            last_present = None;
-            p.wait_events(timeout, &mut events);
+        {
+            let _wait = tracing::trace_span!("wait").entered();
+            if timeout.is_zero() {
+                p.poll_events(&mut events);
+            } else {
+                // Going idle: the next present will not be back-to-back.
+                last_present = None;
+                p.wait_events(timeout, &mut events);
+            }
         }
+        // One span per loop iteration (spec 13 profiling, `--trace`).
+        let _frame = tracing::trace_span!("frame").entered();
 
         // ---- housekeeping (outside the measured frame) ----------------
         let now = Instant::now();
@@ -345,6 +350,7 @@ pub fn run<P: Platform, R: Renderer>(
         }
 
         if let View::Home(h) = &mut view {
+            let _net = tracing::trace_span!("net").entered();
             dirty |= h.poll(now);
             // Remote control from other Jellyfin apps (spec 8); held while
             // a video is about to start.
@@ -361,6 +367,7 @@ pub fn run<P: Platform, R: Renderer>(
 
         // ---- input + update (measured) --------------------------------
         let frame_start = Instant::now();
+        let update_span = tracing::trace_span!("update").entered();
         let allocs_start = alloc_counter::allocations();
         let work_start = view.load_work();
         for ev in &events {
@@ -663,11 +670,14 @@ pub fn run<P: Platform, R: Renderer>(
             continue;
         }
 
+        drop(update_span);
+
         // ---- draw ------------------------------------------------------
         let mut hud_allocs = load_allocs;
         let mut loading = load_allocs > 0;
         if let Some(pb) = playback.as_mut() {
             // mpv needs default GL state; Skia must then forget its cache.
+            let _video = tracing::trace_span!("video").entered();
             p.gl().reset_to_defaults();
             pb.player.render(fb);
             r.reset_gl_state();
@@ -677,6 +687,7 @@ pub fn run<P: Platform, R: Renderer>(
         // queries and only one can be active at a time (an open one of ours
         // made each of mpv's fail with GL_INVALID_OPERATION).
         let timing = gpu_timer.as_mut().is_some_and(|t| t.begin(p.gl()));
+        let draw_span = tracing::trace_span!("draw").entered();
         if let Some(pb) = playback.as_mut() {
             let submit_start = Instant::now();
             stats.record_ms.push(ms(submit_start - frame_start));
@@ -694,6 +705,7 @@ pub fn run<P: Platform, R: Renderer>(
                 let (lw, lh) = r.logical_size();
                 hud.draw(r, &stats, lw * (1.0 - safe_area), lh * safe_area);
                 hud_allocs = alloc_counter::allocations() - a0;
+                let _submit = tracing::trace_span!("submit").entered();
                 r.end_frame();
             }
             stats.submit_ms.push(ms(submit_start.elapsed()));
@@ -701,6 +713,7 @@ pub fn run<P: Platform, R: Renderer>(
             // The output is switching modes for the video: black frames.
             if r.begin_frame(fb) {
                 r.clear(jellyroll_render::Color::BLACK);
+                let _submit = tracing::trace_span!("submit").entered();
                 r.end_frame();
             }
         } else if r.begin_frame(fb) {
@@ -747,16 +760,23 @@ pub fn run<P: Platform, R: Renderer>(
             hud_allocs += alloc_counter::allocations() - a0;
             let submit_start = Instant::now();
             stats.record_ms.push(ms(submit_start - frame_start));
-            r.end_frame();
+            {
+                let _submit = tracing::trace_span!("submit").entered();
+                r.end_frame();
+            }
             stats.submit_ms.push(ms(submit_start.elapsed()));
         }
+        drop(draw_span);
         if timing && let Some(t) = gpu_timer.as_mut() {
             t.end(p.gl());
         }
         let cpu = frame_start.elapsed();
 
         // ---- present -----------------------------------------------------
-        p.swap();
+        {
+            let _swap = tracing::trace_span!("swap").entered();
+            p.swap();
+        }
         let presented = Instant::now();
         if let Some(pp) = pending_play.as_mut()
             && pp.needs_present

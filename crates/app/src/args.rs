@@ -33,6 +33,9 @@ USAGE: jellyroll [OPTIONS]
                          (no account needed), log memory every minute to
                          soak.csv, exit non-zero if it keeps growing
   --soak-media FILE      With --soak: also play FILE for a minute each cycle
+  --trace FILE           Write a timeline of every frame's work (spans) to FILE,
+                         for ui.perfetto.dev or chrome://tracing. Needs a build
+                         with `--features profile`
   --print-diagnostics    Print SDL/GL/display information and exit
   -h, --help             Show this help
 ";
@@ -55,6 +58,8 @@ pub struct Options {
     /// `--soak`: how long to run.
     pub soak: Option<Duration>,
     pub soak_media: Option<std::path::PathBuf>,
+    /// Chrome trace output (`profile` builds).
+    pub trace: Option<std::path::PathBuf>,
     pub help: bool,
 }
 
@@ -118,6 +123,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             "--soak-media" => {
                 o.soak_media = Some(it.next().ok_or("--soak-media needs a file")?.into())
             }
+            "--trace" => o.trace = Some(it.next().ok_or("--trace needs a file")?.into()),
             "-h" | "--help" => o.help = true,
             other => return Err(format!("unknown argument '{other}' (see --help)")),
         }
@@ -227,5 +233,12 @@ mod tests {
     #[test]
     fn unknown_flag() {
         assert!(p(&["--nope"]).is_err());
+    }
+
+    #[test]
+    fn trace_takes_a_file() {
+        let o = parse(["--trace", "/tmp/t.json"].iter().map(|s| s.to_string())).unwrap();
+        assert_eq!(o.trace.as_deref(), Some(std::path::Path::new("/tmp/t.json")));
+        assert!(parse(["--trace"].iter().map(|s| s.to_string())).is_err());
     }
 }

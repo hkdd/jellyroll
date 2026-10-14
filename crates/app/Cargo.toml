@@ -24,7 +24,10 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 tracing-journald = "=0.3.2"
 # logind power actions over D-Bus (spec 5.5).
 zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
-
+# Frame timeline for profiling (spec 13): `--trace FILE` writes Chrome
+# trace JSON. Off by default; not in release builds.
+tracing-chrome = { version = "=0.7.2", optional = true }
 
 [features]
 build-sdl = ["jellyroll-platform/build-sdl"]
+profile = ["dep:tracing-chrome"]

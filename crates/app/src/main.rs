@@ -59,7 +59,7 @@ fn main() -> ExitCode {
             warnings: vec!["no $HOME or $XDG_CONFIG_HOME; using default config".into()],
         },
     };
-    logging::init(&loaded.config.log.level);
+    let _trace = logging::init(&loaded.config.log.level, opts.trace.as_deref());
     logging::install_panic_hook();
     tracing::info!(path = %loaded.path.display(), "config");
     for w in &loaded.warnings {

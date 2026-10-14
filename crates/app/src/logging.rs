@@ -1,5 +1,14 @@
 //! tracing setup: journald when started by systemd, stderr otherwise.
+//!
+//! Profiling (spec 13): the frame loop and the network thread open
+//! TRACE-level spans around each stage (`wait`, `net`, `update`, `video`,
+//! `upload`, `draw`, `submit`, `swap`; `decode` for artwork). The log's
+//! level filter is per layer, so with the usual `info` those spans are
+//! disabled where they are written (a cached check, no allocation). Built
+//! with `--features profile` and run with `--trace FILE`, a Chrome-trace
+//! layer records them (and info-level events) to FILE.
 
+use tracing_subscriber::Layer;
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -15,19 +24,69 @@ fn filter(config_level: &str) -> Targets {
         .unwrap_or_else(|| Targets::new().with_default(LevelFilter::INFO))
 }
 
-pub fn init(config_level: &str) {
-    let registry = tracing_subscriber::registry().with(filter(config_level));
+/// Keeps the trace file open; dropping it writes the end of the file.
+pub struct TraceGuard {
+    #[cfg(feature = "profile")]
+    _flush: tracing_chrome::FlushGuard,
+}
+
+#[cfg(feature = "profile")]
+type TraceLayer = tracing_subscriber::filter::Filtered<
+    tracing_chrome::ChromeLayer<tracing_subscriber::Registry>,
+    tracing_subscriber::filter::FilterFn,
+    tracing_subscriber::Registry,
+>;
+#[cfg(not(feature = "profile"))]
+type TraceLayer = tracing_subscriber::layer::Identity;
+
+/// What the trace records: jellyroll's spans, and what would be logged
+/// anyway; not every dependency's trace output.
+#[cfg(feature = "profile")]
+fn traced(m: &tracing::Metadata<'_>) -> bool {
+    (m.is_span() && m.target().starts_with("jellyroll")) || *m.level() <= tracing::Level::INFO
+}
+
+/// The Chrome-trace layer for `--trace FILE`.
+#[cfg(feature = "profile")]
+fn trace_layer(path: &std::path::Path) -> (TraceLayer, TraceGuard) {
+    let (layer, flush) =
+        tracing_chrome::ChromeLayerBuilder::new().file(path).include_args(true).build();
+    let wanted =
+        tracing_subscriber::filter::filter_fn(traced as fn(&tracing::Metadata<'_>) -> bool);
+    (layer.with_filter(wanted), TraceGuard { _flush: flush })
+}
+
+/// Sets up logging; with `trace` (a `profile` build), also the frame
+/// timeline. Keep the guard until exit.
+pub fn init(config_level: &str, trace: Option<&std::path::Path>) -> Option<TraceGuard> {
+    #[cfg(feature = "profile")]
+    let (chrome, guard) = match trace.map(trace_layer) {
+        Some((l, g)) => (Some(l), Some(g)),
+        None => (None, None),
+    };
+    #[cfg(not(feature = "profile"))]
+    let (chrome, guard): (Option<TraceLayer>, Option<TraceGuard>) = {
+        if trace.is_some() {
+            eprintln!(
+                "jellyroll: --trace needs a build with the profile feature \
+                 (cargo build --release --features profile); ignored"
+            );
+        }
+        (None, None)
+    };
+    let registry = tracing_subscriber::registry().with(chrome);
     // Use native journald fields (priorities, spans) only when stderr really
     // is the journal stream systemd set up for us.
     if stderr_is_journal()
         && let Ok(layer) = tracing_journald::layer()
     {
-        registry.with(layer.with_syslog_identifier("jellyroll".into())).init();
-        return;
+        let layer = layer.with_syslog_identifier("jellyroll".into());
+        registry.with(layer.with_filter(filter(config_level))).init();
+        return guard;
     }
-    registry
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr).with_ansi(false))
-        .init();
+    let fmt = tracing_subscriber::fmt::layer().with_writer(std::io::stderr).with_ansi(false);
+    registry.with(fmt.with_filter(filter(config_level))).init();
+    guard
 }
 
 /// systemd sets JOURNAL_STREAM to the `device:inode` of the stream it

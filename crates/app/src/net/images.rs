@@ -26,6 +26,7 @@ pub struct Decoded {
 /// Decodes, center-crops to the target aspect, resizes to exactly `w`×`h`
 /// and applies `finish`.
 pub fn decode(bytes: &[u8], w: u32, h: u32, finish: Finish) -> Result<Decoded, String> {
+    let _decode = tracing::trace_span!("decode", w, h).entered();
     if w == 0 || h == 0 {
         return Err("zero target size".into());
     }

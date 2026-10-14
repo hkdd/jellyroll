@@ -25,6 +25,7 @@ All versions are the newest non-yanked release in the crates.io sparse index
 | `tracing` | 0.1.44 | |
 | `tracing-subscriber` | 0.3.23 | `default-features = false`, features `fmt`, `std`, `ansi` (no `env-filter`/regex) |
 | `tracing-journald` | 0.3.2 | Used when `JOURNAL_STREAM` is set |
+| `tracing-chrome` | 0.7.2 (2024-03-15, newest on crates.io 2026-10-14) | Optional, `profile` feature only (D68). Needs `tracing-subscriber` ^0.3.18, `serde_json` |
 | `serde` | 1.0.229 | `derive` feature; config structs (and Jellyfin DTOs from M5) |
 | `toml` | 0.9.8 | `default-features = false`, features `std`, `serde`, `parse` (read-only). Pulls in `toml_parser` 1.1.5, `winnow` 0.7.15, `serde_spanned` 1.1.2, `toml_datetime` 0.7.5 |
 

@@ -318,3 +318,21 @@ xvfb-run -a env BIN=target/release/jellyroll scripts/bench-startup.sh 5 --dev
 CI runs all of the above. Frame-time budgets only mean something on the
 reference hardware, so `--bench-pacing` is part of the hardware checklist and
 not CI.
+
+### Profiling a slow frame
+
+A build with the `profile` feature can record a timeline of every frame
+(waiting for input, network events, input and update, video, artwork
+uploads, drawing, GPU submit, swap) and of the artwork decoding on the
+network thread:
+
+```sh
+cargo build --release --features profile
+target/release/jellyroll --trace /tmp/jellyroll-trace.json   # use it, then quit
+```
+
+Open the file at <https://ui.perfetto.dev> (or `chrome://tracing`). Each
+thread is a track; zoom in on a long `frame` to see which stage took the
+time. Recording allocates, so a traced run's allocation numbers don't
+count. Normal builds don't include the recorder; the spans cost nothing
+there (D68).
