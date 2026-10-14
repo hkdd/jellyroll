@@ -9,6 +9,7 @@
 
 pub mod alloc_counter;
 pub mod cec;
+mod console;
 pub mod gl;
 mod hotplug;
 pub mod pad;

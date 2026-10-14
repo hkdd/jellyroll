@@ -9,7 +9,8 @@ Agreed 2026-10-14, in this order. Strike through when done.
    - The player's bar at the bottom appears when the first video frame
      does. (Today its 4-second timer starts when loading begins, so on a
      slow start it has already hidden by then.)
-2. **The console flashes on screen when a video starts** (only on start,
+2. ~~**The console flashes on screen when a video starts**~~ Built (D70);
+   to confirm on the HTPC with a 24p movie and Match refresh rate on. (Only on start,
    not on stop). Find what leaves the console visible for a moment (most
    likely the refresh-rate switch) and keep jellyroll's picture on screen
    throughout.

@@ -1021,6 +1021,23 @@ doesn't flash. The player's bar is shown again on the first frame: its
 4 s auto-hide used to start when the player was created, so a slow start
 (refresh switch, slow server) hid it before the video appeared.
 
+**D70: Blank console under the display.** The console showing when a
+video starts comes from SDL's KMSDRM backend (3.4.18,
+`KMSDRM_DestroySurfaces`): a mode change marks the window's surfaces
+dirty, and rebuilding them first points the screen back at "the original
+TTY buffer" (the console's framebuffer, saved when SDL started) until a
+frame is presented in the new mode. So with refresh-rate matching, every
+switch to a film's rate showed the console for a moment (switching back
+after playback goes to the console's own mode, where it is too brief to
+notice). SDL never puts the console in graphics mode, so its text stays
+drawn there. jellyroll now clears the console (screen and scrollback)
+and hides its cursor just before SDL takes the display, on KMSDRM only,
+so that moment is black; the cursor comes back on exit. It uses escape
+sequences, not `KDSETMODE` graphics mode, which would leave the console
+blank after a crash until something reset it. Not seen on the HTPC yet
+(the sandbox has no KMS); on a pseudo-terminal the sequences are written
+and undone as intended.
+
 ## Dependency approvals
 
 | Crate | Status |

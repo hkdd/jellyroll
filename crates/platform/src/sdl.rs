@@ -118,6 +118,9 @@ pub struct SdlPlatform {
     /// In a desktop window: output modes belong to the compositor.
     dev_window: bool,
     hotplug: Option<(crate::hotplug::Watcher, std::sync::mpsc::Receiver<PlatformEvent>)>,
+    /// The cleared text console under the display (KMSDRM); restores its
+    /// cursor on exit. Dropped last.
+    _console: Option<crate::console::Console>,
 }
 
 fn mode_info(m: &sdl3::video::DisplayMode) -> ModeInfo {
@@ -133,6 +136,13 @@ fn mode_info(m: &sdl3::video::DisplayMode) -> ModeInfo {
 fn sdl_version() -> String {
     let v = sdl3::version::version();
     format!("{}.{}.{}", v.major, v.minor, v.patch)
+}
+
+/// Whether SDL will use KMSDRM (no desktop window, and no SDL_VIDEO_DRIVER
+/// override pointing elsewhere, e.g. cage in dev setups).
+fn on_kmsdrm(opts: &SdlOptions) -> bool {
+    !opts.dev_window
+        && std::env::var("SDL_VIDEO_DRIVER").map_or(true, |d| d.eq_ignore_ascii_case("kmsdrm"))
 }
 
 fn init(opts: &SdlOptions) -> Result<(sdl3::Sdl, sdl3::VideoSubsystem), String> {
@@ -160,6 +170,9 @@ fn init(opts: &SdlOptions) -> Result<(sdl3::Sdl, sdl3::VideoSubsystem), String> 
 
 impl SdlPlatform {
     pub fn new(opts: &SdlOptions) -> Result<Self, String> {
+        // Before SDL takes the display: SDL keeps the console's framebuffer
+        // and shows it again during mode changes (D70).
+        let console = on_kmsdrm(opts).then(crate::console::Console::blank);
         let (sdl, video) = init(opts)?;
         let driver = video.current_video_driver().to_string();
         tracing::info!(driver, sdl = %sdl_version(), "SDL video initialized");
@@ -275,6 +288,7 @@ impl SdlPlatform {
                 wake_type,
                 dev_window: opts.dev_window,
                 hotplug: None,
+                _console: console,
             });
         }
         Err(format!("no usable GL context: {last_err}"))
