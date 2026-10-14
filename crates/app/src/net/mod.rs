@@ -148,6 +148,10 @@ pub enum Fetch {
     },
 }
 
+/// What a page shows when a request failed because the server can't be
+/// reached (and how the UI recognizes that case).
+pub const UNREACHABLE: &str = "Can't reach the server. Retrying automatically…";
+
 #[derive(Debug)]
 pub enum Fetched {
     Page { start: u32, total: u32, cards: Vec<Card> },

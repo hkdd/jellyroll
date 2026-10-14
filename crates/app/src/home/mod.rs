@@ -455,6 +455,7 @@ impl HomeApp {
                     self.screen = Screen::Status(StatusView::new(s));
                 }
                 Event::Home { data, fresh } => {
+                    let back_online = fresh && self.offline;
                     let vp = self.vp;
                     match &mut self.home {
                         Some(h) => h.set_data(data, now),
@@ -470,6 +471,14 @@ impl HomeApp {
                     if !matches!(self.screen, Screen::Browse) {
                         self.screen = Screen::Browse;
                         self.stack.clear();
+                    }
+                    if back_online {
+                        tracing::info!("server reachable again");
+                        self.with_ctx(now, |me, ctx| match me.stack.last_mut() {
+                            Some(Page::Library(v)) => v.retry(ctx),
+                            Some(Page::Detail(v)) => v.retry(ctx),
+                            _ => false,
+                        });
                     }
                     self.wants_dirty = true;
                 }
@@ -487,6 +496,18 @@ impl HomeApp {
                     dirty = false;
                 }
                 Event::Fetched { id, result } => {
+                    // A request found the server gone: show it at once and
+                    // have the session check (it reconnects and refreshes).
+                    if matches!(&result, Fetched::Failed(e) if e == crate::net::UNREACHABLE)
+                        && !self.offline
+                    {
+                        tracing::warn!("server unreachable; going offline");
+                        self.offline = true;
+                        if let Some(h) = &mut self.home {
+                            h.offline = true;
+                        }
+                        self.net.send(Cmd::Retry);
+                    }
                     dirty = self.fetched(id, result, now);
                     self.wants_dirty |= dirty;
                 }

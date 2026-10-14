@@ -69,7 +69,12 @@ async fn run(c: &Client, user: &str, f: Fetch) -> Fetched {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("fetch failed: {e}");
-            Fetched::Failed(e.to_string())
+            match e {
+                // The page shows this; the app goes offline and keeps
+                // checking until the server is back (then pages reload).
+                Error::Network(_) => Fetched::Failed(super::UNREACHABLE.into()),
+                e => Fetched::Failed(e.to_string()),
+            }
         }
     }
 }

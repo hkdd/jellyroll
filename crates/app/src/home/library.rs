@@ -169,6 +169,17 @@ impl LibraryView {
         }
     }
 
+    /// The server is back: load what failed. True if anything did.
+    pub fn retry(&mut self, ctx: &mut Ctx) -> bool {
+        if self.failed.take().is_none() {
+            return false;
+        }
+        // Pages that failed were dropped: loading what is visible asks for
+        // them again.
+        self.load(ctx);
+        true
+    }
+
     /// Starts over with the current sort/filters.
     fn reset(&mut self, ctx: &mut Ctx, now: Instant) {
         self.pages.clear();
@@ -863,5 +874,31 @@ mod tests {
         let q = q.last().unwrap();
         assert_eq!(q.sort_by.as_deref(), Some("ProductionYear,SortName"));
         assert!(!q.descending);
+    }
+
+    #[test]
+    fn a_failed_page_reloads_when_the_server_is_back() {
+        let t = Instant::now();
+        let mut next = 0;
+        let mut ctx = Ctx::new(&mut next);
+        let mut v = LibraryView::new(
+            "lib".into(),
+            "Movies".into(),
+            Some(CollectionType::Movies),
+            VP,
+            t,
+            &mut ctx,
+        );
+        let (id0, _) = fetches(&ctx)[0];
+        let unreachable = crate::net::UNREACHABLE.to_string();
+        v.on_fetched(id0, &Fetched::Failed(unreachable), t, &mut ctx);
+        assert!(v.failed.is_some());
+        let mut ctx = Ctx::new(&mut next);
+        assert!(v.retry(&mut ctx));
+        assert!(v.failed.is_none());
+        assert_eq!(fetches(&ctx).len(), 1, "the first page again");
+        let mut ctx = Ctx::new(&mut next);
+        assert!(!v.retry(&mut ctx), "nothing failed: nothing to do");
+        assert!(fetches(&ctx).is_empty());
     }
 }

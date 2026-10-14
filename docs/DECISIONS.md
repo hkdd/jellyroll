@@ -847,6 +847,19 @@ SDL). M9 waits for newer hardware such as an Intel N150 (Twin Lake, Xe graphics:
 AV1 decode, native HDMI 2.0 with HDR in i915).
 M10 comes first.
 
+**D60: Losing the server mid-session (M10 audit).** Audited under Xvfb:
+server down at first start (status screen, automatic retry, Back to pick
+another server), restart while it is down (cached home, "Offline" badge),
+corrupted state, cache and preferences files (each logged and replaced
+with defaults; sign-in again if the state was lost), no audio device
+(mpv's null output, M3). The gap: a server that went away while
+browsing was only noticed at the next 5-minute refresh, and pages showed
+the raw error (a long URL). Now a request that fails to reach the server
+returns one plain message ("Can't reach the server. Retrying
+automatically…"), the app goes offline at once and asks the session to
+check; the session's backoff retries until the server answers, and then
+the page that failed (library grid, item page) loads again by itself.
+
 ## Dependency approvals
 
 | Crate | Status |

@@ -143,6 +143,15 @@ impl DetailView {
     }
 
     /// Back from playback: reload (resume point, watched state).
+    /// The server is back: load the page again if it failed.
+    pub fn retry(&mut self, ctx: &mut Ctx) -> bool {
+        if self.failed.take().is_none() {
+            return false;
+        }
+        self.reload(ctx);
+        true
+    }
+
     pub fn reload(&mut self, ctx: &mut Ctx) {
         self.req = Some(ctx.fetch(Fetch::Detail(self.id.clone())));
     }
