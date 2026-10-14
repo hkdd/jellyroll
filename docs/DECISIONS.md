@@ -1158,6 +1158,19 @@ jellyroll aged out. The socket worker now posts the capabilities again
 every 5 minutes while connected; a failure is logged and doesn't drop the
 socket.
 
+**D80: "Exit to console" is always in the power menu.** It was dev-only, so
+on an installed HTPC with only a keyboard there was no way to a shell short
+of editing the kernel line in GRUB: SDL mutes the console keyboard, so
+Ctrl+Alt+F*n* does nothing. The power menu (Back on the home screen) now
+always lists Restart, Shut down, Exit to console, Cancel (focus starts on
+Cancel). Exit to console shuts down like a stop (playback reported, console
+back in text mode) and quits with status 3. The unit has
+`RestartPreventExitStatus=3`, so systemd doesn't restart it, and an
+`ExecStopPost=+` hook starts `getty@tty1` for that status only, so a login
+prompt appears on the TV. `sudo systemctl start jellyroll` or a reboot
+brings the app back. `--allow-exit` now only lets Back quit from top-level
+screens (it is still implied by `--dev`).
+
 ## Dependency approvals
 
 | Crate | Status |

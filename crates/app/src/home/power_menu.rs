@@ -1,6 +1,6 @@
 //! Power menu (spec 5.5, 10.1): restart or shut down the HTPC through
-//! logind, or exit to the console (dev only). Opened with Back where there
-//! is nothing left to go back to.
+//! logind, or exit to the console (D80). Opened with Back where there is
+//! nothing left to go back to.
 
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -28,7 +28,7 @@ enum Item {
 pub enum Outcome {
     Stay,
     Close,
-    /// Quit the app (dev only).
+    /// Quit to the text console (D80).
     Exit,
 }
 
@@ -45,17 +45,12 @@ pub struct PowerMenu {
 }
 
 impl PowerMenu {
-    /// `allow_exit`: offer exiting to the console (dev, `--allow-exit`).
-    pub fn new(allow_exit: bool) -> Self {
-        Self::with(allow_exit, power::query_in_background(), Box::new(power::request))
+    pub fn new() -> Self {
+        Self::with(power::query_in_background(), Box::new(power::request))
     }
 
-    fn with(allow_exit: bool, caps: Arc<OnceLock<Caps>>, request: Requester) -> Self {
-        let mut items = Vec::new();
-        if allow_exit {
-            items.push(Item::Exit);
-        }
-        items.extend([Item::Reboot, Item::PowerOff, Item::Cancel]);
+    fn with(caps: Arc<OnceLock<Caps>>, request: Requester) -> Self {
+        let items = vec![Item::Reboot, Item::PowerOff, Item::Exit, Item::Cancel];
         // Start on Cancel: a stray Select must not shut the HTPC down.
         let focus = items.len() - 1;
         Self { items, focus, caps, pending: None, message: None, request }
@@ -189,8 +184,8 @@ mod tests {
     #[test]
     fn starts_on_cancel_and_closes() {
         let (req, calls) = fake(Ok(()));
-        let mut m = PowerMenu::with(false, caps(Allowed::Yes, Allowed::Yes), req);
-        assert_eq!(m.items, [Item::Reboot, Item::PowerOff, Item::Cancel]);
+        let mut m = PowerMenu::with(caps(Allowed::Yes, Allowed::Yes), req);
+        assert_eq!(m.items, [Item::Reboot, Item::PowerOff, Item::Exit, Item::Cancel]);
         assert_eq!(m.on_action(InputAction::Select), Outcome::Close);
         assert!(calls.borrow().is_empty());
     }
@@ -198,8 +193,8 @@ mod tests {
     #[test]
     fn power_off_goes_to_logind() {
         let (req, calls) = fake(Ok(()));
-        let mut m = PowerMenu::with(true, caps(Allowed::Yes, Allowed::Yes), req);
-        assert_eq!(m.items[0], Item::Exit);
+        let mut m = PowerMenu::with(caps(Allowed::Yes, Allowed::Yes), req);
+        m.on_action(InputAction::Up);
         m.on_action(InputAction::Up);
         assert_eq!(m.on_action(InputAction::Select), Outcome::Stay);
         assert_eq!(*calls.borrow(), [Action::PowerOff]);
@@ -211,7 +206,7 @@ mod tests {
     #[test]
     fn not_allowed_says_so_without_asking() {
         let (req, calls) = fake(Ok(()));
-        let mut m = PowerMenu::with(false, caps(Allowed::NeedsAuth, Allowed::No), req);
+        let mut m = PowerMenu::with(caps(Allowed::NeedsAuth, Allowed::No), req);
         m.on_action(InputAction::Up);
         m.on_action(InputAction::Up);
         m.on_action(InputAction::Select);
@@ -222,7 +217,7 @@ mod tests {
     #[test]
     fn errors_are_shown_and_the_menu_stays_usable() {
         let (req, _) = fake(Err("Access denied".into()));
-        let mut m = PowerMenu::with(false, Arc::new(OnceLock::new()), req);
+        let mut m = PowerMenu::with(Arc::new(OnceLock::new()), req);
         m.on_action(InputAction::Up);
         m.on_action(InputAction::Up);
         m.on_action(InputAction::Select);
@@ -232,10 +227,11 @@ mod tests {
     }
 
     #[test]
-    fn exit_only_in_dev() {
-        let (req, _) = fake(Ok(()));
-        let mut m = PowerMenu::with(true, caps(Allowed::Yes, Allowed::Yes), req);
-        m.focus = 0;
+    fn exit_to_console_is_always_offered() {
+        let (req, calls) = fake(Ok(()));
+        let mut m = PowerMenu::with(caps(Allowed::No, Allowed::No), req);
+        m.on_action(InputAction::Up);
         assert_eq!(m.on_action(InputAction::Select), Outcome::Exit);
+        assert!(calls.borrow().is_empty(), "no logind request");
     }
 }

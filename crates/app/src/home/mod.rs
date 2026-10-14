@@ -192,8 +192,6 @@ pub struct UiSetting {
     /// config.toml's artwork disk cache size (MB).
     pub image_cache_mb: u64,
     pub save_to: Option<std::path::PathBuf>,
-    /// The power menu offers exiting to the console (dev, --allow-exit).
-    pub allow_exit: bool,
 }
 
 impl UiSetting {
@@ -1011,13 +1009,13 @@ impl HomeApp {
         let used = self.screen_action(a, now);
         // Back with nothing left to go back to: the power menu.
         if !used && a == InputAction::Back {
-            self.power = Some(power_menu::PowerMenu::new(self.ui.allow_exit));
+            self.power = Some(power_menu::PowerMenu::new());
             return true;
         }
         used
     }
 
-    /// Exit to the console was chosen (dev only).
+    /// Exit to the console was chosen (D80).
     pub fn take_exit(&mut self) -> bool {
         std::mem::take(&mut self.exit_requested)
     }

@@ -161,10 +161,10 @@ devices are readable. The service user gets the group from `install.sh`.
 | Flag | |
 |---|---|
 | `--config PATH` | Config file (default `~/.config/jellyroll/config.toml`) |
-| `--dev` | Desktop window instead of KMSDRM. Back on the home screen offers "Exit to console" |
+| `--dev` | Desktop window instead of KMSDRM (implies `--allow-exit`) |
 | `--window WxH` | Dev window size, e.g. `3840x2160` to check 4K layout |
 | `--hud` | Show the perf HUD (F3 toggles) |
-| `--allow-exit` | The power menu (Back on the home screen) offers "Exit to console" outside dev mode |
+| `--allow-exit` | Back on a top-level screen (e.g. a problem screen) quits the app (always on with `--dev`). "Exit to console" in the power menu is always there |
 | `--double-buffer` | Double instead of triple buffering on KMSDRM |
 | `--demo` | Synthetic render benchmark scene instead of the Jellyfin home screen |
 | `--bench-pacing SECS` | Continuous animation. Prints CPU/GPU/present p50/p99, missed vsyncs and allocating frames, and exits 1 if a spec §2 budget is exceeded |
@@ -302,9 +302,12 @@ grants DRM master and input access. It sends `READY=1` after the first frame
 and pings `WATCHDOG=1` from the render loop (`WatchdogSec=20`), with
 `Restart=always`.
 
-Getting a shell: Ctrl+Alt+F*n* doesn't switch consoles while jellyroll runs
+Getting a shell: on the home screen press Back to open the power menu and
+choose **Exit to console**. jellyroll quits, systemd doesn't restart it, and a
+login prompt appears on the TV; `sudo systemctl start jellyroll` (or a reboot)
+brings it back. Ctrl+Alt+F*n* doesn't switch consoles while jellyroll runs
 (SDL turns off the console's keyboard handling so keys don't leak into it).
-Use SSH, or from SSH `sudo chvt 2` for a login prompt on the TV with the app
+Also: SSH, or from SSH `sudo chvt 2` for a login prompt on the TV with the app
 still running (`sudo chvt 1` goes back), or stop it:
 `sudo systemctl stop jellyroll && sudo systemctl start getty@tty1`. With no
 network, boot with `systemd.unit=rescue.target` added to the kernel line in

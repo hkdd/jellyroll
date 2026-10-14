@@ -37,6 +37,10 @@ use jellyroll_platform::{Platform, SdlOptions, SdlPlatform};
 static ALLOC: jellyroll_platform::alloc_counter::CountingAlloc =
     jellyroll_platform::alloc_counter::CountingAlloc;
 
+/// Exit status for "Exit to console" (D80); `dist/jellyroll.service`
+/// matches it.
+const EXIT_TO_CONSOLE: u8 = 3;
+
 fn main() -> ExitCode {
     let process_start = Instant::now();
     let mut opts = match args::parse(std::env::args().skip(1)) {
@@ -228,6 +232,9 @@ fn main() -> ExitCode {
     }
     match exit {
         frame_loop::Exit::Quit | frame_loop::Exit::BenchPassed => ExitCode::SUCCESS,
+        // The unit doesn't restart on this status and starts a login on
+        // tty1 instead (`RestartPreventExitStatus=`, `ExecStopPost=`).
+        frame_loop::Exit::Console => ExitCode::from(EXIT_TO_CONSOLE),
         frame_loop::Exit::BenchFailed | frame_loop::Exit::Error => ExitCode::FAILURE,
     }
 }

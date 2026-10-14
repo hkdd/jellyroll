@@ -96,6 +96,8 @@ const MAX_WAIT: Duration = Duration::from_secs(10);
 #[derive(Debug, PartialEq, Eq)]
 pub enum Exit {
     Quit,
+    /// "Exit to console" in the power menu (D80).
+    Console,
     BenchPassed,
     BenchFailed,
     /// Playback could not start or ended with an error.
@@ -198,7 +200,6 @@ pub fn run<P: Platform, R: Renderer>(
                 playback: config.config.playback.clone(),
                 image_cache_mb: config.config.cache.images_mb,
                 save_to,
-                allow_exit: opts.allow_exit,
             };
             match NetHandle::start(cfg, p.waker()) {
                 Ok(h) => {
@@ -614,9 +615,10 @@ pub fn run<P: Platform, R: Renderer>(
             if let View::Home(h) = &mut view
                 && h.take_exit()
             {
+                tracing::info!("exiting to the console");
                 h.shutdown(playback.as_mut(), now);
                 systemd.stopping();
-                return Exit::Quit;
+                return Exit::Console;
             }
             p.set_text_input(view.wants_text());
             if let View::Home(h) = &mut view

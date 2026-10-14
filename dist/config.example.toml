@@ -91,6 +91,6 @@ textures_mb = 512
 [debug]
 # Show the perf HUD at startup (F3 toggles).
 hud = false
-# Offer "Exit to console" in the power menu (Back on the home screen);
-# always on with --dev.
+# Let Back on a top-level screen (e.g. a problem screen) quit the app;
+# always on with --dev. "Exit to console" in the power menu is always there.
 allow_exit = false

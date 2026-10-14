@@ -25,6 +25,11 @@ Environment=RUST_LOG=info
 ExecStart=/usr/local/bin/jellyroll
 Restart=always
 RestartSec=1
+# "Exit to console" in the power menu quits with status 3 (D80): don't
+# restart, and start a login on tty1 instead. "+" runs it as root, outside
+# the sandbox below; --no-block because this runs inside the stop job.
+RestartPreventExitStatus=3
+ExecStopPost=+/bin/sh -c 'if [ "$$EXIT_STATUS" = 3 ]; then /usr/bin/systemctl --no-block start getty@tty1.service; fi'
 # The render loop pings the watchdog itself (WATCHDOG=1 every 10 s), so a
 # hung loop gets the process restarted.
 WatchdogSec=20
