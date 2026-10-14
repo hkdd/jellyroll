@@ -23,6 +23,16 @@ pub const YEAR_ALL: &str = "Year: All";
 pub const YEAR_LABEL: &str = "Year: %ss";
 pub const YEAR_TITLE: &str = "Year";
 pub const ALL_YEARS: &str = "All years";
+pub const VIDEO_ALL: &str = "Video: All";
+pub const VIDEO_LABEL: &str = "Video: %s";
+pub const VIDEO_TITLE: &str = "Video";
+pub const ALL_VIDEO: &str = "All video";
+pub const VIDEO_SD: &str = "SD";
+pub const VIDEO_HD: &str = "HD";
+pub const VIDEO_4K: &str = "4K";
+pub const VIDEO_3D: &str = "3D";
+pub const VIDEO_BLURAY: &str = "Blu-ray";
+pub const VIDEO_DVD: &str = "DVD";
 pub const DECADE: &str = "%ss";
 pub const YEAR_ONE_LABEL: &str = "Year: %s";
 pub const ALL_OF_DECADE: &str = "All of the %ss";
@@ -199,6 +209,16 @@ pub const ALL: &[&str] = &[
     YEAR_LABEL,
     YEAR_TITLE,
     ALL_YEARS,
+    VIDEO_ALL,
+    VIDEO_LABEL,
+    VIDEO_TITLE,
+    ALL_VIDEO,
+    VIDEO_SD,
+    VIDEO_HD,
+    VIDEO_4K,
+    VIDEO_3D,
+    VIDEO_BLURAY,
+    VIDEO_DVD,
     DECADE,
     YEAR_ONE_LABEL,
     ALL_OF_DECADE,

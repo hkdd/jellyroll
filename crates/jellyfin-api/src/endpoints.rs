@@ -194,6 +194,14 @@ pub struct ItemsQuery {
     pub genres: Vec<String>,
     /// Items from any of these years (production year).
     pub years: Vec<i32>,
+    /// Video size: `Some(false)` SD, `Some(true)` HD (not 4K). Jellyfin
+    /// 12.2 buckets by width: SD under 1200, HD from 1200, 4K from 3800
+    /// (or 2100 tall); a series answers on its episodes.
+    pub is_hd: Option<bool>,
+    pub is_4k: Option<bool>,
+    pub is_3d: Option<bool>,
+    /// Comma-separated `VideoType`s (disc rips: "BluRay", "Dvd").
+    pub video_types: Option<String>,
     pub search: Option<String>,
     /// Only items whose sort name sorts before this (alphabet jump: with
     /// `limit` 0, the total count is the index of the first item at or
@@ -226,6 +234,10 @@ pub fn items(user_id: &str, q: &ItemsQuery) -> Request<BaseItemDtoQueryResult> {
             (!q.years.is_empty())
                 .then(|| q.years.iter().map(|y| y.to_string()).collect::<Vec<_>>().join(",")),
         )
+        .opt("isHd", q.is_hd)
+        .opt("is4K", q.is_4k)
+        .opt("is3D", q.is_3d)
+        .opt("videoTypes", q.video_types.as_deref())
         .opt("searchTerm", q.search.as_deref())
         .opt("nameLessThan", q.name_less_than.as_deref())
         .param("startIndex", q.start)

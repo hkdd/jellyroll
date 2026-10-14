@@ -255,6 +255,12 @@ impl Library {
                         "Genres": [GENRES[n % GENRES.len()], GENRES[(n + 3) % GENRES.len()]],
                         "DateCreated": format!("2024-01-01T00:00:{:02}Z", n % 60),
                         "PrimaryImageAspectRatio": 0.6667,
+                        // Every fifth SD, then 4K and HD in turn; a few
+                        // Blu-ray rips and 3D.
+                        "Width": match n { n if n % 5 == 4 => 720, n if n % 2 == 0 => 3840, _ => 1920 },
+                        "Height": match n { n if n % 5 == 4 => 480, n if n % 2 == 0 => 2160, _ => 1080 },
+                        "VideoType": if n % 11 == 10 { "BluRay" } else { "VideoFile" },
+                        "Video3DFormat": if n % 13 == 12 { Some("HalfSideBySide") } else { None },
                         "ImageTags": tags, "ImageBlurHashes": hashes, "BackdropImageTags": [format!("b{n}")],
                         "UserData": { "Played": n % 4 == 1, "PlaybackPositionTicks": 0, "PlayCount": 0, "IsFavorite": n % 7 == 0 },
                     }),
@@ -834,6 +840,10 @@ impl Server {
             .map(|y| y.split(',').filter_map(|y| y.trim().parse().ok()).collect())
             .unwrap_or_default();
         let before = q("namelessthan").map(str::to_lowercase);
+        let flag = |k: &str| q(k).map(|v| v == "true");
+        let (is_hd, is_4k, is_3d) = (flag("ishd"), flag("is4k"), flag("is3d"));
+        let video_types: Vec<&str> =
+            q("videotypes").map(|t| t.split(',').collect()).unwrap_or_default();
         let image_types: Vec<&str> =
             q("imagetypes").map(|t| t.split(',').collect()).unwrap_or_default();
         let mut v: Vec<&Value> = src
@@ -856,6 +866,20 @@ impl Server {
                         .is_some_and(|a| a.iter().any(|x| genres.iter().any(|g| x == *g)))
             })
             .filter(|j| before.as_ref().is_none_or(|b| sort_name(j).as_str() < b.as_str()))
+            .filter(|j| {
+                // As Jellyfin 12.2 buckets them: the flags asked for are
+                // alternatives (isHd=true&is4K=true: HD or 4K).
+                if is_hd.is_none() && is_4k.is_none() {
+                    return true;
+                }
+                let (w, h) = (j["Width"].as_i64().unwrap_or(0), j["Height"].as_i64().unwrap_or(0));
+                let uhd = w >= 3800 || h >= 2100;
+                (is_hd == Some(false) && w > 0 && w < 1200)
+                    || (is_hd == Some(true) && w >= 1200 && !uhd)
+                    || (is_4k == Some(true) && uhd)
+            })
+            .filter(|j| is_3d.is_none_or(|t| j["Video3DFormat"].is_string() == t))
+            .filter(|j| video_types.is_empty() || video_types.iter().any(|t| j["VideoType"] == *t))
             .filter(|j| {
                 image_types.iter().all(|t| match *t {
                     "Backdrop" => j["BackdropImageTags"].as_array().is_some_and(|a| !a.is_empty()),
@@ -1260,6 +1284,23 @@ mod tests {
 
     fn body(r: &Response) -> Value {
         serde_json::from_slice(&r.body).unwrap()
+    }
+
+    #[test]
+    fn video_filters_bucket_like_jellyfin() {
+        let s = server(None);
+        let count = |q: &str| {
+            let r = s.handle(&req("GET", &format!("/Items?includeItemTypes=Movie&{q}"), None), b"");
+            body(&r)["TotalRecordCount"].as_u64().unwrap()
+        };
+        // 8 movies: n = 4 SD; 0, 2, 6 4K; 1, 3, 5, 7 HD.
+        assert_eq!(count("isHd=false"), 1);
+        assert_eq!(count("isHd=true"), 4, "HD leaves out 4K");
+        assert_eq!(count("is4K=true"), 3);
+        assert_eq!(count("isHd=true&is4K=true"), 7);
+        assert_eq!(count("is3D=true"), 0);
+        assert_eq!(count("videoTypes=BluRay"), 0);
+        assert_eq!(count("videoTypes=VideoFile"), 8);
     }
 
     #[test]

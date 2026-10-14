@@ -50,10 +50,65 @@ enum BarItem {
     Favorites,
     Genre,
     Year,
+    Video,
 }
 
-const BAR: [BarItem; 5] =
-    [BarItem::Sort, BarItem::Unwatched, BarItem::Favorites, BarItem::Genre, BarItem::Year];
+const BAR: &[BarItem] = &[
+    BarItem::Sort,
+    BarItem::Unwatched,
+    BarItem::Favorites,
+    BarItem::Genre,
+    BarItem::Year,
+    BarItem::Video,
+];
+/// Music has no video to filter by.
+const BAR_MUSIC: &[BarItem] =
+    &[BarItem::Sort, BarItem::Unwatched, BarItem::Favorites, BarItem::Genre, BarItem::Year];
+
+/// The video filter (D77): one of Jellyfin's size buckets, 3D, or a disc
+/// rip type.
+#[derive(Copy, Clone, Debug, PartialEq)]
+enum VideoFilter {
+    Sd,
+    Hd,
+    Uhd,
+    ThreeD,
+    BluRay,
+    Dvd,
+}
+
+impl VideoFilter {
+    const ALL: [VideoFilter; 6] = [
+        VideoFilter::Sd,
+        VideoFilter::Hd,
+        VideoFilter::Uhd,
+        VideoFilter::ThreeD,
+        VideoFilter::BluRay,
+        VideoFilter::Dvd,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            VideoFilter::Sd => s::VIDEO_SD,
+            VideoFilter::Hd => s::VIDEO_HD,
+            VideoFilter::Uhd => s::VIDEO_4K,
+            VideoFilter::ThreeD => s::VIDEO_3D,
+            VideoFilter::BluRay => s::VIDEO_BLURAY,
+            VideoFilter::Dvd => s::VIDEO_DVD,
+        }
+    }
+
+    fn apply(self, q: &mut ItemsQuery) {
+        match self {
+            VideoFilter::Sd => q.is_hd = Some(false),
+            VideoFilter::Hd => q.is_hd = Some(true),
+            VideoFilter::Uhd => q.is_4k = Some(true),
+            VideoFilter::ThreeD => q.is_3d = Some(true),
+            VideoFilter::BluRay => q.video_types = Some("BluRay".into()),
+            VideoFilter::Dvd => q.video_types = Some("Dvd".into()),
+        }
+    }
+}
 
 /// Which list the blade shows.
 enum Pick {
@@ -65,6 +120,8 @@ enum Pick {
     Year(Vec<Option<i32>>),
     /// The years of `decade` (each row; None for "All of the 1990s").
     YearIn { decade: i32, rows: Vec<Option<i32>> },
+    /// "All video", then `VideoFilter::ALL`.
+    Video,
 }
 
 /// The year filter (D66, D72): a decade, or one year in it.
@@ -104,6 +161,9 @@ pub struct LibraryView {
     reverse: bool,
     /// Items from this decade or year only.
     year: Option<YearFilter>,
+    video: Option<VideoFilter>,
+    /// The bar's buttons (`BAR`, or `BAR_MUSIC`).
+    bar: &'static [BarItem],
     /// The years the library has (newest first), from the last `/Years`.
     years_present: Vec<i32>,
     /// Requested pages (by page number) of the current query.
@@ -126,6 +186,7 @@ pub struct LibraryView {
     count_label: String,
     genre_label: String,
     year_label: String,
+    video_label: String,
     /// The Sort button's label (kept so drawing doesn't allocate).
     sort_label: String,
     vp: Viewport,
@@ -169,6 +230,8 @@ impl LibraryView {
             genres: Vec::new(),
             reverse: false,
             year: None,
+            video: None,
+            bar: if collection == Some(CollectionType::Music) { BAR_MUSIC } else { BAR },
             years_present: Vec::new(),
             pages: HashMap::new(),
             total: None,
@@ -187,6 +250,7 @@ impl LibraryView {
             count_label: String::new(),
             genre_label: widgets::list_label(s::GENRE_ALL),
             year_label: widgets::list_label(s::YEAR_ALL),
+            video_label: widgets::list_label(s::VIDEO_ALL),
             sort_label: widgets::list_label(&s::fill(s::SORT_LABEL, &[SORTS[0].0])),
             vp,
         };
@@ -196,7 +260,7 @@ impl LibraryView {
 
     fn query(&self) -> ItemsQuery {
         let (_, sort_by, desc) = SORTS[self.sort];
-        ItemsQuery {
+        let mut q = ItemsQuery {
             parent_id: Some(self.id.clone()),
             include_types: self.include_types.clone(),
             sort_by: Some(sort_by.into()),
@@ -206,7 +270,11 @@ impl LibraryView {
             genres: self.genres.clone(),
             years: self.year.map(YearFilter::years).unwrap_or_default(),
             ..Default::default()
+        };
+        if let Some(v) = self.video {
+            v.apply(&mut q);
         }
+        q
     }
 
     /// The server is back: load what failed. True if anything did.
@@ -344,8 +412,8 @@ impl LibraryView {
                 return true;
             }
             let Some((pick, b)) = self.picker.take() else { return true };
-            let (mut sort, mut reverse, mut genres, mut year) =
-                (self.sort, self.reverse, self.genres.clone(), self.year);
+            let (mut sort, mut reverse, mut genres, mut year, mut video) =
+                (self.sort, self.reverse, self.genres.clone(), self.year, self.video);
             match (pick, outcome) {
                 (Pick::Sort, blade::Outcome::Picked(i)) => {
                     sort = i.saturating_sub(1).min(SORTS.len() - 1);
@@ -383,13 +451,19 @@ impl LibraryView {
                     self.open_decades(Some(decade), now);
                     return true;
                 }
+                (Pick::Video, blade::Outcome::Picked(i)) => {
+                    video = i.checked_sub(1).and_then(|k| VideoFilter::ALL.get(k).copied());
+                }
+                (Pick::Video, _) => {}
             }
-            if (sort, reverse, &genres, year) != (self.sort, self.reverse, &self.genres, self.year)
+            if (sort, reverse, &genres, year, video)
+                != (self.sort, self.reverse, &self.genres, self.year, self.video)
             {
                 self.sort = sort;
                 self.reverse = reverse;
                 self.genres = genres;
                 self.year = year;
+                self.video = video;
                 self.update_labels();
                 self.reset(ctx, now);
             }
@@ -409,7 +483,7 @@ impl LibraryView {
             (Focus::Grid(i), InputAction::Up) if i >= cols => self.focus_grid(i - cols, now, ctx),
             (Focus::Grid(i), InputAction::Up) => {
                 let col = i % cols;
-                self.leave_grid(Focus::Bar(col.min(BAR.len() - 1)), now);
+                self.leave_grid(Focus::Bar(col.min(self.bar.len() - 1)), now);
             }
             (Focus::Grid(i), InputAction::Down) if i + cols < total => {
                 self.focus_grid(i + cols, now, ctx)
@@ -425,14 +499,14 @@ impl LibraryView {
                 };
             }
             (Focus::Bar(b), InputAction::Left) if b > 0 => self.focus = Focus::Bar(b - 1),
-            (Focus::Bar(b), InputAction::Right) if b + 1 < BAR.len() => {
+            (Focus::Bar(b), InputAction::Right) if b + 1 < self.bar.len() => {
                 self.focus = Focus::Bar(b + 1)
             }
             (Focus::Bar(_), InputAction::Down) if total > 0 => {
                 let i = self.visible_rows().start * cols;
                 self.focus_grid(i.min(total - 1), now, ctx);
             }
-            (Focus::Bar(b), InputAction::Select) => match BAR[b] {
+            (Focus::Bar(b), InputAction::Select) => match self.bar[b] {
                 BarItem::Sort => {
                     let mut rows = vec![Row::check(s::REVERSE_ORDER, self.reverse)];
                     rows.extend(SORTS.iter().map(|s| Row::choice(s.0)));
@@ -457,6 +531,16 @@ impl LibraryView {
                         parent: self.id.clone(),
                         include_types: self.include_types.clone(),
                     }));
+                }
+                BarItem::Video => {
+                    let mut labels = vec![s::ALL_VIDEO.to_string()];
+                    labels.extend(VideoFilter::ALL.iter().map(|v| v.label().to_string()));
+                    let cur = match self.video {
+                        None => 0,
+                        Some(v) => 1 + VideoFilter::ALL.iter().position(|a| *a == v).unwrap_or(0),
+                    };
+                    let b = Blade::new(s::VIDEO_TITLE, labels, Some(cur), now);
+                    self.picker = Some((Pick::Video, b));
                 }
             },
             (Focus::Letters(l), InputAction::Up) if l > 0 => self.focus = Focus::Letters(l - 1),
@@ -629,7 +713,7 @@ impl LibraryView {
         // Sort/filter bar.
         if self.bar_rects.is_empty() {
             let mut x = sx;
-            for b in BAR {
+            for &b in self.bar {
                 let w = match b {
                     BarItem::Unwatched | BarItem::Favorites => {
                         widgets::toggle_width(r, self.bar_label(b))
@@ -640,7 +724,7 @@ impl LibraryView {
                 x += w + 12.0;
             }
         }
-        for (i, b) in BAR.iter().enumerate() {
+        for (i, b) in self.bar.iter().enumerate() {
             let focused = self.focus == Focus::Bar(i) && self.picker.is_none();
             let rect = self.bar_rects[i];
             match b {
@@ -659,6 +743,9 @@ impl LibraryView {
                 ),
                 BarItem::Year => {
                     widgets::draw_button(r, rect, self.bar_label(*b), focused, self.year.is_some())
+                }
+                BarItem::Video => {
+                    widgets::draw_button(r, rect, self.bar_label(*b), focused, self.video.is_some())
                 }
                 BarItem::Sort => widgets::draw_button(r, rect, self.bar_label(*b), focused, false),
             }
@@ -704,11 +791,12 @@ impl LibraryView {
                 );
             }
             Some(0) => {
-                let msg = if self.unwatched || self.favorites || !self.genres.is_empty() {
-                    s::NO_MATCHES
-                } else {
-                    s::NOTHING_HERE
-                };
+                let filtered = self.unwatched
+                    || self.favorites
+                    || !self.genres.is_empty()
+                    || self.year.is_some()
+                    || self.video.is_some();
+                let msg = if filtered { s::NO_MATCHES } else { s::NOTHING_HERE };
                 r.text(
                     msg,
                     &TextStyle::new(24.0, Weight::Regular),
@@ -768,6 +856,10 @@ impl LibraryView {
             Some(YearFilter::Decade(d)) => s::fill(s::YEAR_LABEL, &[&d.to_string()]),
             Some(YearFilter::Year(y)) => s::fill(s::YEAR_ONE_LABEL, &[&y.to_string()]),
         });
+        self.video_label = widgets::list_label(&match self.video {
+            None => s::VIDEO_ALL.to_string(),
+            Some(v) => s::fill(s::VIDEO_LABEL, &[v.label()]),
+        });
         self.bar_rects.clear();
     }
 
@@ -825,6 +917,7 @@ impl LibraryView {
             BarItem::Favorites => s::FILTER_FAVORITES,
             BarItem::Genre => &self.genre_label,
             BarItem::Year => &self.year_label,
+            BarItem::Video => &self.video_label,
         }
     }
 }
@@ -1100,6 +1193,61 @@ mod tests {
         let mut ctx = Ctx::new(&mut next);
         assert!(v.on_changed(&changed(&[], true), &mut ctx), "library change");
         assert_eq!(fetches(&ctx).len(), 1);
+    }
+
+    #[test]
+    fn video_filter_picks_one_and_clears() {
+        let t = Instant::now();
+        let mut next = 0;
+        let mut ctx = Ctx::new(&mut next);
+        let mut v = LibraryView::new(
+            "lib".into(),
+            "Movies".into(),
+            Some(CollectionType::Movies),
+            VP,
+            t,
+            &mut ctx,
+        );
+        v.focus = Focus::Bar(BAR.iter().position(|b| *b == BarItem::Video).unwrap());
+        press(&mut v, InputAction::Select, &mut next);
+        assert!(matches!(v.picker, Some((Pick::Video, _))));
+        // All video, SD, HD, 4K: 4K.
+        for _ in 0..3 {
+            press(&mut v, InputAction::Down, &mut next);
+        }
+        let q = press(&mut v, InputAction::Select, &mut next);
+        assert_eq!(v.video, Some(VideoFilter::Uhd));
+        assert_eq!((q[0].is_4k, q[0].is_hd), (Some(true), None));
+        assert_eq!(v.video_label, widgets::list_label("Video: 4K"));
+        // Reopened on 4K; Blu-ray two rows down.
+        press(&mut v, InputAction::Select, &mut next);
+        press(&mut v, InputAction::Down, &mut next);
+        press(&mut v, InputAction::Down, &mut next);
+        let q = press(&mut v, InputAction::Select, &mut next);
+        assert_eq!((q[0].is_4k, q[0].video_types.as_deref()), (None, Some("BluRay")));
+        // All video clears it.
+        press(&mut v, InputAction::Select, &mut next);
+        for _ in 0..5 {
+            press(&mut v, InputAction::Up, &mut next);
+        }
+        let q = press(&mut v, InputAction::Select, &mut next);
+        assert_eq!(v.video, None);
+        assert_eq!(q[0].video_types, None);
+    }
+
+    #[test]
+    fn music_has_no_video_filter() {
+        let mut next = 0;
+        let mut ctx = Ctx::new(&mut next);
+        let v = LibraryView::new(
+            "lib".into(),
+            "Music".into(),
+            Some(CollectionType::Music),
+            VP,
+            Instant::now(),
+            &mut ctx,
+        );
+        assert!(!v.bar.contains(&BarItem::Video));
     }
 
     #[test]

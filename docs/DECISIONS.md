@@ -1111,6 +1111,17 @@ has none of its own. It is stored with the cached home data and refreshes
 with it, so a newly added movie takes over on the next refresh or library
 update (D63).
 
+**D77: A Video filter in the library bar.** After Year, a "Video" button
+opens a list: All video, SD, HD, 4K, 3D, Blu-ray, DVD. Only one can be on at
+a time (like Year), which keeps it a single list on a remote. It maps onto
+Jellyfin's own filters: `isHd=false` (SD), `isHd=true` (HD), `is4K=true`
+(4K), `is3D=true`, `videoTypes=BluRay|Dvd` (disc rips, as folders or ISOs).
+Checked in the server source for 12.2 (`BaseItemRepository.TranslateQuery`):
+SD is under 1200 px wide, HD is 1200 px and up but not 4K, 4K is 3800 px
+wide or 2100 tall and up, and an item counts by its best version. A series
+matches through its episodes. Music libraries don't show the button. The
+mock server buckets its movies the same way.
+
 ## Dependency approvals
 
 | Crate | Status |
