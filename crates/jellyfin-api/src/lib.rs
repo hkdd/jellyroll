@@ -11,6 +11,7 @@ pub mod discovery;
 pub mod dto;
 pub mod endpoints;
 pub mod playback;
+pub mod socket;
 
 pub use auth::ClientInfo;
 pub use client::{Client, Error, TlsOptions, normalize_server_url};

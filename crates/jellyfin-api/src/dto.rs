@@ -367,6 +367,93 @@ pub struct UserItemDataDto {
     pub is_favorite: Option<bool>,
     #[serde(rename = "Played", skip_serializing_if = "Option::is_none")]
     pub played: Option<bool>,
+    #[serde(rename = "ItemId", skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<String>,
+}
+
+/// Class LibraryUpdateInfo.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LibraryUpdateInfo {
+    #[serde(rename = "FoldersAddedTo", skip_serializing_if = "Option::is_none")]
+    pub folders_added_to: Option<Vec<String>>,
+    #[serde(rename = "FoldersRemovedFrom", skip_serializing_if = "Option::is_none")]
+    pub folders_removed_from: Option<Vec<String>>,
+    #[serde(rename = "ItemsAdded", skip_serializing_if = "Option::is_none")]
+    pub items_added: Option<Vec<String>>,
+    #[serde(rename = "ItemsRemoved", skip_serializing_if = "Option::is_none")]
+    pub items_removed: Option<Vec<String>>,
+    #[serde(rename = "ItemsUpdated", skip_serializing_if = "Option::is_none")]
+    pub items_updated: Option<Vec<String>>,
+    #[serde(rename = "CollectionFolders", skip_serializing_if = "Option::is_none")]
+    pub collection_folders: Option<Vec<String>>,
+}
+
+/// Class UserDataChangeInfo.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UserDataChangeInfo {
+    #[serde(rename = "UserId", skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    #[serde(rename = "UserDataList", skip_serializing_if = "Option::is_none")]
+    pub user_data_list: Option<Vec<UserItemDataDto>>,
+}
+
+/// A request to change the playstate of a session.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlaystateRequest {
+    #[serde(rename = "Command", skip_serializing_if = "Option::is_none")]
+    pub command: Option<PlaystateCommand>,
+    #[serde(rename = "SeekPositionTicks", skip_serializing_if = "Option::is_none")]
+    pub seek_position_ticks: Option<i64>,
+    #[serde(rename = "ControllingUserId", skip_serializing_if = "Option::is_none")]
+    pub controlling_user_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GeneralCommand {
+    #[serde(rename = "Name", skip_serializing_if = "Option::is_none")]
+    pub name: Option<GeneralCommandType>,
+    #[serde(rename = "ControllingUserId", skip_serializing_if = "Option::is_none")]
+    pub controlling_user_id: Option<String>,
+    #[serde(rename = "Arguments", skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<HashMap<String, String>>,
+}
+
+/// Class PlayRequest.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlayRequest {
+    #[serde(rename = "ItemIds", skip_serializing_if = "Option::is_none")]
+    pub item_ids: Option<Vec<String>>,
+    #[serde(rename = "StartPositionTicks", skip_serializing_if = "Option::is_none")]
+    pub start_position_ticks: Option<i64>,
+    #[serde(rename = "PlayCommand", skip_serializing_if = "Option::is_none")]
+    pub play_command: Option<PlayCommand>,
+    #[serde(rename = "MediaSourceId", skip_serializing_if = "Option::is_none")]
+    pub media_source_id: Option<String>,
+    #[serde(rename = "AudioStreamIndex", skip_serializing_if = "Option::is_none")]
+    pub audio_stream_index: Option<i32>,
+    #[serde(rename = "SubtitleStreamIndex", skip_serializing_if = "Option::is_none")]
+    pub subtitle_stream_index: Option<i32>,
+    #[serde(rename = "StartIndex", skip_serializing_if = "Option::is_none")]
+    pub start_index: Option<i32>,
+}
+
+/// Client capabilities dto.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClientCapabilitiesDto {
+    #[serde(rename = "PlayableMediaTypes", skip_serializing_if = "Option::is_none")]
+    pub playable_media_types: Option<Vec<MediaType>>,
+    #[serde(rename = "SupportedCommands", skip_serializing_if = "Option::is_none")]
+    pub supported_commands: Option<Vec<GeneralCommandType>>,
+    #[serde(rename = "SupportsMediaControl", skip_serializing_if = "Option::is_none")]
+    pub supports_media_control: Option<bool>,
+    #[serde(rename = "SupportsPersistentIdentifier", skip_serializing_if = "Option::is_none")]
+    pub supports_persistent_identifier: Option<bool>,
 }
 
 /// An enum representing formats of spatial audio.
@@ -496,6 +583,101 @@ pub enum CollectionType {
     Playlists,
     #[serde(rename = "folders")]
     Folders,
+    /// A value this build doesn't know (newer server).
+    #[default]
+    #[serde(other)]
+    Unrecognized,
+}
+
+/// This exists simply to identify a set of known commands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GeneralCommandType {
+    #[serde(rename = "MoveUp")]
+    MoveUp,
+    #[serde(rename = "MoveDown")]
+    MoveDown,
+    #[serde(rename = "MoveLeft")]
+    MoveLeft,
+    #[serde(rename = "MoveRight")]
+    MoveRight,
+    #[serde(rename = "PageUp")]
+    PageUp,
+    #[serde(rename = "PageDown")]
+    PageDown,
+    #[serde(rename = "PreviousLetter")]
+    PreviousLetter,
+    #[serde(rename = "NextLetter")]
+    NextLetter,
+    #[serde(rename = "ToggleOsd")]
+    ToggleOsd,
+    #[serde(rename = "ToggleContextMenu")]
+    ToggleContextMenu,
+    #[serde(rename = "Select")]
+    Select,
+    #[serde(rename = "Back")]
+    Back,
+    #[serde(rename = "TakeScreenshot")]
+    TakeScreenshot,
+    #[serde(rename = "SendKey")]
+    SendKey,
+    #[serde(rename = "SendString")]
+    SendString,
+    #[serde(rename = "GoHome")]
+    GoHome,
+    #[serde(rename = "GoToSettings")]
+    GoToSettings,
+    #[serde(rename = "VolumeUp")]
+    VolumeUp,
+    #[serde(rename = "VolumeDown")]
+    VolumeDown,
+    #[serde(rename = "Mute")]
+    Mute,
+    #[serde(rename = "Unmute")]
+    Unmute,
+    #[serde(rename = "ToggleMute")]
+    ToggleMute,
+    #[serde(rename = "SetVolume")]
+    SetVolume,
+    #[serde(rename = "SetAudioStreamIndex")]
+    SetAudioStreamIndex,
+    #[serde(rename = "SetSubtitleStreamIndex")]
+    SetSubtitleStreamIndex,
+    #[serde(rename = "ToggleFullscreen")]
+    ToggleFullscreen,
+    #[serde(rename = "DisplayContent")]
+    DisplayContent,
+    #[serde(rename = "GoToSearch")]
+    GoToSearch,
+    #[serde(rename = "DisplayMessage")]
+    DisplayMessage,
+    #[serde(rename = "SetRepeatMode")]
+    SetRepeatMode,
+    #[serde(rename = "ChannelUp")]
+    ChannelUp,
+    #[serde(rename = "ChannelDown")]
+    ChannelDown,
+    #[serde(rename = "Guide")]
+    Guide,
+    #[serde(rename = "ToggleStats")]
+    ToggleStats,
+    #[serde(rename = "PlayMediaSource")]
+    PlayMediaSource,
+    #[serde(rename = "PlayTrailers")]
+    PlayTrailers,
+    #[serde(rename = "SetShuffleQueue")]
+    SetShuffleQueue,
+    #[serde(rename = "PlayState")]
+    PlayState,
+    #[serde(rename = "PlayNext")]
+    PlayNext,
+    #[serde(rename = "ToggleOsdMenu")]
+    ToggleOsdMenu,
+    #[serde(rename = "Play")]
+    Play,
+    #[serde(rename = "SetMaxStreamingBitrate")]
+    SetMaxStreamingBitrate,
+    #[serde(rename = "SetPlaybackOrder")]
+    SetPlaybackOrder,
     /// A value this build doesn't know (newer server).
     #[default]
     #[serde(other)]
@@ -646,6 +828,25 @@ pub enum PersonKind {
     Unrecognized,
 }
 
+/// Enum PlayCommand.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PlayCommand {
+    #[serde(rename = "PlayNow")]
+    PlayNow,
+    #[serde(rename = "PlayNext")]
+    PlayNext,
+    #[serde(rename = "PlayLast")]
+    PlayLast,
+    #[serde(rename = "PlayInstantMix")]
+    PlayInstantMix,
+    #[serde(rename = "PlayShuffle")]
+    PlayShuffle,
+    /// A value this build doesn't know (newer server).
+    #[default]
+    #[serde(other)]
+    Unrecognized,
+}
+
 /// The playback error code.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PlaybackErrorCode {
@@ -655,6 +856,33 @@ pub enum PlaybackErrorCode {
     NoCompatibleStream,
     #[serde(rename = "RateLimitExceeded")]
     RateLimitExceeded,
+    /// A value this build doesn't know (newer server).
+    #[default]
+    #[serde(other)]
+    Unrecognized,
+}
+
+/// Enum PlaystateCommand.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PlaystateCommand {
+    #[serde(rename = "Stop")]
+    Stop,
+    #[serde(rename = "Pause")]
+    Pause,
+    #[serde(rename = "Unpause")]
+    Unpause,
+    #[serde(rename = "NextTrack")]
+    NextTrack,
+    #[serde(rename = "PreviousTrack")]
+    PreviousTrack,
+    #[serde(rename = "Seek")]
+    Seek,
+    #[serde(rename = "Rewind")]
+    Rewind,
+    #[serde(rename = "FastForward")]
+    FastForward,
+    #[serde(rename = "PlayPause")]
+    PlayPause,
     /// A value this build doesn't know (newer server).
     #[default]
     #[serde(other)]

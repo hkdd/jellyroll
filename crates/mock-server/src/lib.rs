@@ -13,6 +13,13 @@
 //! chapters, trickplay tiles, intro/credits segments, two audio tracks and
 //! an external subtitle. Playback reports are recorded: they update resume
 //! positions and `GET /Mock/Reports` lists them (tests assert on them).
+//!
+//! WebSocket (`/socket`, spec 8): like the server, it sends `ForceKeepAlive`
+//! on connect and answers `KeepAlive`; favorite/watched changes are pushed
+//! as `UserDataChanged`. `POST /Mock/Send` pushes its body (a message such
+//! as `{"MessageType":"Playstate","Data":{"Command":"Pause"}}`) to every
+//! open socket: remote control from the command line, and for tests.
+//! `POST /Sessions/Capabilities/Full` is recorded (`GET /Mock/Capabilities`).
 
 #![forbid(unsafe_code)]
 
@@ -25,6 +32,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::sync::broadcast;
 
 pub const TOKEN: &str = "mock-token";
 /// A description long enough to be cut on the detail page (its More).
@@ -84,6 +92,31 @@ struct Server {
     positions: Mutex<HashMap<String, i64>>,
     /// The `media` file, read on first use.
     media: Mutex<Option<Arc<Vec<u8>>>>,
+    /// Messages for every open WebSocket.
+    sockets: broadcast::Sender<String>,
+    /// The last capabilities a client posted.
+    capabilities: Mutex<Value>,
+}
+
+impl Server {
+    fn new(cfg: MockConfig, lib: Library) -> Self {
+        Self {
+            lib,
+            cfg,
+            polls: AtomicU32::new(0),
+            log: Mutex::default(),
+            reports: Mutex::default(),
+            positions: Mutex::default(),
+            media: Mutex::default(),
+            sockets: broadcast::channel(64).0,
+            capabilities: Mutex::new(Value::Null),
+        }
+    }
+
+    /// Sends a message to every open socket.
+    fn push(&self, msg: Value) {
+        let _ = self.sockets.send(msg.to_string());
+    }
 }
 
 // ---- synthetic library -------------------------------------------------------
@@ -423,6 +456,8 @@ struct Request {
     authorized: bool,
     /// `Range: bytes=N-` start offset.
     range_start: Option<u64>,
+    /// `Sec-WebSocket-Key` of an upgrade request.
+    ws_key: Option<String>,
 }
 
 struct Response {
@@ -493,10 +528,14 @@ fn parse_request(head: &str) -> Option<Request> {
         .collect();
     let mut authorized = false;
     let mut range_start = None;
+    let mut ws_key = None;
     for l in lines {
         let Some((k, v)) = l.split_once(':') else { continue };
         if k.eq_ignore_ascii_case("authorization") && v.contains(&format!("Token=\"{TOKEN}\"")) {
             authorized = true;
+        }
+        if k.eq_ignore_ascii_case("sec-websocket-key") {
+            ws_key = Some(v.trim().to_string());
         }
         if k.eq_ignore_ascii_case("range") {
             range_start = v
@@ -506,7 +545,7 @@ fn parse_request(head: &str) -> Option<Request> {
                 .and_then(|n| n.parse().ok());
         }
     }
-    Some(Request { method, path: path.to_string(), query, authorized, range_start })
+    Some(Request { method, path: path.to_string(), query, authorized, range_start, ws_key })
 }
 
 impl Server {
@@ -524,7 +563,9 @@ impl Server {
                 | "/QuickConnect/Connect"
                 | "/Users/AuthenticateWithQuickConnect"
                 | "/Users/AuthenticateByName"
-        ) || req.path.starts_with("/Items/") && req.path.contains("/Images/");
+        ) || req.path.starts_with("/Items/") && req.path.contains("/Images/")
+            // Test hooks, easy to call with curl.
+            || req.path.starts_with("/Mock/");
         if !open && !req.authorized {
             return Response::status(401);
         }
@@ -655,10 +696,33 @@ impl Server {
             {
                 let on = req.method == "POST";
                 let fav = p.starts_with("/UserFavoriteItems/");
-                Response::json(
-                    json!({ "IsFavorite": fav && on, "Played": !fav && on, "PlaybackPositionTicks": 0, "PlayCount": 0, "Key": "", "ItemId": "" }),
-                )
+                let item = p.rsplit('/').next().unwrap_or_default();
+                let data = json!({ "IsFavorite": fav && on, "Played": !fav && on, "PlaybackPositionTicks": 0, "PlayCount": 0, "Key": "", "ItemId": item });
+                // Like the server: every session of the user hears of it.
+                self.push(json!({ "MessageType": "UserDataChanged",
+                                  "Data": { "UserId": USER_ID, "UserDataList": [data] } }));
+                Response::json(data)
             }
+            ("POST", "/Sessions/Capabilities/Full") => {
+                let Ok(v) = serde_json::from_slice::<Value>(body) else {
+                    return Response::status(400);
+                };
+                if let Ok(mut c) = self.capabilities.lock() {
+                    *c = v;
+                }
+                Response::status(204)
+            }
+            ("GET", "/Mock/Capabilities") => {
+                Response::json(self.capabilities.lock().map(|c| c.clone()).unwrap_or_default())
+            }
+            ("POST", "/Mock/Send") => match serde_json::from_slice::<Value>(body) {
+                Ok(v) => {
+                    let n = self.sockets.receiver_count();
+                    self.push(v);
+                    Response::json(json!({ "Sockets": n }))
+                }
+                Err(_) => Response::status(400),
+            },
             ("POST", "/Sessions/Logout") => Response::status(204),
             ("POST", p) if p.starts_with("/Sessions/Playing") => self.report(p, body),
             ("GET", "/Mock/Reports") => Response::json(Value::Array(
@@ -940,6 +1004,11 @@ async fn connection(server: Arc<Server>, mut sock: TcpStream) {
         body.extend_from_slice(&chunk[..n]);
     }
     let resp = match parse_request(&head) {
+        Some(req) if req.path == "/socket" => match (&req.ws_key, req.authorized) {
+            (Some(key), true) => return websocket(server, sock, key.clone()).await,
+            (None, _) => Response::status(400),
+            (_, false) => Response::status(401),
+        },
         Some(req) => {
             if !server.cfg.latency.is_zero() {
                 tokio::time::sleep(server.cfg.latency).await;
@@ -971,18 +1040,74 @@ async fn connection(server: Arc<Server>, mut sock: TcpStream) {
     let _ = sock.shutdown().await;
 }
 
+/// The server's side of `/socket`: as Jellyfin does, ForceKeepAlive on
+/// connect, KeepAlive answered, and whatever `Server::push` sends.
+async fn websocket(server: Arc<Server>, mut sock: TcpStream, key: String) {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
+    use tokio_tungstenite::tungstenite::protocol::Role;
+
+    let head = format!(
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+         Sec-WebSocket-Accept: {}\r\n\r\n",
+        derive_accept_key(key.as_bytes())
+    );
+    if sock.write_all(head.as_bytes()).await.is_err() {
+        return;
+    }
+    if let Ok(mut l) = server.log.lock() {
+        l.push("WS open".into());
+    }
+    let mut rx = server.sockets.subscribe();
+    let mut ws =
+        tokio_tungstenite::WebSocketStream::from_raw_socket(sock, Role::Server, None).await;
+    let force = json!({ "MessageType": "ForceKeepAlive", "Data": 60 }).to_string();
+    if ws.send(Message::text(force)).await.is_err() {
+        return;
+    }
+    loop {
+        tokio::select! {
+            m = rx.recv() => match m {
+                Ok(text) => {
+                    if ws.send(Message::text(text)).await.is_err() {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => break,
+            },
+            m = ws.next() => match m {
+                Some(Ok(Message::Text(t))) => {
+                    let kind = serde_json::from_str::<Value>(t.as_str())
+                        .ok()
+                        .and_then(|v| v["MessageType"].as_str().map(String::from))
+                        .unwrap_or_default();
+                    if let Ok(mut l) = server.log.lock() {
+                        l.push(format!("WS {kind}"));
+                    }
+                    if kind == "KeepAlive" {
+                        let ka = json!({ "MessageType": "KeepAlive" }).to_string();
+                        if ws.send(Message::text(ka)).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                Some(Ok(_)) => {}
+            },
+        }
+    }
+    if let Ok(mut l) = server.log.lock() {
+        l.push("WS closed".into());
+    }
+}
+
 /// Serves HTTP on `listener` until the task is dropped.
 pub async fn serve(listener: TcpListener, cfg: MockConfig) {
     let runtime = cfg.media.as_ref().map(|_| cfg.media_secs as i64 * 10_000_000);
-    let server = Arc::new(Server {
-        lib: Library::new(cfg.movies, runtime),
-        cfg,
-        polls: AtomicU32::new(0),
-        log: Mutex::default(),
-        reports: Mutex::default(),
-        positions: Mutex::default(),
-        media: Mutex::default(),
-    });
+    let lib = Library::new(cfg.movies, runtime);
+    let server = Arc::new(Server::new(cfg, lib));
     loop {
         let Ok((sock, _)) = listener.accept().await else { continue };
         tokio::spawn(connection(server.clone(), sock));
@@ -1046,15 +1171,8 @@ mod tests {
 
     fn server(media: Option<std::path::PathBuf>) -> Server {
         let cfg = MockConfig { media, media_secs: 30, ..Default::default() };
-        Server {
-            lib: Library::new(8, cfg.media.as_ref().map(|_| 300_000_000)),
-            cfg,
-            polls: AtomicU32::new(0),
-            log: Mutex::default(),
-            reports: Mutex::default(),
-            positions: Mutex::default(),
-            media: Mutex::default(),
-        }
+        let lib = Library::new(8, cfg.media.as_ref().map(|_| 300_000_000));
+        Server::new(cfg, lib)
     }
 
     fn req(method: &str, target: &str, range: Option<u64>) -> Request {

@@ -20,7 +20,7 @@ use super::widgets::{self, Backdrop, RowList, Step, Viewport, Wants};
 use crate::anim::Tween;
 use crate::focus::{Dir, FocusGraph, NodeId};
 use crate::input::InputAction;
-use crate::net::{Fetch, Fetched};
+use crate::net::{Changed, Fetch, Fetched};
 
 const ROWS_TOP: f32 = 700.0;
 const BUTTONS_Y: f32 = 590.0;
@@ -71,6 +71,9 @@ pub struct DetailView {
     season_title: String,
     seasons_req: Option<u64>,
     episodes_req: Option<u64>,
+    /// The season whose episodes show (series, season), to load again
+    /// when they change on the server.
+    episodes_of: Option<(String, String)>,
     /// A season was selected: focus its episodes when they arrive (they
     /// are below the fold, so otherwise nothing visible changes).
     focus_episodes: bool,
@@ -125,6 +128,7 @@ impl DetailView {
             season_title: s::EPISODES.into(),
             seasons_req: None,
             episodes_req: None,
+            episodes_of: None,
             focus_episodes: false,
             similar_req: None,
             contents: Vec::new(),
@@ -154,6 +158,42 @@ impl DetailView {
 
     pub fn reload(&mut self, ctx: &mut Ctx) {
         self.req = Some(ctx.fetch(Fetch::Detail(self.id.clone())));
+    }
+
+    fn fetch_episodes(&mut self, series: String, season: String, ctx: &mut Ctx) {
+        self.episodes_of = Some((series.clone(), season.clone()));
+        self.episodes_req = Some(ctx.fetch(Fetch::Episodes { series, season }));
+    }
+
+    /// Something changed on the server (live updates): load again what
+    /// shows it (watched marks, resume point, favorite). Focus stays.
+    pub fn on_changed(&mut self, c: &Changed, ctx: &mut Ctx) -> bool {
+        let shown = |cards: &[Card]| {
+            cards.iter().any(|k| c.items.contains(&crate::net::socket::norm_id(&k.id)))
+        };
+        let me = c.items.contains(&crate::net::socket::norm_id(&self.id));
+        let lists = [&self.seasons, &self.episodes, &self.contents, &self.similar];
+        if !(c.library || me || lists.iter().any(|l| shown(l))) {
+            return false;
+        }
+        self.reload(ctx);
+        if let Some((series, season)) = self.episodes_of.clone()
+            && self.episodes_req.is_none()
+        {
+            self.fetch_episodes(series, season, ctx);
+        }
+        if self.contents_req.is_none()
+            && let Some(d) = &self.detail
+        {
+            let id = d.card.id.clone();
+            self.contents_req = match d.card.kind {
+                Kind::Person => Some(ctx.fetch(Fetch::Filmography(id))),
+                Kind::Playlist => Some(ctx.fetch(Fetch::Contents { id, playlist: true })),
+                Kind::Folder => Some(ctx.fetch(Fetch::Contents { id, playlist: false })),
+                _ => None,
+            };
+        }
+        true
     }
 
     pub fn set_viewport(&mut self, vp: Viewport, now: Instant) -> bool {
@@ -373,8 +413,7 @@ impl DetailView {
             (Some("seasons"), _) => {
                 if let Some(series) = d.series_id.clone().or_else(|| Some(self.id.clone())) {
                     self.season_title = card.title.clone();
-                    self.episodes_req =
-                        Some(ctx.fetch(Fetch::Episodes { series, season: card.id.clone() }));
+                    self.fetch_episodes(series, card.id.clone(), ctx);
                     self.focus_episodes = true;
                 }
             }
@@ -401,10 +440,7 @@ impl DetailView {
                             Kind::Season => {
                                 if let Some(series) = d.series_id.clone() {
                                     self.season_title = d.card.title.clone();
-                                    self.episodes_req = Some(ctx.fetch(Fetch::Episodes {
-                                        series,
-                                        season: d.card.id.clone(),
-                                    }));
+                                    self.fetch_episodes(series, d.card.id.clone(), ctx);
                                 }
                             }
                             _ => {}
@@ -445,9 +481,8 @@ impl DetailView {
                     self.seasons.iter().find(|c| c.progress.is_some()).or(self.seasons.first())
                 {
                     self.season_title = first.title.clone();
-                    let series = self.id.clone();
-                    self.episodes_req =
-                        Some(ctx.fetch(Fetch::Episodes { series, season: first.id.clone() }));
+                    let (series, season) = (self.id.clone(), first.id.clone());
+                    self.fetch_episodes(series, season, ctx);
                 }
                 self.set_rows(now);
             }
@@ -864,5 +899,62 @@ mod tests {
         v.on_action(InputAction::Down, t, &mut ctx);
         assert!(!v.overview_focus);
         assert_eq!(v.button_focus, Some(0));
+    }
+
+    #[test]
+    fn server_changes_reload_the_page_and_its_episodes() {
+        let t = Instant::now();
+        let mut next = 0;
+        let mut ctx = Ctx::new(&mut next);
+        let mut v = DetailView::new("show".into(), VP, t, &mut ctx);
+        let (did, _) = take_fetch(&mut ctx);
+        let mut d = detail(Kind::Series, 0);
+        d.card.id = "show".into();
+        v.on_fetched(did, &Fetched::Detail(Box::new(d)), t, &mut ctx);
+        let seasons = ctx
+            .cmds
+            .iter()
+            .find_map(|c| match c {
+                crate::net::Cmd::Fetch { id, req: Fetch::Seasons(_) } => Some(*id),
+                _ => None,
+            })
+            .unwrap();
+        v.on_fetched(seasons, &Fetched::Cards(vec![card("s1", Kind::Season)]), t, &mut ctx);
+        let eps = ctx
+            .cmds
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                crate::net::Cmd::Fetch { id, req: Fetch::Episodes { .. } } => Some(*id),
+                _ => None,
+            })
+            .unwrap();
+        let e1 = card("E1-ab", Kind::Episode);
+        v.on_fetched(eps, &Fetched::Cards(vec![e1]), t, &mut ctx);
+
+        let changed = |items: &[&str]| Changed {
+            items: items.iter().map(|s| s.to_string()).collect(),
+            library: false,
+        };
+        let mut ctx = Ctx::new(&mut next);
+        assert!(!v.on_changed(&changed(&["other"]), &mut ctx));
+        assert!(ctx.cmds.is_empty());
+        // An episode watched elsewhere (ids compare without dashes).
+        assert!(v.on_changed(&changed(&["e1ab"]), &mut ctx));
+        let reqs: Vec<Fetch> = ctx
+            .cmds
+            .iter()
+            .filter_map(|c| match c {
+                crate::net::Cmd::Fetch { req, .. } => Some(req.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            reqs,
+            [
+                Fetch::Detail("show".into()),
+                Fetch::Episodes { series: "show".into(), season: "s1".into() }
+            ]
+        );
     }
 }

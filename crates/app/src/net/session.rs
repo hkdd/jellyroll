@@ -128,6 +128,7 @@ pub async fn run(cfg: NetConfig, out: Out, mut cmds: mpsc::Receiver<Cmd>) {
 
     let images = tokio::spawn(image_worker(queue.clone(), client_rx, disk, out.clone()));
     let fetcher = tokio::spawn(fetch::worker(fetches.clone(), signed_rx.clone(), out.clone()));
+    let live = tokio::spawn(super::socket::worker(signed_rx.clone(), out.clone()));
     let reporter = tokio::spawn(super::reports::worker(reports.clone(), signed_rx));
     let session = tokio::spawn(session(cfg, out, ctl_rx, client_tx, signed_tx));
     while let Some(c) = cmds.recv().await {
@@ -166,6 +167,7 @@ pub async fn run(cfg: NetConfig, out: Out, mut cmds: mpsc::Receiver<Cmd>) {
     }
     // The UI is gone. Unsent reports are on disk for next time.
     reporter.abort();
+    live.abort();
     fetcher.abort();
     images.abort();
     session.abort();

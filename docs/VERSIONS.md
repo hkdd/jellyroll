@@ -90,6 +90,8 @@ Crate versions checked with `cargo info` against crates.io on 2026-10-13
 | `redb` | 4.3.0 | `begin_read` moved to the `ReadableDatabase` trait in 4.x (D30) |
 | `rusqlite` | 0.40.2 | Benchmarked only (D30), not a dependency |
 | `zbus` | 5.19.0 (2026-08-09, newest on crates.io 2026-10-13) | M8, logind power actions. `default-features = false`, `tokio`; a short-lived current-thread runtime per call (D51) |
+| `tokio-tungstenite` | 0.30.0 (2026-07-11, newest on crates.io 2026-10-14) | The server WebSocket (D63). `default-features = false`, `handshake`; brings `tungstenite` 0.30.0 and `sha1` 0.11.0 |
+| `futures-util` | 0.3.34 | Already in the tree via reqwest; direct for `StreamExt`/`SinkExt` on the socket |
 
 ## Fonts
 

@@ -8,6 +8,7 @@ mod fetch;
 pub mod images;
 mod reports;
 mod session;
+pub mod socket;
 pub mod store;
 
 use std::path::PathBuf;
@@ -183,10 +184,49 @@ pub struct PublicUser {
     pub has_password: bool,
 }
 
+/// What changed on the server (spec 8: live updates), gathered over a
+/// moment.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Changed {
+    /// Items whose data changed (ids as `socket::norm_id` writes them).
+    pub items: std::collections::BTreeSet<String>,
+    /// Items were added or removed, or the socket was down a while:
+    /// anything may have changed.
+    pub library: bool,
+}
+
+/// Remote control from another Jellyfin app (spec 8).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Remote {
+    /// As if pressed on the remote.
+    Input(crate::input::InputAction),
+    /// Typed into the active text field.
+    Text(String),
+    SetPaused(bool),
+    /// Seek to this many seconds.
+    Seek(f64),
+    Stop,
+    Play {
+        id: String,
+        start_ticks: i64,
+    },
+    /// Jellyfin stream index; -1 turns subtitles off.
+    AudioStream(i32),
+    SubtitleStream(i32),
+    /// Show a message for a while.
+    Message {
+        text: String,
+        timeout: std::time::Duration,
+    },
+}
+
 /// Events for the UI.
 #[derive(Debug)]
 pub enum Event {
     Status(Status),
+    /// Changes made elsewhere: refresh what shows them.
+    Changed(Changed),
+    Remote(Remote),
     /// Home data. `fresh` is false for the cached copy shown at startup.
     Home {
         data: HomeData,
@@ -305,6 +345,76 @@ mod tests {
             assert!(Instant::now() < deadline, "timed out waiting for a network event");
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    /// Calls the mock's test hooks (it closes after one response).
+    fn mock_call(url: &str, method: &str, path: &str, body: &str) -> String {
+        use std::io::{Read, Write};
+        let addr = url.trim_start_matches("http://");
+        let mut c = std::net::TcpStream::connect(addr).unwrap();
+        write!(
+            c,
+            "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut out = String::new();
+        c.read_to_string(&mut out).unwrap();
+        out
+    }
+
+    /// Live updates and remote control (spec 8): once signed in the socket
+    /// opens and capabilities are posted; remote commands arrive at once,
+    /// data changes gathered.
+    #[test]
+    fn live_updates_against_mock_server() {
+        let url =
+            jellyroll_mock_server::spawn(MockConfig { approve_after: 1, ..Default::default() });
+        let cfg = NetConfig {
+            server_url: url.clone(),
+            ca_file: None,
+            image_cache_bytes: 1 << 20,
+            data_dir: None,
+            cache_dir: None,
+        };
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut h = NetHandle::start(cfg, Arc::new(|| {})).unwrap();
+        while !matches!(next(&mut h, deadline), Event::Home { .. }) {}
+        // Keep pushing a pause until a socket was open to hear it.
+        let pause = r#"{"MessageType":"Playstate","Data":{"Command":"Pause"}}"#;
+        while !mock_call(&url, "POST", "/Mock/Send", pause).contains(r#""Sockets":1"#) {
+            assert!(Instant::now() < deadline, "socket never opened");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let caps = mock_call(&url, "GET", "/Mock/Capabilities", "");
+        assert!(caps.contains(r#""SupportsMediaControl":true"#), "{caps}");
+        assert!(caps.contains(r#""PlayableMediaTypes":["Video"]"#), "{caps}");
+        loop {
+            match next(&mut h, deadline) {
+                Event::Remote(r) => {
+                    assert_eq!(r, Remote::SetPaused(true));
+                    break;
+                }
+                Event::Changed(_) | Event::Home { .. } | Event::Image { .. } => {}
+                e => panic!("unexpected {e:?}"),
+            }
+        }
+        let changed = format!(
+            r#"{{"MessageType":"UserDataChanged","Data":{{"UserId":"{}",
+               "UserDataList":[{{"ItemId":"ABCD-0123","Played":true}}]}}}}"#,
+            jellyroll_mock_server::USER_ID
+        );
+        mock_call(&url, "POST", "/Mock/Send", &changed);
+        let lib = r#"{"MessageType":"LibraryChanged","Data":{"ItemsAdded":["n1"]}}"#;
+        mock_call(&url, "POST", "/Mock/Send", lib);
+        let c = loop {
+            if let Event::Changed(c) = next(&mut h, deadline) {
+                break c;
+            }
+        };
+        // One burst, one event.
+        assert!(c.items.contains("abcd0123") && c.items.contains("n1"), "{c:?}");
+        assert!(c.library);
     }
 
     /// The whole M5 flow against the mock server: connect, Quick Connect,

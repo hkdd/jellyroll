@@ -3,11 +3,8 @@
 Spec features not built yet (checked against the spec, 2026-10-14). In
 priority order; strike through or delete when done.
 
-1. **Live updates and remote control (Jellyfin WebSocket, spec 8).**
-   Library, user-data and session messages from `/socket`: changes made
-   elsewhere (watched, favorites, new items) show at once; Jellyfin's apps
-   can pause, seek and stop playback here. Reconnect with jittered
-   backoff; invalidate cached data on library events (spec 9).
+1. ~~**Live updates and remote control (Jellyfin WebSocket, spec 8).**~~
+   Built (D63); to check against the real server: `docs/LIVE-UPDATES-CHECKLIST.md`.
 2. **Item page: versions picker and audio/subtitle quick-pick (spec
    10.1).** Choose between media sources (4K / 1080p); choose tracks before
    Play.

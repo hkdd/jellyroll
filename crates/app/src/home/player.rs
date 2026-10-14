@@ -25,7 +25,7 @@ use super::theme::{ACCENT, TEXT, TEXT_DIM};
 use crate::hud::Line;
 use crate::input::InputAction;
 use crate::net::store::fnv1a;
-use crate::net::{Cmd, Fetch, Fetched, Finish, ImageJob, ImageSource, PlayFetched};
+use crate::net::{Cmd, Fetch, Fetched, Finish, ImageJob, ImageSource, PlayFetched, Remote};
 use crate::osd::fmt_time;
 use crate::playback::Playback;
 
@@ -421,6 +421,50 @@ impl PlayerUi {
             }
             A::Back | A::Stop => return self.stop(pb, ctx),
             _ => {}
+        }
+        Outcome::Continue { redraw: true }
+    }
+
+    /// Remote control from another Jellyfin app (spec 8). Key presses
+    /// come through `on_action`; these are the commands with a value.
+    pub fn remote(
+        &mut self,
+        rc: &Remote,
+        pb: &mut Playback,
+        now: Instant,
+        ctx: &mut Ctx,
+    ) -> Outcome {
+        self.show(now);
+        let row = match rc {
+            Remote::SetPaused(want) => {
+                if pb.player.state.paused != *want {
+                    pb.player.toggle_pause();
+                }
+                None
+            }
+            Remote::Seek(secs) => {
+                let dur = self.info().duration;
+                let max = if dur > 0.0 { dur - 1.0 } else { f64::MAX };
+                self.scrub = Some(Scrub { target: secs.clamp(0.0, max), last: now, presses: 0 });
+                self.commit_scrub(pb, ctx);
+                None
+            }
+            Remote::Stop => return self.stop(pb, ctx),
+            Remote::AudioStream(i) => {
+                self.info().audio.iter().position(|t| t.index == *i).map(Row::Audio)
+            }
+            Remote::SubtitleStream(i) if *i < 0 => Some(Row::SubOff),
+            Remote::SubtitleStream(i) => {
+                self.info().subtitles.iter().position(|t| t.index == *i).map(Row::Sub)
+            }
+            _ => None,
+        };
+        if let Some(r) = row {
+            self.apply_row(r, &mut pb.player);
+            if self.started {
+                let st = &pb.player.state;
+                ctx.send(self.report(ReportKind::Progress, st.time_pos, st.paused));
+            }
         }
         Outcome::Continue { redraw: true }
     }

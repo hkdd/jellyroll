@@ -81,7 +81,17 @@ SELECT = {
     "MediaSegmentDtoQueryResult": ["Items", "TotalRecordCount"],
     "BaseItemDto.ImageBlurHashes": ["Primary", "Backdrop", "Thumb", "Logo"],
     "UserItemDataDto": ["PlayedPercentage", "UnplayedItemCount", "PlaybackPositionTicks",
-                        "PlayCount", "IsFavorite", "Played"],
+                        "PlayCount", "IsFavorite", "Played", "ItemId"],
+    # Live updates and remote control over the WebSocket (spec 8).
+    "LibraryUpdateInfo": ["FoldersAddedTo", "FoldersRemovedFrom", "ItemsAdded",
+                          "ItemsRemoved", "ItemsUpdated", "CollectionFolders"],
+    "UserDataChangeInfo": ["UserId", "UserDataList"],
+    "PlaystateRequest": ["Command", "SeekPositionTicks", "ControllingUserId"],
+    "GeneralCommand": ["Name", "ControllingUserId", "Arguments"],
+    "PlayRequest": ["ItemIds", "StartPositionTicks", "PlayCommand", "MediaSourceId",
+                    "AudioStreamIndex", "SubtitleStreamIndex", "StartIndex"],
+    "ClientCapabilitiesDto": ["PlayableMediaTypes", "SupportedCommands",
+                              "SupportsMediaControl", "SupportsPersistentIdentifier"],
 }
 
 

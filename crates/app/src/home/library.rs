@@ -20,7 +20,7 @@ use super::theme::{BG, NOTICE, TEXT, TEXT_DIM};
 use super::widgets::{self, GAP, TEXT_H, TITLE_GAP, Viewport, Wants};
 use crate::anim::Tween;
 use crate::input::InputAction;
-use crate::net::{Fetch, Fetched};
+use crate::net::{Changed, Fetch, Fetched};
 
 const PAGE: u32 = 100;
 const GRID_TOP: f32 = 150.0;
@@ -176,6 +176,25 @@ impl LibraryView {
         }
         // Pages that failed were dropped: loading what is visible asks for
         // them again.
+        self.load(ctx);
+        true
+    }
+
+    /// Something changed on the server (live updates): items added or
+    /// removed, or one shown here changed. Loads the visible pages again;
+    /// the cards already shown stay until the new ones arrive, and focus
+    /// stays where it is.
+    pub fn on_changed(&mut self, c: &Changed, ctx: &mut Ctx) -> bool {
+        let shown = self
+            .items
+            .iter()
+            .flatten()
+            .any(|k| c.items.contains(&crate::net::socket::norm_id(&k.id)));
+        if !(c.library || shown) {
+            return false;
+        }
+        self.pages.clear();
+        self.failed = None;
         self.load(ctx);
         true
     }
@@ -445,6 +464,15 @@ impl LibraryView {
                     self.total = Some(*total);
                     self.count_label = format!("{total} {}", s::ITEMS);
                     self.items.resize(*total as usize, None);
+                    // Fewer items now (removed on the server): keep focus
+                    // inside the grid.
+                    if let Focus::Grid(i) = self.focus
+                        && *total > 0
+                        && i >= *total as usize
+                    {
+                        self.focus = Focus::Grid(*total as usize - 1);
+                        self.last_grid = *total as usize - 1;
+                    }
                     self.load(ctx);
                 }
                 for (i, c) in cards.iter().enumerate() {
@@ -900,5 +928,40 @@ mod tests {
         let mut ctx = Ctx::new(&mut next);
         assert!(!v.retry(&mut ctx), "nothing failed: nothing to do");
         assert!(fetches(&ctx).is_empty());
+    }
+
+    #[test]
+    fn server_changes_reload_visible_pages_and_keep_focus() {
+        let t = Instant::now();
+        let mut next = 0;
+        let mut ctx = Ctx::new(&mut next);
+        let mut v = LibraryView::new(
+            "lib".into(),
+            "Movies".into(),
+            Some(CollectionType::Movies),
+            VP,
+            t,
+            &mut ctx,
+        );
+        let (id0, _) = fetches(&ctx)[0];
+        page(&mut v, id0, 0, 30, 30, &mut ctx);
+        v.focus = Focus::Grid(29);
+        let changed = |items: &[&str], library| Changed {
+            items: items.iter().map(|s| s.to_string()).collect(),
+            library,
+        };
+        let mut ctx = Ctx::new(&mut next);
+        assert!(!v.on_changed(&changed(&["elsewhere"], false), &mut ctx), "not shown here");
+        assert!(fetches(&ctx).is_empty());
+        assert!(v.on_changed(&changed(&["m3"], false), &mut ctx), "a shown item changed");
+        let (id1, q) = fetches(&ctx).remove(0);
+        assert_eq!(q.start, 0);
+        assert_eq!(v.items[3].as_ref().unwrap().id, "m3", "old cards stay meanwhile");
+        // Two were removed on the server: focus moves inside the grid.
+        page(&mut v, id1, 0, 28, 28, &mut ctx);
+        assert_eq!(v.focus, Focus::Grid(27));
+        let mut ctx = Ctx::new(&mut next);
+        assert!(v.on_changed(&changed(&[], true), &mut ctx), "library change");
+        assert_eq!(fetches(&ctx).len(), 1);
     }
 }

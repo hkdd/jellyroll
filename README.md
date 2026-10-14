@@ -37,6 +37,10 @@ from the resume point. The player shows chapters and trickplay previews
 while seeking, lets you pick audio and subtitle tracks, skips intros and
 credits, plays the next episode, and keeps the server's resume points and
 watched state current (even if the server is briefly unreachable).
+Changes made in other Jellyfin apps (watched, favorites, new items) show
+up within a second or two, and those apps can control this one: Jellyfin's
+"Play On" and remote control menus pause, seek, stop, change tracks,
+navigate, send messages and start playback here.
 While a video plays, the TV runs at the refresh rate that fits it (24 Hz
 for films), and Settings chooses the audio output and passthrough to a
 receiver. Back on the home screen opens the power menu (restart, shut
@@ -257,6 +261,12 @@ To try jellyroll without a server, or for development, run the mock:
 ```sh
 cargo run --release -p jellyroll-mock-server -- --port 8096
 # then [server] url = "http://127.0.0.1:8096" (Quick Connect code 424242, approves itself)
+```
+
+The mock can also act as another Jellyfin app controlling this one:
+
+```sh
+curl -X POST --data '{"MessageType":"Playstate","Data":{"Command":"PlayPause"}}' localhost:8096/Mock/Send
 ```
 
 ## Installing as the boot-to-app session

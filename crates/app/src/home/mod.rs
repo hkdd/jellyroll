@@ -33,7 +33,7 @@ use jellyroll_video::va::DecodeCaps;
 
 use crate::config::UiResolution;
 use crate::input::InputAction;
-use crate::net::{Cmd, Event, Fetch, Fetched, NetHandle, Status};
+use crate::net::{Changed, Cmd, Event, Fetch, Fetched, NetHandle, Remote, Status};
 use detail::DetailView;
 use library::LibraryView;
 use pages::{Change, Ctx, Open};
@@ -51,6 +51,9 @@ use widgets::{Viewport, Wants};
 const UPLOAD_BUDGET: Duration = Duration::from_micros(1500);
 /// How long a toast stays up.
 const TOAST_FOR: Duration = Duration::from_secs(6);
+/// Remote commands waiting for the frame loop; more are dropped (a
+/// flood from another app must not pile up).
+const REMOTE_QUEUE: usize = 32;
 /// Network events handled per loop iteration (bounds the work per frame).
 const EVENTS_PER_FRAME: usize = 64;
 /// How often image requests are rebuilt while images keep arriving.
@@ -127,6 +130,8 @@ pub struct HomeApp {
     player_wants: Vec<u64>,
     /// A short message over the page (e.g. why something won't play).
     toast: Option<(String, Instant)>,
+    /// Remote control from other Jellyfin apps, for the frame loop.
+    remote: std::collections::VecDeque<Remote>,
     /// Open over everything else (spec 5.5).
     power: Option<power_menu::PowerMenu>,
     /// Exit chosen in the power menu, for the frame loop.
@@ -241,6 +246,7 @@ impl HomeApp {
             player: None,
             player_wants: Vec::new(),
             toast: None,
+            remote: Default::default(),
             power: None,
             exit_requested: false,
             play: None,
@@ -482,6 +488,12 @@ impl HomeApp {
                     }
                     self.wants_dirty = true;
                 }
+                Event::Changed(c) => self.on_changed(&c, now),
+                Event::Remote(r) => {
+                    if self.remote.len() < REMOTE_QUEUE {
+                        self.remote.push_back(r);
+                    }
+                }
                 Event::Offline => {
                     self.offline = true;
                     if let Some(h) = &mut self.home {
@@ -525,6 +537,84 @@ impl HomeApp {
             }
         }
         dirty
+    }
+
+    /// Changes made elsewhere (live updates, spec 8): the home screen and
+    /// every open page that shows a changed item load it again.
+    fn on_changed(&mut self, c: &Changed, now: Instant) {
+        if !matches!(self.screen, Screen::Browse) {
+            return;
+        }
+        self.send_all(vec![Cmd::Refresh]);
+        self.with_ctx(now, |me, ctx| {
+            for p in me.stack.iter_mut() {
+                match p {
+                    Page::Library(v) => v.on_changed(c, ctx),
+                    Page::Detail(v) => v.on_changed(c, ctx),
+                    Page::Search(_) | Page::Settings(_) => false,
+                };
+            }
+        });
+    }
+
+    /// The next remote command for the frame loop.
+    pub fn take_remote(&mut self) -> Option<Remote> {
+        self.remote.pop_front()
+    }
+
+    /// Carries out a remote command (spec 8): during playback through the
+    /// player, otherwise like the remote's keys on the current screen.
+    /// `Stop` tells the frame loop to end playback.
+    pub fn remote(
+        &mut self,
+        rc: Remote,
+        pb: Option<&mut crate::playback::Playback>,
+        now: Instant,
+    ) -> player::Outcome {
+        let cont = player::Outcome::Continue { redraw: true };
+        if let Remote::Message { text, timeout } = rc {
+            self.toast = Some((text, now + timeout));
+            return cont;
+        }
+        let pb = pb.filter(|_| self.player.is_some());
+        match (rc, pb) {
+            (Remote::Input(a), Some(pb)) => self.player_action(a, pb, now),
+            (Remote::Play { id, start_ticks }, pb) => {
+                // Another item now: stop this one (reported) first.
+                let out = match pb {
+                    Some(pb) => self.with_ctx(now, |me, ctx| match me.player.as_mut() {
+                        Some(pl) => pl.stop(pb, ctx),
+                        None => player::Outcome::Stop,
+                    }),
+                    None => cont,
+                };
+                if matches!(self.screen, Screen::Browse) {
+                    let (media_source, title) = (String::new(), String::new());
+                    self.open(Open::Play { id, media_source, start_ticks, title }, now);
+                }
+                out
+            }
+            (rc, Some(pb)) => {
+                let out = self.with_ctx(now, |me, ctx| match me.player.as_mut() {
+                    Some(pl) => pl.remote(&rc, pb, now, ctx),
+                    None => player::Outcome::Stop,
+                });
+                self.update_player_wants();
+                out
+            }
+            (Remote::Input(a), None) => {
+                self.on_action(a, now);
+                cont
+            }
+            (Remote::Text(t), None) => {
+                for c in t.chars() {
+                    self.on_action(InputAction::TextInput(c), now);
+                }
+                cont
+            }
+            // Playback commands with nothing playing.
+            (_, None) => cont,
+        }
     }
 
     fn fetched(&mut self, id: u64, result: Fetched, now: Instant) -> bool {
@@ -637,10 +727,15 @@ impl HomeApp {
     ) -> bool {
         self.player.as_ref().is_some_and(|p| p.overlay_visible(now, st))
             || self.textures.uploads_pending()
+            || self.toast.as_ref().is_some_and(|t| now < t.1)
     }
 
     pub fn player_deadline(&self, now: Instant) -> Option<Instant> {
-        self.player.as_ref().and_then(|p| p.next_deadline(now))
+        let toast = self.toast.as_ref().map(|t| t.1).filter(|t| *t > now);
+        match (self.player.as_ref().and_then(|p| p.next_deadline(now)), toast) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 
     /// Draws the player's overlay (and uploads any trickplay sheets).
@@ -658,6 +753,7 @@ impl HomeApp {
         if let Some(pl) = &mut self.player {
             pl.draw(r, &mut self.textures, st, now, safe_area);
         }
+        self.draw_toast(r, now, safe_area, true);
     }
 
     /// The app is quitting (systemd stop, Exit in the power menu): report
@@ -972,6 +1068,15 @@ impl HomeApp {
                 );
             }
         }
+        self.draw_toast(r, now, safe, false);
+        if let Some(m) = &self.power {
+            m.draw(r);
+        }
+    }
+
+    /// A short message near the bottom; over video (remote messages) at
+    /// the top, clear of the player's controls.
+    fn draw_toast<R: Renderer>(&mut self, r: &mut R, now: Instant, safe: f32, top: bool) {
         if let Some((msg, until)) = &self.toast {
             if now < *until {
                 let (lw, lh) = r.logical_size();
@@ -979,7 +1084,7 @@ impl HomeApp {
                 let m = r.measure_text(msg, &style);
                 let rect = Rect::new(
                     (lw - m.width) / 2.0 - 24.0,
-                    lh - lh * safe - m.height - 60.0,
+                    if top { lh * safe + 40.0 } else { lh - lh * safe - m.height - 60.0 },
                     m.width + 48.0,
                     m.height + 28.0,
                 );
@@ -988,9 +1093,6 @@ impl HomeApp {
             } else {
                 self.toast = None;
             }
-        }
-        if let Some(m) = &self.power {
-            m.draw(r);
         }
     }
 }

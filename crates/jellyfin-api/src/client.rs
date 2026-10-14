@@ -81,6 +81,9 @@ pub fn normalize_server_url(input: &str) -> Option<String> {
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
+    /// The same settings without the request timeout, for the WebSocket
+    /// (a long-lived connection).
+    socket_http: reqwest::Client,
     base: String,
     info: ClientInfo,
     token: Option<String>,
@@ -90,17 +93,23 @@ impl Client {
     pub fn new(base_url: &str, info: ClientInfo, tls: &TlsOptions) -> Result<Self> {
         let base = normalize_server_url(base_url)
             .ok_or_else(|| Error::Config(format!("invalid server address {base_url:?}")))?;
-        let mut b = reqwest::Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
-            .user_agent(format!("{}/{}", info.client, info.version));
-        if let Some(pem) = &tls.extra_root_pem {
-            let cert = reqwest::Certificate::from_pem(pem)
-                .map_err(|e| Error::Config(format!("custom CA certificate: {e}")))?;
-            b = b.tls_certs_merge([cert]);
-        }
-        let http = b.build().map_err(|e| Error::Config(format!("HTTP client: {e}")))?;
-        Ok(Self { http, base, info, token: None })
+        let build = |timeout: Option<Duration>| {
+            let mut b = reqwest::Client::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .user_agent(format!("{}/{}", info.client, info.version));
+            if let Some(t) = timeout {
+                b = b.timeout(t);
+            }
+            if let Some(pem) = &tls.extra_root_pem {
+                let cert = reqwest::Certificate::from_pem(pem)
+                    .map_err(|e| Error::Config(format!("custom CA certificate: {e}")))?;
+                b = b.tls_certs_merge([cert]);
+            }
+            b.build().map_err(|e| Error::Config(format!("HTTP client: {e}")))
+        };
+        let http = build(Some(REQUEST_TIMEOUT))?;
+        let socket_http = build(None)?;
+        Ok(Self { http, socket_http, base, info, token: None })
     }
 
     /// The `Authorization` header this client sends, for other HTTP users
@@ -140,6 +149,13 @@ impl Client {
         rb.header("Authorization", self.info.authorization(self.token.as_deref()))
     }
 
+    /// A GET for the WebSocket upgrade (no request timeout).
+    pub(crate) fn socket_request(&self, path: &str) -> reqwest::RequestBuilder {
+        self.socket_http
+            .get(format!("{}{}", self.base, path))
+            .header("Authorization", self.info.authorization(self.token.as_deref()))
+    }
+
     pub async fn send<T: DeserializeOwned>(&self, req: &Request<T>) -> Result<T> {
         let mut rb = self.request(req.method, &req.path).header("Accept", "application/json");
         if let Some(body) = &req.body {
@@ -168,19 +184,19 @@ impl Client {
     }
 
     async fn execute(rb: reqwest::RequestBuilder) -> Result<Vec<u8>> {
-        let resp = rb.send().await.map_err(|e| Error::Network(error_chain(&e)))?;
+        let resp = rb.send().await.map_err(|e| Error::Network(chain(&e)))?;
         let status = resp.status();
         if !status.is_success() {
             return Err(Error::Status(status.as_u16()));
         }
-        let bytes = resp.bytes().await.map_err(|e| Error::Network(error_chain(&e)))?;
+        let bytes = resp.bytes().await.map_err(|e| Error::Network(chain(&e)))?;
         Ok(bytes.to_vec())
     }
 }
 
 /// reqwest's top-level message is generic ("error sending request"); the
 /// cause chain says what actually happened (refused, timed out, TLS...).
-fn error_chain(e: &dyn std::error::Error) -> String {
+pub(crate) fn chain(e: &dyn std::error::Error) -> String {
     let mut s = e.to_string();
     let mut src = e.source();
     while let Some(c) = src {

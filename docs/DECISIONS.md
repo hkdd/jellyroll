@@ -881,6 +881,46 @@ than 10% (and 32 MB). Home on the home screen now returns to the top (nav
 bar), which keeps the script's every cycle anchored. CI runs a 2-minute
 soak as a smoke test.
 
+**D62: The 72-hour soak is replaced by everyday use.** Decided not to
+run the M10 72-hour soak; problems found in daily use get fixed as
+they come up. `--soak` stays for chasing a suspected leak. A 45-minute
+run under Xvfb held RSS at about 570 MB after warm-up.
+
+**D63: Live updates and remote control over the WebSocket (spec 8).**
+Checked against the Jellyfin server source rather than assumed:
+`/socket` authenticates the upgrade like any request, so the app sends its
+`Authorization` header (no token in the URL); the server sends
+`ForceKeepAlive` (60 s) and drops a socket that is silent that long, so
+the app sends `KeepAlive` every half-timeout and treats 1.5 timeouts with
+nothing heard as a dead connection; a session takes remote control only
+with a socket open *and* capabilities posted with `SupportsMediaControl`
+(`POST /Sessions/Capabilities/Full`, which also lists the general
+commands the app carries out). The handshake runs through reqwest's
+HTTP/1.1 upgrade (a second client without the 20 s request timeout), so
+TLS settings are shared with every other request; `tokio-tungstenite`
+0.30.0 (approved 2026-10-14) only frames messages. The socket task
+reconnects with exponential backoff (1 s doubling to 60 s, times a random
+0.5-1.5) and keeps out of everything else's way: browsing and playback
+never wait for it.
+- Data: `UserDataChanged` (this user only) and `LibraryChanged` ids are
+  gathered for 1 s, then the home screen refreshes and each open page
+  that shows a changed item (or every page, for library additions and
+  removals, or after a reconnect) loads it again. Detail pages keep focus
+  (rows rebuild by key and card id); library grids reload visible pages,
+  keep the old cards until the new ones arrive, and pull focus back
+  inside the grid if items were removed. The server already skips
+  progress-report noise (`UserDataChangeNotifier` ignores
+  `PlaybackProgress`).
+- Remote control: Pause/Unpause/PlayPause/Seek/Stop/Rewind/FastForward/
+  Next/Previous, navigation (arrows, Select, Back, Home, Search, menu,
+  stats), typing (`SendString`), messages (`DisplayMessage`, shown as a
+  toast; at the top of the screen over video), audio and subtitle track
+  by Jellyfin stream index, and "play now" of an item (it stops and
+  reports the current one first). Play-next/play-last queues are not
+  offered (no play queue). Commands wait while a video is starting.
+- The mock server speaks the same protocol and can push any message
+  (`POST /Mock/Send`), which the tests and manual testing use.
+
 ## Dependency approvals
 
 | Crate | Status |
@@ -888,3 +928,4 @@ soak as a smoke test.
 | `toml` | Approved 2026-10-13 (D11) |
 | `tokio`, `reqwest` (rustls), `serde_json`, `image`, `fast_image_resize`, `redb` | Listed in spec §3; versions in `docs/VERSIONS.md` (M5) |
 | `zbus` | Listed in spec §3 (logind power actions); version in `docs/VERSIONS.md` (M8) |
+| `tokio-tungstenite` (and `futures-util` for its stream traits) | Approved 2026-10-14 (D63) |

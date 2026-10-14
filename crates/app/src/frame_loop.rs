@@ -344,6 +344,17 @@ pub fn run<P: Platform, R: Renderer>(
 
         if let View::Home(h) = &mut view {
             dirty |= h.poll(now);
+            // Remote control from other Jellyfin apps (spec 8); held while
+            // a video is about to start.
+            while pending_play.is_none()
+                && !stop_playback
+                && let Some(rc) = h.take_remote()
+            {
+                match h.remote(rc, playback.as_mut(), now) {
+                    PlayerOutcome::Stop => stop_playback = true,
+                    PlayerOutcome::Continue { redraw } => dirty |= redraw,
+                }
+            }
         }
 
         // ---- input + update (measured) --------------------------------

@@ -338,6 +338,20 @@ pub fn set_played(user_id: &str, item_id: &str, on: bool) -> Request<UserItemDat
     Request::new(method, user_item("/UserPlayedItems/", user_id, item_id))
 }
 
+/// Tells the server what this device can do (spec 8): it plays video and
+/// takes remote control (`commands`) over its WebSocket. Without
+/// `SupportsMediaControl` the server never offers it as a remote target.
+pub fn post_capabilities(commands: &[crate::dto::GeneralCommandType]) -> Request<()> {
+    let caps = crate::dto::ClientCapabilitiesDto {
+        playable_media_types: Some(vec![crate::dto::MediaType::Video]),
+        supported_commands: Some(commands.to_vec()),
+        supports_media_control: Some(true),
+        supports_persistent_identifier: Some(true),
+    };
+    Request::new(Method::Post, "/Sessions/Capabilities/Full".into())
+        .json(serde_json::to_value(caps).unwrap_or_default())
+}
+
 /// Ends this device's session and revokes its token on the server.
 pub fn logout() -> Request<()> {
     Request::new(Method::Post, "/Sessions/Logout".into())
