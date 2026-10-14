@@ -43,6 +43,7 @@ use server_entry::ServerEntry;
 use settings::SettingsView;
 use signin::SignInForm;
 use status::StatusView;
+use strings as s;
 use textures::Textures;
 use view::HomeView;
 use widgets::{Viewport, Wants};
@@ -149,6 +150,10 @@ pub struct HomeApp {
     remote: std::collections::VecDeque<Remote>,
     /// Artwork bytes on disk (Settings shows it).
     cache_used: Option<u64>,
+    /// A video is starting (from Play until its first frame): the page
+    /// shows dimmed with this title and "Starting…" instead of a black
+    /// screen. Empty title: not known yet.
+    starting: Option<(String, Instant)>,
     /// Open over everything else (spec 5.5).
     power: Option<power_menu::PowerMenu>,
     /// Exit chosen in the power menu, for the frame loop.
@@ -297,6 +302,7 @@ impl HomeApp {
             toast: None,
             remote: Default::default(),
             cache_used: None,
+            starting: None,
             power: None,
             exit_requested: false,
             play: None,
@@ -366,7 +372,8 @@ impl HomeApp {
     fn open(&mut self, o: Open, now: Instant) {
         let vp = self.vp;
         let page = match o {
-            Open::Play { id, start_ticks, tracks, .. } => {
+            Open::Play { id, start_ticks, tracks, title, .. } => {
+                self.starting = Some((title, now));
                 let req =
                     self.with_ctx(now, |_, ctx| ctx.fetch(Fetch::Play { id, start_ticks, tracks }));
                 self.play_req = Some(req);
@@ -643,6 +650,16 @@ impl HomeApp {
         });
     }
 
+    /// A video is starting (Play pressed, until its first frame).
+    pub fn is_starting(&self) -> bool {
+        self.starting.is_some()
+    }
+
+    fn set_starting(&mut self, title: &str, now: Instant) {
+        let since = self.starting.as_ref().map_or(now, |s| s.1);
+        self.starting = Some((title.to_string(), since));
+    }
+
     /// The next remote command for the frame loop.
     pub fn take_remote(&mut self) -> Option<Remote> {
         self.remote.pop_front()
@@ -710,10 +727,12 @@ impl HomeApp {
             match result {
                 Fetched::Play(p) => {
                     let (ui, req) = player::PlayerUi::new(*p, now);
+                    self.set_starting(&req.title, now);
                     self.player = Some(ui);
                     self.play = Some(req);
                 }
                 Fetched::Failed(e) => {
+                    self.starting = None;
                     tracing::warn!("can't play: {e}");
                     self.toast = Some((e, now + TOAST_FOR));
                 }
@@ -785,9 +804,14 @@ impl HomeApp {
             Some(pl) => pl.tick(pb, now, ctx),
             None => player::Tick::Finished,
         });
+        if pb.started {
+            // The first frame is on screen.
+            self.starting = None;
+        }
         if let player::Tick::Next(n) = &t {
             let (ui, req) = player::PlayerUi::new((**n).clone(), now);
             tracing::info!(title = %req.title, "playing the next episode");
+            self.set_starting(&req.title, now);
             self.player = Some(ui);
             self.play = Some(req);
         }
@@ -864,6 +888,7 @@ impl HomeApp {
     /// Playback ended: refresh what it changed (resume points, watched).
     pub fn playback_finished(&mut self, now: Instant) {
         self.player = None;
+        self.starting = None;
         self.player_wants.clear();
         self.send_all(vec![Cmd::Refresh]);
         self.with_ctx(now, |me, ctx| {
@@ -1058,7 +1083,7 @@ impl HomeApp {
     }
 
     pub fn is_animating(&self, now: Instant) -> bool {
-        if self.textures.uploads_pending() {
+        if self.textures.uploads_pending() || self.starting.is_some() {
             return true;
         }
         if !matches!(self.screen, Screen::Browse) {
@@ -1166,6 +1191,9 @@ impl HomeApp {
                 );
             }
         }
+        if let Some((title, since)) = &self.starting {
+            draw_starting(r, title, now - *since);
+        }
         self.draw_toast(r, now, safe, false);
         if let Some(m) = &self.power {
             m.draw(r);
@@ -1193,6 +1221,36 @@ impl HomeApp {
             }
         }
     }
+}
+
+/// Over the page while a video starts: dimmed, with the title, a spinner
+/// and "Starting…" (the TV may be switching refresh rate, mpv opening the
+/// stream).
+fn draw_starting<R: Renderer>(r: &mut R, title: &str, elapsed: Duration) {
+    let (lw, lh) = r.logical_size();
+    // Fade in over 150 ms, so a quick start doesn't flash.
+    let a = (elapsed.as_secs_f32() / 0.15).min(1.0);
+    r.fill_rect(Rect::new(0.0, 0.0, lw, lh), Color::rgba(0, 0, 0, (200.0 * a) as u8));
+    let (cx, cy) = (lw / 2.0, lh / 2.0);
+    // Eight dots around a circle, the lit one going round once a second.
+    let turn = elapsed.as_secs_f32() % 1.0;
+    for i in 0..8 {
+        let ang = i as f32 / 8.0 * std::f32::consts::TAU;
+        let (x, y) = (cx + 34.0 * ang.sin(), cy - 60.0 - 34.0 * ang.cos());
+        let behind = (turn * 8.0 - i as f32).rem_euclid(8.0);
+        let alpha = (1.0 - behind / 8.0) * a;
+        r.fill_rrect(Rect::new(x - 6.0, y - 6.0, 12.0, 12.0), 6.0, theme::ACCENT.with_alpha(alpha));
+    }
+    let style = TextStyle::new(44.0, Weight::Bold).max_width(lw * 0.8);
+    let mut y = cy + 10.0;
+    if !title.is_empty() {
+        let m = r.measure_text(title, &style);
+        r.text(title, &style, Point::new((lw - m.width) / 2.0, y), theme::TEXT.with_alpha(a));
+        y += m.height + 16.0;
+    }
+    let sub = TextStyle::new(26.0, Weight::Regular);
+    let m = r.measure_text(s::STARTING, &sub);
+    r.text(s::STARTING, &sub, Point::new((lw - m.width) / 2.0, y), theme::TEXT_DIM.with_alpha(a));
 }
 
 #[cfg(test)]

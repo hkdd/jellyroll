@@ -280,7 +280,8 @@ pub fn run<P: Platform, R: Renderer>(
         let deadline = earliest(deadline, soak.as_ref().and_then(|s| s.next_deadline()));
         let (deadline, animating) = match (&playback, &view) {
             (Some(pb), View::Home(h)) if h.has_player() => {
-                (earliest(deadline, h.player_deadline(now)), pb.playing())
+                // The "Starting…" spinner animates until the first frame.
+                (earliest(deadline, h.player_deadline(now)), pb.playing() || h.is_starting())
             }
             (Some(pb), _) => (earliest(deadline, pb.osd.next_deadline(now)), pb.playing()),
             (None, _) => (earliest(deadline, view.next_deadline()), view.is_animating(now)),
@@ -541,7 +542,7 @@ pub fn run<P: Platform, R: Renderer>(
                 PlayerTick::Next(_) => next_episode = true,
             }
             let overlay = h.player_overlay_visible(now, &pb.player.state);
-            dirty |= pb.playing() || overlay != overlay_shown;
+            dirty |= pb.playing() || overlay != overlay_shown || h.is_starting();
             overlay_shown = overlay;
         } else if let Some(pb) = playback.as_mut() {
             if let Some(a) = repeat.tick(now)
@@ -692,13 +693,17 @@ pub fn run<P: Platform, R: Renderer>(
             let submit_start = Instant::now();
             stats.record_ms.push(ms(submit_start - frame_start));
             let home = matches!(&view, View::Home(h) if h.has_player());
+            // Until the first frame, the page and "Starting…" cover mpv's
+            // (black) output.
+            let starting = matches!(&view, View::Home(h) if home && h.is_starting());
             let overlay =
                 if home { overlay_shown } else { pb.osd.any_visible(now, &pb.player.state) };
-            if (overlay || hud.visible) && r.begin_frame(fb) {
+            if (overlay || hud.visible || starting) && r.begin_frame(fb) {
                 // OSD text (time) and HUD lines change while playing; keep
                 // their shaping out of the steady-state allocation check.
                 let a0 = alloc_counter::allocations();
                 match &mut view {
+                    View::Home(h) if starting => h.draw(r, now, notice),
                     View::Home(h) if home => h.draw_player(r, &pb.player.state, now, safe_area),
                     _ => pb.osd.draw(r, now, &pb.player.state, &pb.drops, safe_area),
                 }
@@ -710,9 +715,13 @@ pub fn run<P: Platform, R: Renderer>(
             }
             stats.submit_ms.push(ms(submit_start.elapsed()));
         } else if pending_play.is_some() {
-            // The output is switching modes for the video: black frames.
+            // The output is switching modes for the video: the page with
+            // "Starting…" over it.
             if r.begin_frame(fb) {
-                r.clear(jellyroll_render::Color::BLACK);
+                match &mut view {
+                    View::Home(h) => h.draw(r, now, notice),
+                    View::Demo(_) => r.clear(jellyroll_render::Color::BLACK),
+                }
                 let _submit = tracing::trace_span!("submit").entered();
                 r.end_frame();
             }

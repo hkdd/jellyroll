@@ -496,6 +496,9 @@ impl PlayerUi {
         let (pos, paused) = (pb.player.state.time_pos, pb.player.state.paused);
         if pb.started && !self.started {
             self.started = true;
+            // The bar shows when the video does, not when loading began
+            // (a slow start would otherwise have hidden it already).
+            self.show(now);
             self.last_paused = paused;
             self.last_report = now;
             ctx.send(self.report(ReportKind::Start, pos, paused));

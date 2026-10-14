@@ -1011,6 +1011,16 @@ own: it happens inside `update` and `draw`.
   run's allocation check is meaningless; its 10 s trace was 17.7k events,
   2.6 MB, 7 threads.
 
+**D69: A "Starting…" screen instead of black.** From Play until the
+video's first frame (PlaybackRestart), the page stays on screen, dimmed,
+with a spinner, the title and "Starting…": while the playback info
+loads, while the TV switches refresh rate (previously black frames) and
+while mpv opens the stream (mpv still renders underneath, as its video
+output expects, and is covered). It fades in over 150 ms so a quick start
+doesn't flash. The player's bar is shown again on the first frame: its
+4 s auto-hide used to start when the player was created, so a slow start
+(refresh switch, slow server) hid it before the video appeared.
+
 ## Dependency approvals
 
 | Crate | Status |

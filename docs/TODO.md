@@ -2,7 +2,7 @@
 
 Agreed 2026-10-14, in this order. Strike through when done.
 
-1. **Starting a video: no black wait, and the progress bar shows.**
+1. ~~**Starting a video: no black wait, and the progress bar shows.**~~ Built (D69).
    - While a video starts (the TV switching refresh rate, mpv opening the
      stream), show the item's backdrop, dimmed, with its title and
      "Starting…", instead of a black screen.
