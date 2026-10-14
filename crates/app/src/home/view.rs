@@ -152,7 +152,7 @@ impl HomeView {
 
     /// Home pressed on the home screen: back to the top, on the nav bar's
     /// Home tab, rows scrolled to the start.
-    pub fn to_top(&mut self, now: Instant) {
+    pub fn go_to_top(&mut self, now: Instant) {
         self.rows.reset_focus(&self.vp, now);
         self.rows.release_focus(now);
         self.nav_focus = Some(0);

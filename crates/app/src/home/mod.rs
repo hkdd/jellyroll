@@ -764,7 +764,7 @@ impl HomeApp {
                     // Already home: back to the top (the nav bar).
                     InputAction::Home => {
                         if let Some(h) = &mut self.home {
-                            h.to_top(now);
+                            h.go_to_top(now);
                         }
                         return true;
                     }
