@@ -23,6 +23,14 @@ use crate::input::InputAction;
 
 /// Changes are gathered this long before the UI hears of them.
 const GATHER: Duration = Duration::from_secs(1);
+/// How often the capabilities are posted again while connected (D79).
+/// Jellyfin 12.2 only counts a session as active on a few requests
+/// (capabilities, opening the socket, playback reports), not browsing or
+/// keep-alives, and the dashboard and remotes list sessions active in the
+/// last 16 minutes (`activeWithinSeconds=960`). Without this an idle
+/// jellyroll drops off both while still connected.
+const ACTIVITY_EVERY: Duration =
+    if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(5 * 60) };
 const BACKOFF_MIN: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// A message shown with no timeout of its own stays this long.
@@ -229,6 +237,7 @@ async fn run(
     }
     let mut timeout = socket::DEFAULT_KEEPALIVE_TIMEOUT;
     let mut next_keepalive = Instant::now() + timeout / 2;
+    let mut next_activity = Instant::now() + ACTIVITY_EVERY;
     let mut last_heard = Instant::now();
     let end = loop {
         let flush_at = gathered.due();
@@ -256,6 +265,13 @@ async fn run(
             }
             _ = tokio::time::sleep_until(dead_at) => {
                 break End::Lost("no answer from the server".into());
+            }
+            _ = tokio::time::sleep_until(next_activity) => {
+                // A failure here doesn't end the socket; the next try may work.
+                if let Err(e) = client.send_no_content(&ep::post_capabilities(SUPPORTED)).await {
+                    tracing::warn!("keeping the session active: {e}");
+                }
+                next_activity = Instant::now() + ACTIVITY_EVERY;
             }
             _ = tokio::time::sleep_until(flush_at.unwrap_or(dead_at)), if flush_at.is_some() => {
                 let c = gathered.take();

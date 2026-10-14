@@ -1146,6 +1146,18 @@ blocked), and "first video frame" (ms since mpv started). If the switch
 dominates, turning off refresh-rate matching (Settings, Display) is the
 trade-off: no switch, but 24 fps video on a 60 Hz output judders.
 
+**D79: Capabilities are posted again every 5 minutes.** An installed
+jellyroll vanished from the server's dashboard and the remote's TV list
+about 16 minutes after it started, though its socket stayed connected.
+In Jellyfin 12.2 (`SessionManager.LogSessionActivity`, reached through
+`RequestHelpers.GetSession`) only some requests mark a session active:
+posting capabilities, opening the socket, playback reports and session
+commands. Browsing requests and socket keep-alives don't. The dashboard
+and remotes ask for sessions active in the last 960 s, so an idle
+jellyroll aged out. The socket worker now posts the capabilities again
+every 5 minutes while connected; a failure is logged and doesn't drop the
+socket.
+
 ## Dependency approvals
 
 | Crate | Status |

@@ -466,6 +466,17 @@ mod tests {
         // One burst, one event.
         assert!(c.items.contains("abcd0123") && c.items.contains("n1"), "{c:?}");
         assert!(c.library);
+        // While connected the capabilities are posted again, so the server
+        // keeps listing the session as active (D79).
+        let posts = || {
+            mock_call(&url, "GET", "/Mock/Requests", "")
+                .matches("POST /Sessions/Capabilities/Full")
+                .count()
+        };
+        while posts() < 3 {
+            assert!(Instant::now() < deadline, "capabilities posted only {} times", posts());
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// Several users (spec 8): add a second user without signing the
