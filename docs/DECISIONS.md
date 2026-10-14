@@ -1122,6 +1122,30 @@ wide or 2100 tall and up, and an item counts by its best version. A series
 matches through its episodes. Music libraries don't show the button. The
 mock server buckets its movies the same way.
 
+**D78: The console goes into graphics mode; play-start timings are logged.**
+D70 cleared the console before SDL took the display, but the console still
+showed during refresh-rate switches. SDL 3.4.18's KMSDRM backend (read in
+`SDL_kmsdrmvideo.c`) handles a mode change by first pointing the screen back
+at the console's framebuffer in the console's own mode
+(`KMSDRM_DestroySurfaces`), then setting the new mode on the next swap: two
+modesets per switch, with the console on screen in between. The console
+stays in text mode, so the kernel keeps drawing on it after the clear: boot
+status lines, kernel messages. Now, after clearing it, jellyroll also puts
+it in graphics mode (`KDSETMODE KD_GRAPHICS`, as X, Weston and Plymouth do;
+the platform crate already allows unsafe). The kernel then stops drawing on
+it, and what shows in between is black. On exit or panic it goes back to
+text mode. A killed process is covered by the unit's `TTYReset=yes` on
+restart. Over ssh, `/dev/tty` isn't a virtual console and only the clear
+applies.
+
+The two modesets also cost time: each one makes the TV re-sync, and over a
+DP-to-HDMI adapter that can be seconds. To see where start-up time goes, the
+journal now logs at info: "play requested", "playback info received" (ms
+since requested), "output mode switched" (how long the modeset swap
+blocked), and "first video frame" (ms since mpv started). If the switch
+dominates, turning off refresh-rate matching (Settings, Display) is the
+trade-off: no switch, but 24 fps video on a 60 Hz output judders.
+
 ## Dependency approvals
 
 | Crate | Status |

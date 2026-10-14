@@ -823,6 +823,7 @@ pub fn run<P: Platform, R: Renderer>(
         let cpu = frame_start.elapsed();
 
         // ---- present -----------------------------------------------------
+        let swap_start = Instant::now();
         {
             let _swap = tracing::trace_span!("swap").entered();
             p.swap();
@@ -832,6 +833,8 @@ pub fn run<P: Platform, R: Renderer>(
             && pp.needs_present
         {
             // The modeset happened in that swap; now give the TV its time.
+            let ms = (presented - swap_start).as_millis() as u64;
+            tracing::info!(ms, settle_ms = pp.settle.as_millis() as u64, "output mode switched");
             pp.needs_present = false;
             pp.at = presented + pp.settle;
         }

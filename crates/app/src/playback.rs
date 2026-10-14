@@ -30,6 +30,8 @@ pub struct Playback {
     pub drops: FrameDrops,
     drops_next: Instant,
     reported_decoder: bool,
+    /// When mpv was started (the first-frame log says how long it took).
+    opened_at: Instant,
 }
 
 fn title_from(url: &str) -> &str {
@@ -78,6 +80,7 @@ impl Playback {
             drops: FrameDrops::default(),
             drops_next: now,
             reported_decoder: false,
+            opened_at: now,
         })
     }
 
@@ -99,6 +102,10 @@ impl Playback {
                     // The first frame has been decoded, so mpv has settled on a
                     // decoder (hwdec-current arrives before this event; at
                     // FileLoaded it is not known yet).
+                    if !self.started {
+                        let ms = self.opened_at.elapsed().as_millis() as u64;
+                        tracing::info!(ms, "first video frame (since mpv started)");
+                    }
                     self.started = true;
                     self.report_decoder();
                     redraw = true;

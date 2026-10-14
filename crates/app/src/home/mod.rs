@@ -383,6 +383,7 @@ impl HomeApp {
         let vp = self.vp;
         let page = match o {
             Open::Play { id, start_ticks, tracks, title, .. } => {
+                tracing::info!(%title, "play requested");
                 self.starting = Some((title, now));
                 let req = self.with_ctx(now, |_, ctx| {
                     ctx.fetch(Fetch::Play { id, start_ticks, tracks, transcode: false })
@@ -665,6 +666,8 @@ impl HomeApp {
 
     /// Hands a play answer to the player (the frame loop takes the request).
     fn start_playing(&mut self, p: crate::net::PlayFetched, now: Instant) {
+        let waited = self.starting.as_ref().map(|(_, t)| now.duration_since(*t).as_millis() as u64);
+        tracing::info!(ms = waited, "playback info received (since play requested)");
         let (ui, req) = player::PlayerUi::new(p, now);
         self.set_starting(&req.title, now);
         self.player = Some(ui);
