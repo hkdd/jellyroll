@@ -809,8 +809,8 @@ reversed (the jump index assumes ascending names). The bar shows "Sort:
 Name, reversed" and "Genres: Drama +2".
 
 **D56: Browsing gaps found on the HTPC.** (1) A description cut to
-three lines gets a More button that opens the full text in a panel from
-the right (Up/Down scroll, Back closes). (2) People are selectable: a
+three lines can take focus (Up from the buttons) and then grows in place
+to the full text over the page (D57). (2) People are selectable: a
 person's page shows their biography and their movies and shows
 (`/Items?personIds=`, newest first); no Play or Mark watched there. (3)
 Playlists and collections (box sets, folders) open a page listing what
@@ -818,6 +818,15 @@ they contain (`/Playlists/{id}/Items`, `/Items?parentId=`); they used to
 open an empty item page. (4) Watched items get a check mark in an accent
 circle, top right of the card, everywhere cards are drawn (the font has
 no check glyph; the renderer gained `polyline`).
+
+**D57: The description expands where it is (chosen after review).** A More
+button read as unrelated to the text. Of three options (focus it and open
+a side panel; focus it and Enter expands it in place; focus alone expands
+it), the last was chosen: the cut description is a focus-graph node
+above the buttons; on focus it grows (180 ms) to the whole text on a dark
+panel with the focus ring, drawn over the buttons and rows, and shrinks
+when focus leaves. Down goes back to where focus came from, not the
+spatially nearest button. Short descriptions are not focusable.
 
 ## Dependency approvals
 

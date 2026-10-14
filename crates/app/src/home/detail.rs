@@ -10,7 +10,6 @@ use std::time::Instant;
 use jellyroll_render::{Color, Point, Rect, Renderer, TextStyle, Weight};
 use jellyroll_video::va::DecodeCaps;
 
-use super::blade::TextPanel;
 use super::model::{Card, Detail, Kind, Row, Shape};
 use super::pages::{Ctx, Open};
 use super::status::wrap;
@@ -18,6 +17,7 @@ use super::strings as s;
 use super::textures::Textures;
 use super::theme::{NOTICE, TEXT, TEXT_DIM};
 use super::widgets::{self, Backdrop, RowList, Step, Viewport, Wants};
+use crate::anim::Tween;
 use crate::focus::{Dir, FocusGraph, NodeId};
 use crate::input::InputAction;
 use crate::net::{Fetch, Fetched};
@@ -25,6 +25,10 @@ use crate::net::{Fetch, Fetched};
 const ROWS_TOP: f32 = 700.0;
 const BUTTONS_Y: f32 = 590.0;
 const BUTTON_H: f32 = 52.0;
+/// The overview's node in the focus graph (buttons are 0.., cards higher).
+const OVERVIEW_NODE: NodeId = 1 << 20;
+const EXPAND_IN: std::time::Duration = std::time::Duration::from_millis(180);
+const EXPAND_OUT: std::time::Duration = std::time::Duration::from_millis(120);
 const TEXT_W: f32 = 1150.0;
 
 const TITLE: TextStyle = TextStyle::new(56.0, Weight::Bold).max_width(TEXT_W);
@@ -36,11 +40,7 @@ const WARN: TextStyle = TextStyle::new(19.0, Weight::Bold).max_width(TEXT_W);
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum Action {
-    Play {
-        start_ticks: i64,
-    },
-    /// The full description (it is cut to a few lines on the page).
-    More,
+    Play { start_ticks: i64 },
     Watched,
     Favorite,
 }
@@ -80,9 +80,18 @@ pub struct DetailView {
     contents_req: Option<u64>,
     toggle_req: Option<u64>,
     overview: Option<Vec<String>>,
-    /// The overview didn't fit: a More button opens `more`.
+    /// The overview didn't fit in its lines: it can take focus, and then
+    /// shows in full over the page (D57).
     overview_cut: bool,
-    more: Option<TextPanel>,
+    /// The whole overview, wrapped (for the expanded view).
+    overview_full: Vec<String>,
+    /// Where the overview is on the page (its focus-graph node).
+    overview_rect: Rect,
+    overview_focus: bool,
+    /// Where focus came to the overview from: Down goes back there.
+    overview_from: NodeId,
+    /// 0 collapsed .. 1 expanded.
+    expand: Tween,
     /// Decode warning, filled once the detail and the GPU caps are known.
     warning: Option<String>,
     unsupported: Vec<bool>,
@@ -123,7 +132,11 @@ impl DetailView {
             toggle_req: None,
             overview: None,
             overview_cut: false,
-            more: None,
+            overview_full: Vec::new(),
+            overview_rect: Rect::default(),
+            overview_focus: false,
+            overview_from: 0,
+            expand: Tween::settled(0.0, now),
             warning: None,
             unsupported: Vec::new(),
         }
@@ -158,9 +171,6 @@ impl DetailView {
             } else {
                 b.push((Action::Play { start_ticks: 0 }, s::PLAY.into()));
             }
-        }
-        if self.overview_cut {
-            b.push((Action::More, s::MORE.into()));
         }
         if watchable {
             b.push((
@@ -267,8 +277,13 @@ impl DetailView {
         if self.buttons_ready {
             nodes.extend(self.buttons.iter().enumerate().map(|(i, b)| (i as NodeId, b.rect)));
         }
+        if self.overview_cut && self.overview_rect.w > 0.0 {
+            nodes.push((OVERVIEW_NODE, self.overview_rect));
+        }
         self.graph.set_nodes(nodes);
+        self.graph.set_override(OVERVIEW_NODE, Dir::Down, self.overview_from);
         let id = match self.button_focus {
+            _ if self.overview_focus => OVERVIEW_NODE,
             Some(i) => i as NodeId,
             None => widgets::card_node(self.rows.focus.0, self.rows.focus.1),
         };
@@ -276,13 +291,8 @@ impl DetailView {
     }
 
     pub fn on_action(&mut self, a: InputAction, now: Instant, ctx: &mut Ctx) -> bool {
-        if let Some(p) = &mut self.more {
-            if !p.on_action(a) {
-                self.more = None;
-            }
-            return true;
-        }
         if let Some(dir) = Dir::from_action(a) {
+            let from = self.graph.focused();
             let id = match self.rows.step(dir, &self.vp) {
                 Step::To(id) => id,
                 Step::Stay => return true,
@@ -291,7 +301,20 @@ impl DetailView {
                     None => return false,
                 },
             };
+            let to_overview = id == OVERVIEW_NODE;
+            if to_overview && let Some(f) = from {
+                self.overview_from = f;
+            }
+            if to_overview != self.overview_focus {
+                self.overview_focus = to_overview;
+                let d = if to_overview { EXPAND_IN } else { EXPAND_OUT };
+                self.expand.retarget(f32::from(u8::from(to_overview)), now, d);
+            }
             match widgets::card_of(id) {
+                _ if to_overview => {
+                    self.button_focus = None;
+                    self.rows.release_focus(now);
+                }
                 Some(rc) => {
                     self.button_focus = None;
                     self.rows.take_focus(rc, &self.vp, now);
@@ -307,6 +330,9 @@ impl DetailView {
         if a != InputAction::Select {
             return false;
         }
+        if self.overview_focus {
+            return true;
+        }
         let Some(d) = &self.detail else { return false };
         if let Some(i) = self.button_focus {
             let Some(b) = self.buttons.get(i) else { return false };
@@ -318,9 +344,6 @@ impl DetailView {
                         start_ticks,
                         title: d.card.title.clone(),
                     });
-                }
-                Action::More => {
-                    self.more = Some(TextPanel::new(&d.card.title, &d.card.overview, now));
                 }
                 Action::Watched => {
                     self.toggle_req =
@@ -476,7 +499,7 @@ impl DetailView {
     pub fn is_animating(&self, now: Instant) -> bool {
         self.rows.is_animating(now)
             || self.backdrop.is_animating(now)
-            || self.more.as_ref().is_some_and(|p| p.is_animating(now))
+            || self.expand.is_animating(now)
     }
 
     pub fn wants(&self, w: &mut Wants) {
@@ -491,20 +514,18 @@ impl DetailView {
         tex: &mut Textures,
         caps: Option<&DecodeCaps>,
     ) {
-        // The overview first: whether it fits decides the More button.
+        // The overview first: whether it fits decides if it takes focus.
         if self.overview.is_none()
             && let Some(d) = &self.detail
         {
             let mut lines = wrap(r, &d.card.overview, &BODY, TEXT_W);
+            self.overview_full = lines.clone();
             if lines.len() > 3 {
                 lines.truncate(3);
                 if let Some(l) = lines.last_mut() {
                     l.push('…');
                 }
-                if !self.overview_cut {
-                    self.overview_cut = true;
-                    self.set_buttons();
-                }
+                self.overview_cut = true;
             }
             self.overview = Some(lines);
         }
@@ -575,6 +596,7 @@ impl DetailView {
             r.text(&d.tagline, &META, Point::new(sx, y), TEXT);
             y += 36.0;
         }
+        let overview_top = y;
         if let Some(lines) = &self.overview {
             for l in lines {
                 if y > BUTTONS_Y - 34.0 {
@@ -584,15 +606,42 @@ impl DetailView {
                 y += 32.0;
             }
         }
+        let overview_rect =
+            Rect::new(sx - 14.0, overview_top - 4.0, TEXT_W + 28.0, y - overview_top + 8.0);
 
         for (i, b) in self.buttons.iter().enumerate() {
             widgets::draw_button(r, b.rect, &b.label, self.button_focus == Some(i), false);
         }
         self.rows.draw(r, now, tex, &self.vp);
-        if let Some(p) = &mut self.more {
-            p.draw(r, now, self.vp.safe);
+        if self.overview_cut && overview_rect != self.overview_rect {
+            self.overview_rect = overview_rect;
+            self.rebuild_graph();
         }
-        let _ = lh;
+        self.draw_overview_focus(r, now, overview_top, lh - sy);
+    }
+
+    /// The focused overview: the whole text, grown down over the page.
+    fn draw_overview_focus<R: Renderer>(&self, r: &mut R, now: Instant, top: f32, bottom: f32) {
+        let t = self.expand.value(now);
+        if !self.overview_cut || t <= 0.001 {
+            return;
+        }
+        let base = self.overview_rect;
+        let full_h = self.overview_full.len() as f32 * 32.0 + 20.0;
+        let h = (base.h + (full_h - base.h) * t).min(bottom - base.y);
+        let rect = Rect::new(base.x, base.y, base.w, h);
+        r.fill_rrect(rect, 12.0, Color::rgba(14, 16, 22, (236.0 * t) as u8));
+        r.stroke_rrect(rect.inset(-3.0), 15.0, 3.0, Color::WHITE.with_alpha(t));
+        r.push_clip(rect, 12.0);
+        let mut y = top;
+        for l in &self.overview_full {
+            if y > rect.bottom() {
+                break;
+            }
+            r.text(l, &BODY, Point::new(base.x + 14.0, y), TEXT);
+            y += 32.0;
+        }
+        r.pop();
     }
 }
 
@@ -782,23 +831,30 @@ mod tests {
     }
 
     #[test]
-    fn more_opens_the_full_description() {
+    fn a_cut_overview_takes_focus_and_expands() {
         let t = Instant::now();
         let mut next = 0;
         let mut ctx = Ctx::new(&mut next);
         let mut v = DetailView::new("item".into(), VP, t, &mut ctx);
         let (id, _) = take_fetch(&mut ctx);
         v.on_fetched(id, &Fetched::Detail(Box::new(detail(Kind::Movie, 0))), t, &mut ctx);
-        // Drawing finds the overview too long for the page.
+        // As drawing finds it: cut, above the buttons.
         v.overview_cut = true;
-        v.set_buttons();
-        let i = v.buttons.iter().position(|b| b.action == Action::More).unwrap();
-        v.button_focus = Some(i);
-        v.on_action(InputAction::Select, t, &mut ctx);
-        assert!(v.more.is_some());
+        v.overview_rect = Rect::new(34.0, 300.0, 1178.0, 108.0);
+        for (i, b) in v.buttons.iter_mut().enumerate() {
+            b.rect = Rect::new(48.0 + i as f32 * 220.0, BUTTONS_Y, 200.0, BUTTON_H);
+        }
+        v.buttons_ready = true;
+        v.button_focus = Some(0);
+        v.rebuild_graph();
+        assert!(v.on_action(InputAction::Up, t, &mut ctx));
+        assert!(v.overview_focus);
+        assert_eq!(v.button_focus, None);
+        assert!(v.is_animating(t), "grows open");
+        assert!(v.on_action(InputAction::Select, t, &mut ctx), "Select does nothing there");
+        assert!(ctx.open.is_none());
         v.on_action(InputAction::Down, t, &mut ctx);
-        assert!(v.more.is_some(), "Down scrolls");
-        v.on_action(InputAction::Back, t, &mut ctx);
-        assert!(v.more.is_none());
+        assert!(!v.overview_focus);
+        assert_eq!(v.button_focus, Some(0));
     }
 }
