@@ -31,8 +31,15 @@ pub enum Cmd {
     /// Look for servers on the LAN.
     Search,
     /// Leave the current server's problem/sign-in screen for the server
-    /// screen.
+    /// screen (also "Add server" on the account picker).
     ChangeServer,
+    /// Show the account picker (Settings, "Switch user"); nobody is
+    /// signed out.
+    SwitchUser,
+    /// Continue as this saved account (the account picker).
+    PickAccount { server_id: String, user_id: String },
+    /// Sign in another user on the current server, keeping the others.
+    AddUser,
     /// Fetch page data; the answer is `Event::Fetched` with this id.
     Fetch { id: u64, req: Fetch },
     /// Fetch the home screen again (after playback, favorites...).
@@ -100,6 +107,21 @@ pub enum Status {
         title: String,
         detail: String,
     },
+    /// Who's watching? The signed-in accounts on this device (spec 8:
+    /// user picker on startup), and the one in use when switching.
+    Accounts {
+        accounts: Vec<Account>,
+        current: Option<usize>,
+    },
+}
+
+/// A saved, signed-in user on a server.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Account {
+    pub server_id: String,
+    pub server_name: String,
+    pub user_id: String,
+    pub user_name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -427,6 +449,74 @@ mod tests {
         assert!(c.library);
     }
 
+    /// Several users (spec 8): add a second user without signing the
+    /// first out, a picker at the next start, switching, and signing out
+    /// one of them.
+    #[test]
+    fn accounts_against_mock_server() {
+        let url =
+            jellyroll_mock_server::spawn(MockConfig { approve_after: 1, ..Default::default() });
+        let dir = std::env::temp_dir().join(format!("jellyroll-acct-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cfg = NetConfig {
+            server_url: url,
+            ca_file: None,
+            image_cache_bytes: 1 << 20,
+            data_dir: Some(dir.join("data")),
+            cache_dir: Some(dir.join("cache")),
+        };
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let home = |h: &mut NetHandle| loop {
+            match next(h, deadline) {
+                Event::Home { data, fresh: true } => return data.user_name,
+                Event::Status(Status::Problem { title, detail }) => panic!("{title}: {detail}"),
+                _ => {}
+            }
+        };
+        let accounts = |h: &mut NetHandle| loop {
+            if let Event::Status(Status::Accounts { accounts, current }) = next(h, deadline) {
+                let names: Vec<String> = accounts.iter().map(|a| a.user_name.clone()).collect();
+                return (names, current);
+            }
+        };
+
+        let mut h = NetHandle::start(cfg.clone(), Arc::new(|| {})).unwrap();
+        assert_eq!(home(&mut h), "demo", "Quick Connect signs in demo");
+        // Settings → Switch user → Add user, with a password this time.
+        h.send(Cmd::SwitchUser);
+        assert_eq!(accounts(&mut h), (vec!["demo".to_string()], Some(0)));
+        h.send(Cmd::AddUser);
+        loop {
+            if let Event::Status(Status::QuickConnect { .. }) = next(&mut h, deadline) {
+                break;
+            }
+        }
+        h.send(Cmd::PasswordSignIn { username: "kid".into(), password: String::new() });
+        assert_eq!(home(&mut h), "kid");
+        drop(h);
+
+        // Next start: who's watching?
+        let mut h = NetHandle::start(cfg.clone(), Arc::new(|| {})).unwrap();
+        let (names, current) = accounts(&mut h);
+        assert_eq!(names, ["demo", "kid"]);
+        assert_eq!(current, Some(1), "kid was watching last");
+        h.send(Cmd::PickAccount {
+            server_id: jellyroll_mock_server::SERVER_ID.into(),
+            user_id: jellyroll_mock_server::USER_ID.into(),
+        });
+        assert_eq!(home(&mut h), "demo");
+        // Signing demo out leaves kid: the picker again.
+        h.send(Cmd::SignOut);
+        assert_eq!(accounts(&mut h).0, ["kid"]);
+        h.send(Cmd::PickAccount {
+            server_id: jellyroll_mock_server::SERVER_ID.into(),
+            user_id: jellyroll_mock_server::KID_ID.into(),
+        });
+        assert_eq!(home(&mut h), "kid");
+        drop(h);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// The whole M5 flow against the mock server: connect, Quick Connect,
     /// home rows, images; then a restart shows the cached home first
     /// (stale-while-revalidate) and needs no sign-in.
@@ -540,6 +630,7 @@ mod tests {
             audio_stream_index: Some(1),
             subtitle_stream_index: None,
             play_method: pf.info.play_method,
+            user_id: String::new(),
         }))));
         let mut n = 100;
         loop {

@@ -60,6 +60,38 @@ enum Ctl {
     SignOut,
     ListUsers,
     Password { username: String, password: String },
+    SwitchUser,
+    PickAccount { server_id: String, user_id: String },
+    AddUser,
+}
+
+/// The account picker's answer.
+enum Picked {
+    Account { server_id: String, user_id: String },
+    AddUser,
+    AddServer,
+}
+
+/// Who's watching? Waits for a choice among the signed-in accounts.
+async fn choose_account(
+    out: &Out,
+    ctl: &mut mpsc::Receiver<Ctl>,
+    accounts: Vec<super::Account>,
+    current: Option<usize>,
+) -> Picked {
+    tracing::info!(accounts = accounts.len(), "who's watching?");
+    out.status(Status::Accounts { accounts, current }).await;
+    loop {
+        match ctl.recv().await {
+            Some(Ctl::PickAccount { server_id, user_id }) => {
+                return Picked::Account { server_id, user_id };
+            }
+            Some(Ctl::AddUser) => return Picked::AddUser,
+            Some(Ctl::ChangeServer) => return Picked::AddServer,
+            Some(_) => {}
+            None => std::future::pending::<()>().await,
+        }
+    }
 }
 
 /// The server screen: wait until the user types an address and connects,
@@ -129,7 +161,7 @@ pub async fn run(cfg: NetConfig, out: Out, mut cmds: mpsc::Receiver<Cmd>) {
     let images = tokio::spawn(image_worker(queue.clone(), client_rx, disk, out.clone()));
     let fetcher = tokio::spawn(fetch::worker(fetches.clone(), signed_rx.clone(), out.clone()));
     let live = tokio::spawn(super::socket::worker(signed_rx.clone(), out.clone()));
-    let reporter = tokio::spawn(super::reports::worker(reports.clone(), signed_rx));
+    let reporter = tokio::spawn(super::reports::worker(reports.clone(), signed_rx.clone()));
     let session = tokio::spawn(session(cfg, out, ctl_rx, client_tx, signed_tx));
     while let Some(c) = cmds.recv().await {
         match c {
@@ -147,7 +179,14 @@ pub async fn run(cfg: NetConfig, out: Out, mut cmds: mpsc::Receiver<Cmd>) {
             }
             Cmd::WantImages(jobs) => queue.replace(jobs),
             Cmd::Fetch { id, req } => fetches.push(id, req),
-            Cmd::Report(r) => reports.push(*r),
+            Cmd::Report(mut r) => {
+                // Tagged with the user playing now, so a later user switch
+                // can't send it under someone else's account.
+                if let Some((_, user)) = signed_rx.borrow().as_ref() {
+                    r.user_id = user.clone();
+                }
+                reports.push(*r)
+            }
             Cmd::Flush(done) => {
                 let _ = done.send(());
             }
@@ -162,6 +201,15 @@ pub async fn run(cfg: NetConfig, out: Out, mut cmds: mpsc::Receiver<Cmd>) {
             }
             Cmd::PasswordSignIn { username, password } => {
                 let _ = ctl_tx.try_send(Ctl::Password { username, password });
+            }
+            Cmd::SwitchUser => {
+                let _ = ctl_tx.try_send(Ctl::SwitchUser);
+            }
+            Cmd::PickAccount { server_id, user_id } => {
+                let _ = ctl_tx.try_send(Ctl::PickAccount { server_id, user_id });
+            }
+            Cmd::AddUser => {
+                let _ = ctl_tx.try_send(Ctl::AddUser);
             }
         }
     }
@@ -251,13 +299,50 @@ async fn session(
     // Some(error): show the server screen next (with an optional error).
     let mut ask: Option<Option<String>> = None;
     let mut last_address = String::new();
+    // The account picker: shown at startup when several accounts are
+    // signed in, and on request ("Switch user", after signing out).
+    let mut picker = state.accounts().len() > 1;
+    // "Add user": sign in someone new on the current server.
+    let mut add_user = false;
+    // The picked account's server, over the configured one (kept for
+    // retries until another server is chosen).
+    let mut picked_url: Option<String> = None;
 
     'outer: loop {
+        // ---- 0. who's watching -------------------------------------------
+        if std::mem::take(&mut picker) && ask.is_none() {
+            let accounts = state.accounts();
+            let current = state.last().and_then(|(s, u)| {
+                let u = u?;
+                accounts.iter().position(|a| a.server_id == s.id && a.user_id == u.id)
+            });
+            if accounts.is_empty() {
+                // Nobody left (signed out): sign in on the last server.
+            } else {
+                match choose_account(&out, &mut ctl, accounts, current).await {
+                    Picked::Account { server_id, user_id } => {
+                        tracing::info!(server = server_id, user = user_id, "account picked");
+                        state.last_server = Some(server_id.clone());
+                        state.last_user = Some(user_id);
+                        save_state(&state, &state_path).await;
+                        picked_url = state.server(&server_id).map(|s| s.url.clone());
+                    }
+                    Picked::AddUser => add_user = true,
+                    Picked::AddServer => ask = Some(None),
+                }
+            }
+        }
+
         // ---- 1. which server --------------------------------------------
         // The config file wins, then the last server used; otherwise (or
         // when the user asked to change server) the server screen.
         let configured = cfg.server_url.trim();
-        let (url, typed) = if ask.is_none() && !configured.is_empty() {
+        if ask.is_some() {
+            picked_url = None;
+        }
+        let (url, typed) = if let Some(u) = picked_url.clone() {
+            (u, false)
+        } else if ask.is_none() && !configured.is_empty() {
             (configured.to_string(), false)
         } else if ask.is_none()
             && let Some((s, _)) = state.last()
@@ -282,7 +367,9 @@ async fn session(
         let mut showing_home = false;
         let display_name =
             saved.as_ref().map_or_else(|| client.base_url().to_string(), |s| s.name.clone());
-        if let Some((srv, Some(user))) = state.last().filter(|(s, _)| s.url == client.base_url()) {
+        if let Some((srv, Some(user))) =
+            state.last().filter(|(s, _)| s.url == client.base_url() && !add_user)
+        {
             client.set_token(Some(user.token.clone()));
             client_tx.send_replace(Some(client.clone()));
             let key = home_key(&srv.id, &user.id);
@@ -322,7 +409,13 @@ async fn session(
                     .await;
                 }
                 if let Some(Ctl::ChangeServer) = wait_ctl(&mut ctl, Some(backoff.next())).await {
-                    ask = Some(None);
+                    // Several accounts: back to choosing among them (it
+                    // offers "Add server" too); else the server screen.
+                    if state.accounts().len() > 1 {
+                        picker = true;
+                    } else {
+                        ask = Some(None);
+                    }
                 }
                 continue;
             }
@@ -351,16 +444,37 @@ async fn session(
         save_state(&state, &state_path).await;
 
         // ---- 4. user -----------------------------------------------------
-        let (user_id, user_name) = match state.last().and_then(|(_, u)| u.cloned()) {
+        // The last user if they are on this server, else anyone signed in
+        // here; nobody (or "Add user"): sign in.
+        let saved_user = state.server(&server_id).and_then(|s| {
+            let signed = |u: &&store::SavedUser| !u.token.is_empty();
+            let last = state.last_user.as_deref();
+            s.users
+                .iter()
+                .filter(signed)
+                .find(|u| Some(u.id.as_str()) == last)
+                .or_else(|| s.users.iter().find(signed))
+                .cloned()
+        });
+        let (user_id, user_name) = match saved_user.filter(|_| !add_user) {
             Some(u) => {
                 client.set_token(Some(u.token.clone()));
                 (u.id, u.name)
             }
             None => {
                 client_tx.send_replace(None);
+                let adding = std::mem::take(&mut add_user);
                 let auth = match quick_connect(&client, &server_name, &out, &mut ctl).await {
                     QuickConnect::SignedIn(a) => a,
-                    QuickConnect::Restart => continue 'outer,
+                    QuickConnect::Restart => {
+                        add_user = adding;
+                        continue 'outer;
+                    }
+                    // Back from adding a user: to the accounts again.
+                    QuickConnect::ChangeServer if adding => {
+                        picker = true;
+                        continue 'outer;
+                    }
                     QuickConnect::ChangeServer => {
                         ask = Some(None);
                         continue 'outer;
@@ -409,6 +523,11 @@ async fn session(
                             ask = Some(None);
                             continue 'outer;
                         }
+                        Some(Ctl::SwitchUser) => {
+                            signed_tx.send_replace(None);
+                            picker = true;
+                            continue 'outer;
+                        }
                         Some(Ctl::SignOut) => {
                             if let Err(e) = client.send_no_content(&ep::logout()).await {
                                 tracing::warn!("logout: {e}");
@@ -418,6 +537,8 @@ async fn session(
                             save_state(&state, &state_path).await;
                             client_tx.send_replace(None);
                             signed_tx.send_replace(None);
+                            // Others still signed in: choose among them.
+                            picker = !state.accounts().is_empty();
                             continue 'outer;
                         }
                         _ => {}

@@ -5,6 +5,7 @@
 //! which images and data it needs, and hands playback requests to the
 //! frame loop.
 
+mod accounts;
 mod blade;
 mod detail;
 mod library;
@@ -65,6 +66,8 @@ enum Screen {
     Status(StatusView),
     Entry(ServerEntry),
     SignIn(SignInForm),
+    /// Who's watching?
+    Accounts(accounts::AccountPicker),
     /// Home and the page stack.
     Browse,
 }
@@ -448,6 +451,11 @@ impl HomeApp {
                     if let Screen::Entry(e) = &mut self.screen {
                         e.update(error, found, searching);
                     }
+                }
+                Event::Status(Status::Accounts { accounts, current }) => {
+                    self.stack.clear();
+                    self.player_wants.clear();
+                    self.screen = Screen::Accounts(accounts::AccountPicker::new(accounts, current));
                 }
                 Event::Status(s) => {
                     self.stack.clear();
@@ -844,6 +852,13 @@ impl HomeApp {
                 }
                 used
             }
+            Screen::Accounts(p) => {
+                let (used, cmd) = p.on_action(a);
+                if let Some(c) = cmd {
+                    self.net.send(c);
+                }
+                used
+            }
             Screen::Status(st) => match a {
                 InputAction::Left | InputAction::Right if st.buttons() > 0 => {
                     st.move_focus(a == InputAction::Right)
@@ -1045,6 +1060,7 @@ impl HomeApp {
             Screen::Status(st) => st.draw(r, safe, notice),
             Screen::Entry(e) => e.draw(r, safe, notice),
             Screen::SignIn(f) => f.draw(r, sx, sy),
+            Screen::Accounts(p) => p.draw(r),
             Screen::Browse => {
                 let caps = self.caps.get().and_then(|c| c.as_ref());
                 match self.stack.last_mut() {

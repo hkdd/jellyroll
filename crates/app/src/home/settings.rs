@@ -42,8 +42,8 @@ pub struct Values {
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum Item {
+    SwitchUser,
     SignOut,
-    ChangeServer,
     UiResolution,
     MatchRefresh,
     AudioDevice,
@@ -90,7 +90,7 @@ impl SettingsView {
         }
         display.push(Item::MatchRefresh);
         [
-            vec![Item::SignOut, Item::ChangeServer],
+            vec![Item::SwitchUser, Item::SignOut],
             display,
             vec![Item::AudioDevice, Item::Passthrough, Item::Channels],
         ]
@@ -153,8 +153,8 @@ impl SettingsView {
     fn label(&self, item: Item) -> String {
         let v = &self.values;
         match item {
+            Item::SwitchUser => s::SWITCH_USER.into(),
             Item::SignOut => s::SIGN_OUT.into(),
-            Item::ChangeServer => s::CHANGE_SERVER.into(),
             Item::UiResolution => widgets::list_label(match v.resolution {
                 Some(UiResolution::Native) => s::UI_RES_NATIVE,
                 _ => s::UI_RES_1080,
@@ -240,8 +240,8 @@ impl SettingsView {
             }
             InputAction::Up if r > 0 => self.focus = (r - 1, c.min(rows[r - 1].len() - 1)),
             InputAction::Select => match rows[r][c] {
+                Item::SwitchUser => ctx.send(Cmd::SwitchUser),
                 Item::SignOut => ctx.send(Cmd::SignOut),
-                Item::ChangeServer => ctx.send(Cmd::ChangeServer),
                 Item::MatchRefresh => {
                     ctx.open = Some(Open::Setting(Change::MatchRefresh(!self.values.match_refresh)))
                 }

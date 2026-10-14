@@ -105,6 +105,11 @@ pub struct Report {
     pub audio_stream_index: Option<i32>,
     pub subtitle_stream_index: Option<i32>,
     pub play_method: PlayMethod,
+    /// Whose playback this is (not sent: the token says that). Queued
+    /// reports go out only while this user is signed in; empty in reports
+    /// saved by older versions.
+    #[serde(default)]
+    pub user_id: String,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,6 +180,7 @@ mod tests {
             audio_stream_index: Some(1),
             subtitle_stream_index: None,
             play_method: PlayMethod::DirectPlay,
+            user_id: String::new(),
         };
         let req = r.request();
         assert_eq!(req.path, "/Sessions/Playing/Progress");

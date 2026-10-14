@@ -936,6 +936,28 @@ deliver) falls back to the default. The choice lasts while the page is
 open; it isn't remembered per item, and autoplayed next episodes use the
 server's defaults.
 
+**D65: Several users and servers (spec 8).** The saved state always held
+several servers and users; now they are usable. "Who's watching?" lists
+every signed-in account (user tiles with an initial, the server's name
+under each when there is more than one server) plus Add user and Add
+server. It appears at startup when more than one account is signed in,
+from Settings (Switch user, which replaces Change server: the picker
+offers Add server), and after signing out while others remain. Picking
+an account signs nobody out; Back returns to whoever was watching.
+- A picked account's server is used over `[server] url` and kept for
+  retries; if it can't be reached, Back on that screen returns to the
+  picker (with several accounts) rather than the address screen.
+- Add user signs a new person in on the current server (Quick Connect or
+  password); Back from it returns to the picker.
+- Playback reports are tagged with their user when queued and sent only
+  while that user is signed in (the server attributes a report to the
+  token's user, so after a switch a queued report would otherwise mark
+  the wrong person's progress). Reports saved by older versions are
+  untagged and go out with whoever is signed in.
+- Accounts can't be removed one by one except by signing them out.
+- The mock server has a second user, `kid` (password sign-in, no
+  password).
+
 ## Dependency approvals
 
 | Crate | Status |

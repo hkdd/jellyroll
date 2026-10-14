@@ -52,7 +52,10 @@ pub const SETTINGS_TITLE: &str = "Settings";
 pub const ACCOUNT: &str = "Account";
 pub const SIGNED_IN_AS: &str = "Signed in as %s on %s";
 pub const SIGN_OUT: &str = "Sign out";
-pub const CHANGE_SERVER: &str = "Change server";
+pub const SWITCH_USER: &str = "Switch user";
+pub const WHOS_WATCHING: &str = "Who's watching?";
+pub const ADD_USER: &str = "Add user";
+pub const ADD_SERVER: &str = "Add server";
 pub const ABOUT: &str = "About this device";
 pub const DISPLAY: &str = "Display";
 pub const UI_RES_1080: &str = "Interface: 1080p, upscaled (smoother)";
@@ -179,7 +182,10 @@ pub const ALL: &[&str] = &[
     ACCOUNT,
     SIGNED_IN_AS,
     SIGN_OUT,
-    CHANGE_SERVER,
+    SWITCH_USER,
+    WHOS_WATCHING,
+    ADD_USER,
+    ADD_SERVER,
     ABOUT,
     DISPLAY,
     UI_RES_1080,

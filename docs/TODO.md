@@ -6,8 +6,7 @@ priority order; strike through or delete when done.
 1. ~~**Live updates and remote control (Jellyfin WebSocket, spec 8).**~~
    Built (D63); to check against the real server: `docs/LIVE-UPDATES-CHECKLIST.md`.
 2. ~~**Item page: audio/subtitle quick-pick (spec 10.1).**~~ Built (D64).
-3. **Multiple users and servers (spec 8).** User picker at startup;
-   "Switch user" in Settings without signing out.
+3. ~~**Multiple users and servers (spec 8).**~~ Built (D65).
 4. **Library year filter (spec 10.1).**
 5. **Settings (spec 7.1, 10.1):** playback (interpolation toggle,
    deinterlacing, HDR tone mapping for HDR on an SDR output), caches (sizes, clear).

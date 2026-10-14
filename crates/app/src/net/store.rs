@@ -131,6 +131,21 @@ impl State {
         atomic_write(path, &json, 0o600)
     }
 
+    /// Every signed-in user on every saved server (the account picker).
+    pub fn accounts(&self) -> Vec<super::Account> {
+        self.servers
+            .iter()
+            .flat_map(|s| {
+                s.users.iter().filter(|u| !u.token.is_empty()).map(|u| super::Account {
+                    server_id: s.id.clone(),
+                    server_name: s.name.clone(),
+                    user_id: u.id.clone(),
+                    user_name: u.name.clone(),
+                })
+            })
+            .collect()
+    }
+
     pub fn server(&self, id: &str) -> Option<&SavedServer> {
         self.servers.iter().find(|s| s.id == id)
     }

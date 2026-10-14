@@ -49,7 +49,9 @@ const MAX_W: f32 = 1100.0;
 impl StatusView {
     pub fn new(status: Status) -> Self {
         let (title, detail, code, hint) = match &status {
-            Status::ServerEntry { .. } => (String::new(), String::new(), None, ""),
+            Status::ServerEntry { .. } | Status::Accounts { .. } => {
+                (String::new(), String::new(), None, "")
+            }
             Status::Connecting { server } => {
                 (format!("Connecting to {server}…"), String::new(), None, "")
             }

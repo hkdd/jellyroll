@@ -67,16 +67,17 @@ impl ReportQueue {
         self.items.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn front(&self) -> Option<Report> {
-        self.lock().front().cloned()
+    /// The first report this user may send: theirs, or untagged.
+    fn front_for(&self, user: &str) -> Option<Report> {
+        self.lock().iter().find(|r| r.user_id.is_empty() || r.user_id == user).cloned()
     }
 
-    /// Removes the front report if it is still `sent` (a newer progress
+    /// Removes `sent` if it is still queued unchanged (a newer progress
     /// report may have replaced it meanwhile).
     fn done(&self, sent: &Report) {
         let mut q = self.lock();
-        if q.front() == Some(sent) {
-            q.pop_front();
+        if let Some(i) = q.iter().position(|r| r == sent) {
+            q.remove(i);
         }
         self.save(&q);
     }
@@ -109,14 +110,18 @@ pub fn path(data_dir: &Path) -> PathBuf {
 pub async fn worker(q: Arc<ReportQueue>, mut session: watch::Receiver<Session>) {
     let mut delay = RETRY_MIN;
     loop {
-        let Some(r) = q.front() else {
-            q.notify.notified().await;
-            continue;
-        };
-        let signed = session.borrow().clone();
-        let Some((client, _)) = signed else {
+        let signed = session.borrow_and_update().clone();
+        let Some((client, user)) = signed else {
             // Wait to be signed in (again).
             let _ = session.changed().await;
+            continue;
+        };
+        // Another user's reports wait until they are signed in again.
+        let Some(r) = q.front_for(&user) else {
+            tokio::select! {
+                _ = q.notify.notified() => {}
+                _ = session.changed() => {}
+            }
             continue;
         };
         match client.send_no_content(&r.request()).await {
@@ -160,6 +165,7 @@ mod tests {
             audio_stream_index: None,
             subtitle_stream_index: None,
             play_method: PlayMethod::DirectPlay,
+            user_id: String::new(),
         }
     }
 
@@ -192,9 +198,26 @@ mod tests {
     fn done_keeps_a_newer_replacement() {
         let q = ReportQueue::open(None);
         q.push(rep(ReportKind::Progress, "a", 10));
-        let sent = q.front().unwrap();
+        let sent = q.front_for("").unwrap();
         q.push(rep(ReportKind::Progress, "a", 20));
         q.done(&sent);
         assert_eq!(q.snapshot()[0].position_ticks, 20, "the newer position is still sent");
+    }
+
+    #[test]
+    fn each_users_reports_wait_for_that_user() {
+        let q = ReportQueue::open(None);
+        let mut a = rep(ReportKind::Stopped, "a", 10);
+        a.user_id = "alice".into();
+        let mut b = rep(ReportKind::Stopped, "b", 20);
+        b.user_id = "bob".into();
+        let old = rep(ReportKind::Stopped, "o", 30);
+        q.push(a.clone());
+        q.push(b.clone());
+        q.push(old.clone());
+        assert_eq!(q.front_for("bob"), Some(b.clone()), "alice's waits for alice");
+        q.done(&b);
+        assert_eq!(q.front_for("bob"), Some(old.clone()), "untagged: whoever is signed in");
+        assert_eq!(q.front_for("alice"), Some(a));
     }
 }

@@ -46,6 +46,10 @@ const LONG_OVERVIEW: &str = "A lighthouse keeper on a remote island finds a radi
 
 pub const SERVER_ID: &str = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
 pub const USER_ID: &str = "5e7a1c0de5e7a1c0de5e7a1c0de5e7a1";
+/// A second user ("kid", no password; password sign-in only), for
+/// switching users. Sees the same library.
+pub const KID_ID: &str = "c0ffee00c0ffee00c0ffee00c0ffee00";
+pub const KID_TOKEN: &str = "mock-token-kid";
 pub const QUICK_CONNECT_CODE: &str = "424242";
 
 #[derive(Clone, Debug)]
@@ -535,7 +539,9 @@ fn parse_request(head: &str) -> Option<Request> {
     let mut ws_key = None;
     for l in lines {
         let Some((k, v)) = l.split_once(':') else { continue };
-        if k.eq_ignore_ascii_case("authorization") && v.contains(&format!("Token=\"{TOKEN}\"")) {
+        if k.eq_ignore_ascii_case("authorization")
+            && [TOKEN, KID_TOKEN].iter().any(|t| v.contains(&format!("Token=\"{t}\"")))
+        {
             authorized = true;
         }
         if k.eq_ignore_ascii_case("sec-websocket-key") {
@@ -598,13 +604,18 @@ impl Server {
                     .ok()
                     .is_some_and(|v| v["Secret"] == "mock-secret")
                     && self.polls.load(Ordering::Relaxed) >= self.cfg.approve_after;
-                if ok { Response::json(self.auth()) } else { Response::status(401) }
+                if ok { Response::json(self.auth("demo")) } else { Response::status(401) }
             }
             ("POST", "/Users/AuthenticateByName") => {
-                let ok = serde_json::from_slice::<Value>(body)
+                let name = serde_json::from_slice::<Value>(body)
                     .ok()
-                    .is_some_and(|v| v["Username"] == "demo");
-                if ok { Response::json(self.auth()) } else { Response::status(401) }
+                    .and_then(|v| v["Username"].as_str().map(String::from))
+                    .unwrap_or_default();
+                if name == "demo" || name == "kid" {
+                    Response::json(self.auth(&name))
+                } else {
+                    Response::status(401)
+                }
             }
             ("GET", "/UserViews") => Response::json(query_result(lib.views.clone())),
             ("GET", "/UserItems/Resume") => {
@@ -693,7 +704,8 @@ impl Server {
                 Response::json(query_result(g))
             }
             ("GET", "/Users/Public") => {
-                Response::json(json!([{ "Name": "demo", "Id": USER_ID, "HasPassword": false }]))
+                Response::json(json!([{ "Name": "demo", "Id": USER_ID, "HasPassword": false },
+                                      { "Name": "kid", "Id": KID_ID, "HasPassword": false }]))
             }
             ("POST" | "DELETE", p)
                 if p.starts_with("/UserFavoriteItems/") || p.starts_with("/UserPlayedItems/") =>
@@ -914,10 +926,11 @@ impl Server {
         })
     }
 
-    fn auth(&self) -> Value {
+    fn auth(&self, name: &str) -> Value {
+        let (id, token) = if name == "kid" { (KID_ID, KID_TOKEN) } else { (USER_ID, TOKEN) };
         json!({
-            "User": { "Name": "demo", "Id": USER_ID, "ServerId": SERVER_ID, "HasPassword": false },
-            "AccessToken": TOKEN, "ServerId": SERVER_ID,
+            "User": { "Name": name, "Id": id, "ServerId": SERVER_ID, "HasPassword": false },
+            "AccessToken": token, "ServerId": SERVER_ID,
         })
     }
 

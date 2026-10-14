@@ -206,6 +206,7 @@ impl PlayerUi {
             audio_stream_index: self.audio,
             subtitle_stream_index: self.subtitle,
             play_method: i.play_method,
+            user_id: String::new(),
         }))
     }
 

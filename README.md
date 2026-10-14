@@ -41,6 +41,11 @@ Changes made in other Jellyfin apps (watched, favorites, new items) show
 up within a second or two, and those apps can control this one: Jellyfin's
 "Play On" and remote control menus pause, seek, stop, change tracks,
 navigate, send messages and start playback here.
+Several people and servers can share the TV: Settings → Switch user
+shows "Who's watching?", where you can also add another user or server;
+it also appears at startup when more than one account is signed in. On
+a movie or episode page, Audio and Subtitles let you pick tracks before
+pressing Play.
 While a video plays, the TV runs at the refresh rate that fits it (24 Hz
 for films), and Settings chooses the audio output and passthrough to a
 receiver. Back on the home screen opens the power menu (restart, shut
