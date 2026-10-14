@@ -57,6 +57,8 @@ SELECT = {
         "DateCreated", "HasSubtitles", "Container",
         # M7: player (chapter markers, trickplay seek previews).
         "Chapters", "Trickplay",
+        # Item page track picker: the server's per-user default tracks.
+        "MediaSources",
     ],
     "BaseItemPerson": ["Name", "Id", "Role", "Type", "PrimaryImageTag"],
     "MediaStream": ["Type", "Codec", "Language", "DisplayTitle", "Title", "Profile",

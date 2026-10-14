@@ -365,6 +365,10 @@ fn detail(item: &Value) -> Value {
     v["Taglines"] = json!(["Synthetic, but convincing."]);
     if matches!(item["Type"].as_str(), Some("Movie" | "Episode")) {
         chapters_and_trickplay(&mut v);
+        // As the server does for a signed-in user: the media source with
+        // the user's default tracks (the item page's track picker). Its
+        // tracks are the ones that play.
+        v["MediaSources"] = playback_info(item)["MediaSources"].clone();
     }
     v["MediaStreams"] = if n.is_multiple_of(2) {
         json!([

@@ -921,6 +921,21 @@ never wait for it.
 - The mock server speaks the same protocol and can push any message
   (`POST /Mock/Send`), which the tests and manual testing use.
 
+**D64: Choosing tracks on the item page (spec 10.1).** Movie and episode
+pages show "Audio: … ›" (when there is more than one audio track) and
+"Subtitles: … ›" (when there are subtitles) next to Play; each opens the
+slide-in list (D53). They start on what the server would choose for this
+user: `GET /Items/{id}` already returns the default media source with
+`DefaultAudioStreamIndex`/`DefaultSubtitleStreamIndex` worked out from the
+user's language settings, so no extra request is needed (`MediaSources`
+added to the generated `BaseItemDto`). Play passes the choice
+(`TrackChoice`, server stream indexes, subtitle -1 = off) with the play
+request; it replaces the PlaybackInfo defaults the player starts with.
+A choice the file can't honour (an external subtitle the server won't
+deliver) falls back to the default. The choice lasts while the page is
+open; it isn't remembered per item, and autoplayed next episodes use the
+server's defaults.
+
 ## Dependency approvals
 
 | Crate | Status |

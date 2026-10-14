@@ -101,7 +101,25 @@ pub struct PlayInfo {
     pub fps: Option<f64>,
 }
 
-fn label(s: &MediaStream) -> String {
+impl PlayInfo {
+    /// Applies tracks chosen on the item page over the server's defaults.
+    /// A choice this file can't play (e.g. an external subtitle the
+    /// server won't deliver) keeps the default.
+    pub fn choose(&mut self, c: crate::net::TrackChoice) {
+        if let Some(a) = c.audio.filter(|a| self.audio.iter().any(|t| t.index == *a)) {
+            self.default_audio = Some(a);
+        }
+        match c.subtitle {
+            Some(-1) => self.default_subtitle = None,
+            Some(i) if self.subtitles.iter().any(|t| t.index == i) => {
+                self.default_subtitle = Some(i)
+            }
+            _ => {}
+        }
+    }
+}
+
+pub(super) fn label(s: &MediaStream) -> String {
     if let Some(t) = s.display_title.as_ref().filter(|t| !t.is_empty()) {
         return t.clone();
     }
@@ -365,5 +383,44 @@ mod tests {
         assert_eq!(t.tile(1105.0), (1, 0, 1), "thumbnail 110 is on sheet 1");
         assert_eq!(t.tile(1e9), (1, 9, 4), "clamped to the last thumbnail (149)");
         assert_eq!((t.sheet_rows(0), t.sheet_rows(1)), (10, 5));
+    }
+
+    #[test]
+    fn choices_from_the_item_page_override_defaults() {
+        use crate::net::TrackChoice;
+        let mk = |index| Track {
+            index,
+            mpv_id: Some(index as i64),
+            external: None,
+            label: String::new(),
+            language: String::new(),
+        };
+        let mut i = PlayInfo {
+            item_id: String::new(),
+            title: String::new(),
+            subtitle: String::new(),
+            is_episode: false,
+            media_source_id: String::new(),
+            play_session_id: String::new(),
+            play_method: PlayMethod::DirectPlay,
+            stream_path: String::new(),
+            duration: 0.0,
+            start: 0.0,
+            audio: vec![mk(1), mk(2)],
+            subtitles: vec![mk(3)],
+            default_audio: Some(1),
+            default_subtitle: Some(3),
+            chapters: Vec::new(),
+            segments: Vec::new(),
+            trickplay: None,
+            next: None,
+            fps: None,
+        };
+        i.choose(TrackChoice::default());
+        assert_eq!((i.default_audio, i.default_subtitle), (Some(1), Some(3)));
+        i.choose(TrackChoice { audio: Some(9), subtitle: Some(-1) });
+        assert_eq!((i.default_audio, i.default_subtitle), (Some(1), None), "unknown audio kept");
+        i.choose(TrackChoice { audio: Some(2), subtitle: Some(3) });
+        assert_eq!((i.default_audio, i.default_subtitle), (Some(2), Some(3)));
     }
 }

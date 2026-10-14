@@ -568,7 +568,11 @@ impl PlayerUi {
             return;
         }
         if let Some(n) = &self.fetched.info.next {
-            self.next_fetch = Some(ctx.fetch(Fetch::Play { id: n.id.clone(), start_ticks: 0 }));
+            self.next_fetch = Some(ctx.fetch(Fetch::Play {
+                id: n.id.clone(),
+                start_ticks: 0,
+                tracks: Default::default(),
+            }));
         }
     }
 

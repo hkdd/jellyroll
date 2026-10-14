@@ -145,11 +145,21 @@ pub enum Fetch {
         on: bool,
     },
     /// Everything to play an item (PlaybackInfo, chapters, segments,
-    /// trickplay, the next episode), from `start_ticks`.
+    /// trickplay, the next episode), from `start_ticks`, with the tracks
+    /// chosen on the item page.
     Play {
         id: String,
         start_ticks: i64,
+        tracks: TrackChoice,
     },
+}
+
+/// Tracks chosen before Play, as server stream indexes; None keeps the
+/// server's default for the user. A subtitle of -1 means off.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TrackChoice {
+    pub audio: Option<i32>,
+    pub subtitle: Option<i32>,
 }
 
 /// What a page shows when a request failed because the server can't be
@@ -506,9 +516,10 @@ mod tests {
         // Playback (M7): play data, then a stop report the server records
         // as the resume point.
         let movie = data.rows[3].cards[0].id.clone();
-        assert!(
-            h.send(Cmd::Fetch { id: 77, req: Fetch::Play { id: movie.clone(), start_ticks: 0 } })
-        );
+        assert!(h.send(Cmd::Fetch {
+            id: 77,
+            req: Fetch::Play { id: movie.clone(), start_ticks: 0, tracks: Default::default() }
+        }));
         let pf = loop {
             match next(&mut h, deadline) {
                 Event::Fetched { id: 77, result: Fetched::Play(p) } => break p,

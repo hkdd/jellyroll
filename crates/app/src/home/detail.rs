@@ -10,6 +10,7 @@ use std::time::Instant;
 use jellyroll_render::{Color, Point, Rect, Renderer, TextStyle, Weight};
 use jellyroll_video::va::DecodeCaps;
 
+use super::blade::{self, Blade};
 use super::model::{Card, Detail, Kind, Row, Shape};
 use super::pages::{Ctx, Open};
 use super::status::wrap;
@@ -20,7 +21,7 @@ use super::widgets::{self, Backdrop, RowList, Step, Viewport, Wants};
 use crate::anim::Tween;
 use crate::focus::{Dir, FocusGraph, NodeId};
 use crate::input::InputAction;
-use crate::net::{Changed, Fetch, Fetched};
+use crate::net::{Changed, Fetch, Fetched, TrackChoice};
 
 const ROWS_TOP: f32 = 700.0;
 const BUTTONS_Y: f32 = 590.0;
@@ -40,9 +41,20 @@ const WARN: TextStyle = TextStyle::new(19.0, Weight::Bold).max_width(TEXT_W);
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum Action {
-    Play { start_ticks: i64 },
+    Play {
+        start_ticks: i64,
+    },
+    /// Choose the audio track or subtitles before Play.
+    Audio,
+    Subtitles,
     Watched,
     Favorite,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+enum Pick {
+    Audio,
+    Subtitles,
 }
 
 struct Button {
@@ -98,6 +110,15 @@ pub struct DetailView {
     /// Decode warning, filled once the detail and the GPU caps are known.
     warning: Option<String>,
     unsupported: Vec<bool>,
+    /// Tracks chosen here for Play (None: the server's default).
+    tracks: TrackChoice,
+    picker: Option<(Pick, Blade)>,
+}
+
+/// A track label short enough for a button: its first part ("English"
+/// of "English - Dolby Digital - 5.1 - Default").
+fn short_label(label: &str) -> &str {
+    label.split(" - ").next().unwrap_or(label)
 }
 
 fn ticks_to_hms(ticks: i64) -> String {
@@ -143,7 +164,56 @@ impl DetailView {
             expand: Tween::settled(0.0, now),
             warning: None,
             unsupported: Vec::new(),
+            tracks: TrackChoice::default(),
+            picker: None,
         }
+    }
+
+    /// The audio track Play will use (chosen, else the server's default).
+    fn audio_track(&self) -> Option<i32> {
+        let d = self.detail.as_ref()?;
+        self.tracks.audio.filter(|a| d.audio.iter().any(|t| t.0 == *a)).or(d.default_audio)
+    }
+
+    /// The subtitle track Play will use; None: off.
+    fn subtitle_track(&self) -> Option<i32> {
+        let d = self.detail.as_ref()?;
+        match self.tracks.subtitle {
+            Some(-1) => None,
+            Some(i) if d.subtitles.iter().any(|t| t.0 == i) => Some(i),
+            _ => d.default_subtitle,
+        }
+    }
+
+    fn open_picker(&mut self, pick: Pick, now: Instant) {
+        let Some(d) = &self.detail else { return };
+        let b = match pick {
+            Pick::Audio => {
+                let labels = d.audio.iter().map(|t| t.1.clone()).collect();
+                let cur = d.audio.iter().position(|t| Some(t.0) == self.audio_track());
+                Blade::new(s::AUDIO, labels, cur, now)
+            }
+            Pick::Subtitles => {
+                let mut labels = vec![s::SUBTITLES_OFF.to_string()];
+                labels.extend(d.subtitles.iter().map(|t| t.1.clone()));
+                let cur = match self.subtitle_track() {
+                    None => 0,
+                    Some(i) => d.subtitles.iter().position(|t| t.0 == i).map_or(0, |p| p + 1),
+                };
+                Blade::new(s::SUBTITLES, labels, Some(cur), now)
+            }
+        };
+        self.picker = Some((pick, b));
+    }
+
+    fn picked(&mut self, pick: Pick, i: usize) {
+        let Some(d) = &self.detail else { return };
+        match pick {
+            Pick::Audio => self.tracks.audio = d.audio.get(i).map(|t| t.0),
+            Pick::Subtitles if i == 0 => self.tracks.subtitle = Some(-1),
+            Pick::Subtitles => self.tracks.subtitle = d.subtitles.get(i - 1).map(|t| t.0),
+        }
+        self.set_buttons();
     }
 
     /// Back from playback: reload (resume point, watched state).
@@ -219,6 +289,20 @@ impl DetailView {
                 b.push((Action::Play { start_ticks: 0 }, s::PLAY_FROM_START.into()));
             } else {
                 b.push((Action::Play { start_ticks: 0 }, s::PLAY.into()));
+            }
+            // Track choices: only when there is a choice to make.
+            if d.audio.len() > 1 {
+                let cur = self.audio_track().and_then(|a| d.audio.iter().find(|t| t.0 == a));
+                let name = cur.map_or("", |t| short_label(&t.1));
+                b.push((Action::Audio, widgets::list_label(&format!("{}: {name}", s::AUDIO))));
+            }
+            if !d.subtitles.is_empty() {
+                let cur = self.subtitle_track().and_then(|i| d.subtitles.iter().find(|t| t.0 == i));
+                let name = cur.map_or(s::SUBTITLES_OFF, |t| short_label(&t.1));
+                b.push((
+                    Action::Subtitles,
+                    widgets::list_label(&format!("{}: {name}", s::SUBTITLES)),
+                ));
             }
         }
         if watchable {
@@ -340,6 +424,18 @@ impl DetailView {
     }
 
     pub fn on_action(&mut self, a: InputAction, now: Instant, ctx: &mut Ctx) -> bool {
+        if let Some((pick, b)) = &mut self.picker {
+            let pick = *pick;
+            match b.on_action(a) {
+                blade::Outcome::Stay => {}
+                blade::Outcome::Picked(i) => {
+                    self.picker = None;
+                    self.picked(pick, i);
+                }
+                blade::Outcome::Closed => self.picker = None,
+            }
+            return true;
+        }
         if let Some(dir) = Dir::from_action(a) {
             let from = self.graph.focused();
             let id = match self.rows.step(dir, &self.vp) {
@@ -392,8 +488,11 @@ impl DetailView {
                         media_source: d.media_source_id.clone(),
                         start_ticks,
                         title: d.card.title.clone(),
+                        tracks: self.tracks,
                     });
                 }
+                Action::Audio => self.open_picker(Pick::Audio, now),
+                Action::Subtitles => self.open_picker(Pick::Subtitles, now),
                 Action::Watched => {
                     self.toggle_req =
                         Some(ctx.fetch(Fetch::SetPlayed { id: self.id.clone(), on: !d.played }));
@@ -544,6 +643,7 @@ impl DetailView {
         self.rows.is_animating(now)
             || self.backdrop.is_animating(now)
             || self.expand.is_animating(now)
+            || self.picker.as_ref().is_some_and(|(_, b)| b.is_animating(now))
     }
 
     pub fn wants(&self, w: &mut Wants) {
@@ -662,6 +762,9 @@ impl DetailView {
             self.rebuild_graph();
         }
         self.draw_overview_focus(r, now, overview_top, lh - sy);
+        if let Some((_, b)) = &self.picker {
+            b.draw(r, now, self.vp.safe);
+        }
     }
 
     /// The focused overview: the whole text, grown down over the page.
@@ -727,6 +830,10 @@ mod tests {
             series_id: None,
             season_id: None,
             media_source_id: "item".into(),
+            audio: Vec::new(),
+            subtitles: Vec::new(),
+            default_audio: None,
+            default_subtitle: None,
         }
     }
 
@@ -956,5 +1063,49 @@ mod tests {
                 Fetch::Episodes { series: "show".into(), season: "s1".into() }
             ]
         );
+    }
+
+    #[test]
+    fn tracks_are_chosen_before_play() {
+        let t = Instant::now();
+        let mut next = 0;
+        let mut ctx = Ctx::new(&mut next);
+        let mut v = DetailView::new("item".into(), VP, t, &mut ctx);
+        let (did, _) = take_fetch(&mut ctx);
+        let mut d = detail(Kind::Movie, 0);
+        d.audio =
+            vec![(1, "English - AAC - Stereo - Default".into()), (2, "Commentary - AAC".into())];
+        d.subtitles = vec![(3, "English - SUBRIP".into()), (4, "Français - SRT".into())];
+        d.default_audio = Some(1);
+        v.on_fetched(did, &Fetched::Detail(Box::new(d)), t, &mut ctx);
+        let labels: Vec<&str> = v.buttons.iter().map(|b| b.label.as_str()).collect();
+        assert_eq!(labels[1], "Audio: English  ›");
+        assert_eq!(labels[2], "Subtitles: Off  ›");
+        // Audio: pick the commentary.
+        v.button_focus = Some(1);
+        assert!(v.on_action(InputAction::Select, t, &mut ctx));
+        assert!(v.picker.is_some());
+        v.on_action(InputAction::Down, t, &mut ctx);
+        v.on_action(InputAction::Select, t, &mut ctx);
+        assert!(v.picker.is_none());
+        assert_eq!(v.buttons[1].label, "Audio: Commentary  ›");
+        // Subtitles: the list starts with Off; pick French.
+        v.button_focus = Some(2);
+        v.on_action(InputAction::Select, t, &mut ctx);
+        v.on_action(InputAction::Down, t, &mut ctx);
+        v.on_action(InputAction::Down, t, &mut ctx);
+        v.on_action(InputAction::Select, t, &mut ctx);
+        assert_eq!(v.buttons[2].label, "Subtitles: Français  ›");
+        // Back closes the list without changing anything.
+        v.on_action(InputAction::Select, t, &mut ctx);
+        v.on_action(InputAction::Up, t, &mut ctx);
+        assert!(v.on_action(InputAction::Back, t, &mut ctx));
+        assert!(v.picker.is_none());
+        assert_eq!(v.buttons[2].label, "Subtitles: Français  ›");
+        // Play carries the choice.
+        v.button_focus = Some(0);
+        v.on_action(InputAction::Select, t, &mut ctx);
+        let Some(Open::Play { tracks, .. }) = &ctx.open else { panic!("{:?}", ctx.open) };
+        assert_eq!(*tracks, TrackChoice { audio: Some(2), subtitle: Some(4) });
     }
 }

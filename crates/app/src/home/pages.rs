@@ -26,6 +26,7 @@ pub enum Open {
         media_source: String,
         start_ticks: i64,
         title: String,
+        tracks: crate::net::TrackChoice,
     },
 }
 

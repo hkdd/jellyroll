@@ -312,8 +312,9 @@ impl HomeApp {
     fn open(&mut self, o: Open, now: Instant) {
         let vp = self.vp;
         let page = match o {
-            Open::Play { id, start_ticks, .. } => {
-                let req = self.with_ctx(now, |_, ctx| ctx.fetch(Fetch::Play { id, start_ticks }));
+            Open::Play { id, start_ticks, tracks, .. } => {
+                let req =
+                    self.with_ctx(now, |_, ctx| ctx.fetch(Fetch::Play { id, start_ticks, tracks }));
                 self.play_req = Some(req);
                 return;
             }
@@ -590,7 +591,8 @@ impl HomeApp {
                 };
                 if matches!(self.screen, Screen::Browse) {
                     let (media_source, title) = (String::new(), String::new());
-                    self.open(Open::Play { id, media_source, start_ticks, title }, now);
+                    let tracks = Default::default();
+                    self.open(Open::Play { id, media_source, start_ticks, title, tracks }, now);
                 }
                 out
             }

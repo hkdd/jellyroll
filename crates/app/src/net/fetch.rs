@@ -81,7 +81,13 @@ async fn run(c: &Client, user: &str, f: Fetch) -> Fetched {
 
 /// The item (chapters, trickplay, series), its PlaybackInfo and media
 /// segments at once, then the next episode for an episode.
-async fn play(c: &Client, user: &str, id: &str, start_ticks: i64) -> Result<Fetched, Error> {
+async fn play(
+    c: &Client,
+    user: &str,
+    id: &str,
+    start_ticks: i64,
+    tracks: super::TrackChoice,
+) -> Result<Fetched, Error> {
     let item_req = ep::item(user, id);
     let info_req = jellyfin_api::playback::playback_info(user, id);
     let seg_req = jellyfin_api::playback::media_segments(id);
@@ -99,8 +105,11 @@ async fn play(c: &Client, user: &str, id: &str, start_ticks: i64) -> Result<Fetc
         _ => None,
     };
     Ok(match crate::home::playinfo::build(&item, &info, &segs, next.as_ref(), start_ticks) {
-        Ok(info) => Fetched::Play(Box::new(super::PlayFetched {
-            info,
+        Ok(mut info) => Fetched::Play(Box::new(super::PlayFetched {
+            info: {
+                info.choose(tracks);
+                info
+            },
             base_url: c.base_url().to_string(),
             authorization: c.token_header(),
         })),
@@ -173,6 +182,6 @@ async fn fetch(c: &Client, user: &str, f: Fetch) -> Result<Fetched, Error> {
                 played: d.played.unwrap_or(on),
             }
         }
-        Fetch::Play { id, start_ticks } => play(c, user, &id, start_ticks).await?,
+        Fetch::Play { id, start_ticks, tracks } => play(c, user, &id, start_ticks, tracks).await?,
     })
 }

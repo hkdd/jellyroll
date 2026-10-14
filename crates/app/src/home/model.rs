@@ -297,6 +297,26 @@ pub struct Detail {
     pub season_id: Option<String>,
     /// For playback: the item's default media source.
     pub media_source_id: String,
+    /// Its tracks, for choosing before Play: (server stream index, label).
+    pub audio: Vec<(i32, String)>,
+    pub subtitles: Vec<(i32, String)>,
+    /// What the server would pick for this user (language preferences).
+    pub default_audio: Option<i32>,
+    pub default_subtitle: Option<i32>,
+}
+
+/// Tracks of one type in the item's default media source.
+fn track_options(
+    streams: &[jellyfin_api::dto::MediaStream],
+    kind: jellyfin_api::dto::MediaStreamType,
+) -> Vec<(i32, String)> {
+    let mut v: Vec<(i32, String)> = streams
+        .iter()
+        .filter(|s| s.r#type == Some(kind))
+        .filter_map(|s| Some((s.index?, super::playinfo::label(s))))
+        .collect();
+    v.sort_by_key(|t| t.0);
+    v
 }
 
 fn video_codec(codec: &str, bit_depth: i32, profile: &str) -> Option<jellyroll_video::va::Codec> {
@@ -432,8 +452,23 @@ fn person(p: &jellyfin_api::dto::BaseItemPerson) -> Option<Card> {
 }
 
 pub fn detail(item: &BaseItemDto) -> Option<Detail> {
+    use jellyfin_api::dto::MediaStreamType;
     let card = card(item, Shape::Poster)?;
     let ud = item.user_data.as_ref();
+    // The default media source carries the server's per-user default
+    // tracks; older answers without it fall back to the item's streams.
+    let source = item.media_sources.as_deref().and_then(|s| s.first());
+    let streams = source
+        .and_then(|s| s.media_streams.as_deref())
+        .or(item.media_streams.as_deref())
+        .unwrap_or_default();
+    let audio = track_options(streams, MediaStreamType::Audio);
+    let subtitles = track_options(streams, MediaStreamType::Subtitle);
+    let known =
+        |list: &[(i32, String)], i: Option<i32>| i.filter(|i| list.iter().any(|t| t.0 == *i));
+    let default_audio = known(&audio, source.and_then(|s| s.default_audio_stream_index))
+        .or(audio.first().map(|t| t.0));
+    let default_subtitle = known(&subtitles, source.and_then(|s| s.default_subtitle_stream_index));
     let mut genres = item.genres.clone().unwrap_or_default();
     genres.truncate(4);
     Some(Detail {
@@ -446,7 +481,11 @@ pub fn detail(item: &BaseItemDto) -> Option<Detail> {
         people: item.people.iter().flatten().filter_map(person).take(24).collect(),
         series_id: item.series_id.clone(),
         season_id: item.season_id.clone(),
-        media_source_id: card.id.clone(),
+        media_source_id: source.and_then(|s| s.id.clone()).unwrap_or_else(|| card.id.clone()),
+        audio,
+        subtitles,
+        default_audio,
+        default_subtitle,
         card,
     })
 }

@@ -165,6 +165,8 @@ pub struct BaseItemDto {
     pub chapters: Option<Vec<ChapterInfo>>,
     #[serde(rename = "Trickplay", skip_serializing_if = "Option::is_none")]
     pub trickplay: Option<HashMap<String, Option<HashMap<String, TrickplayInfoDto>>>>,
+    #[serde(rename = "MediaSources", skip_serializing_if = "Option::is_none")]
+    pub media_sources: Option<Vec<MediaSourceInfo>>,
 }
 
 /// This is used by the api to get information about a Person within a BaseItem.
