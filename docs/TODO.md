@@ -1,24 +1,57 @@
 # To do
 
-Spec features not built yet (checked against the spec, 2026-10-14). In
-priority order; strike through or delete when done.
+Agreed 2026-10-14, in this order. Strike through when done.
 
-1. ~~**Live updates and remote control (Jellyfin WebSocket, spec 8).**~~
-   Built (D63); to check against the real server: `docs/LIVE-UPDATES-CHECKLIST.md`.
-2. ~~**Item page: audio/subtitle quick-pick (spec 10.1).**~~ Built (D64).
-3. ~~**Multiple users and servers (spec 8).**~~ Built (D65).
-4. ~~**Library year filter (spec 10.1).**~~ Built (D66).
-5. ~~**Settings (spec 7.1, 10.1):** playback, caches.~~ Built (D67).
-6. ~~**Config extras (spec 11):** hwdec override, input key remapping.~~
-   Dropped 2026-10-14: other changes coming make it
-   unnecessary.
-7. ~~**Developer tracing (spec 13).**~~ Built (D68).
+1. **Starting a video: no black wait, and the progress bar shows.**
+   - While a video starts (the TV switching refresh rate, mpv opening the
+     stream), show the item's backdrop, dimmed, with its title and
+     "Starting…", instead of a black screen.
+   - The player's bar at the bottom appears when the first video frame
+     does. (Today its 4-second timer starts when loading begins, so on a
+     slow start it has already hidden by then.)
+2. **The console flashes on screen when a video starts** (only on start,
+   not on stop). Find what leaves the console visible for a moment (most
+   likely the refresh-rate switch) and keep jellyroll's picture on screen
+   throughout.
+3. **Ask before playing what this PC can't play directly.** Only when it
+   can't direct play; the choice is not remembered.
+   - The server can send the file as it is but the GPU can't decode it
+     (e.g. HEVC 10-bit, VP9, AV1 on the HD 530): **Software decode** /
+     **Server transcode** / **Cancel**. For 4K, the dialog notes that
+     software decoding will likely stutter on this CPU.
+   - The server can't send the file as it is: **Server transcode** /
+     **Cancel**.
+   - Software decode: the red "software decoding" warning shows, then
+     goes away after 5 seconds of playback.
+   - Server transcode: follow Jellyfin's normal behaviour: tell the server
+     what this device can decode and let it choose (in practice H.264).
+   - Replaces D19's "never transcode" with "ask".
+4. **Year filter, finer.** Keep the decade list; picking a decade then
+   offers the single years within it (1990s → 1994), with "All of the
+   1990s" at the top.
+5. **Screensaver.** Settings: Off / 5 / 10 / 15 minutes. Starts after that
+   long without input while browsing or while a video is paused. Any key
+   wakes it and does nothing else. First style: The Matrix's falling green
+   characters, built so more styles can be added.
+6. **Watched mark on the item page.** A check mark in the item page's
+   header (next to the year and rating) for watched items; cards already
+   have one.
+
+Done earlier (D63-D68): live updates and remote control, audio/subtitle
+choice before Play, several users and servers, year filter by decade,
+playback and storage settings, developer tracing.
+
+Not doing:
+- Config extras (hwdec override, key remapping): other changes coming
+  make them unnecessary.
+- Automatic subtitles for foreign-language audio: Jellyfin's per-user
+  "Smart" subtitle mode already does it, and jellyroll starts with the
+  server's default tracks.
+- Media manager (identify unmatched movies, reconcile disk and library):
+  removed for now.
+- Versions picker: no grouped versions in the library.
 
 Deferred:
 - M9 (HDR10 passthrough, native DRM backend, overlay-plane video, spec
   7.4) until newer hardware (D59).
-- The 72-hour soak (M10): replaced by everyday use;
-  `--soak` stays for chasing a suspected leak.
-- Versions picker (spec 10.1: choose between grouped copies of a movie,
-  e.g. 4K / 1080p): dropped 2026-10-14, the library in use has no
-  grouped versions. jellyroll plays the server's first version.
+- The 72-hour soak (M10): everyday use instead; `--soak` stays.
