@@ -11,7 +11,7 @@ use jellyroll_render::{Color, Point, Rect, Renderer, TextStyle, Weight};
 use jellyroll_video::va::DecodeCaps;
 
 use super::blade::{self, Blade};
-use super::model::{Card, Detail, Kind, Row, Shape};
+use super::model::{Art, Card, Detail, Kind, Row, Shape};
 use super::pages::{Ctx, Open};
 use super::status::wrap;
 use super::strings as s;
@@ -630,12 +630,15 @@ impl DetailView {
         false
     }
 
+    /// The item's backdrop, else (a playlist or folder, which seldom have
+    /// one of their own) the first of its contents that has one.
+    fn backdrop_art(&self) -> Option<&Art> {
+        let d = self.detail.as_ref()?;
+        d.card.backdrop.as_ref().or_else(|| self.contents.iter().find_map(|c| c.backdrop.as_ref()))
+    }
+
     pub fn update(&mut self, now: Instant, tex: &Textures) -> bool {
-        let want = self
-            .detail
-            .as_ref()
-            .and_then(|d| d.card.backdrop.as_ref())
-            .map(|a| widgets::backdrop_key(a, &self.vp));
+        let want = self.backdrop_art().map(|a| widgets::backdrop_key(a, &self.vp));
         self.backdrop.update(want, now, tex)
     }
 
@@ -647,7 +650,7 @@ impl DetailView {
     }
 
     pub fn wants(&self, w: &mut Wants) {
-        w.backdrop(self.detail.as_ref().and_then(|d| d.card.backdrop.as_ref()));
+        w.backdrop(self.backdrop_art());
         self.rows.wants(w, &self.vp, false);
     }
 
@@ -984,6 +987,40 @@ mod tests {
             assert_eq!(contents_fetch(&ctx), Some(Fetch::Contents { id: "pl".into(), playlist }));
             assert!(v.buttons.iter().all(|b| !matches!(b.action, Action::Play { .. })));
         }
+    }
+
+    #[test]
+    fn a_playlist_without_a_backdrop_borrows_one_from_its_items() {
+        let t = Instant::now();
+        let mut next = 0;
+        let mut ctx = Ctx::new(&mut next);
+        let mut v = DetailView::new("pl".into(), VP, t, &mut ctx);
+        let (id, _) = take_fetch(&mut ctx);
+        let mut d = detail(Kind::Playlist, 0);
+        d.card.id = "pl".into();
+        d.card.backdrop = None;
+        v.on_fetched(id, &Fetched::Detail(Box::new(d)), t, &mut ctx);
+        assert!(v.backdrop_art().is_none());
+        let Some(crate::net::Cmd::Fetch { id, .. }) = ctx
+            .cmds
+            .iter()
+            .find(|c| matches!(c, crate::net::Cmd::Fetch { req: Fetch::Contents { .. }, .. }))
+        else {
+            panic!()
+        };
+        let id = *id;
+        let art = Art {
+            item_id: "m2".into(),
+            kind: jellyfin_api::endpoints::ImageType::Backdrop,
+            tag: "b2".into(),
+            blurhash: None,
+        };
+        let mut with = card("m2", Kind::Movie);
+        with.backdrop = Some(art.clone());
+        let mut without = card("m1", Kind::Movie);
+        without.backdrop = None;
+        v.on_fetched(id, &Fetched::Cards(vec![without, with]), t, &mut ctx);
+        assert_eq!(v.backdrop_art(), Some(&art), "the first item that has one");
     }
 
     #[test]

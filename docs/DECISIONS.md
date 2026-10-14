@@ -1093,6 +1093,14 @@ watched items; the item page's header now shows the same blue check with
 "Watched" after the year/rating line, so the page itself says it (it
 updates with Mark watched and live updates, D63).
 
+**D75: Playlist backdrops come from their items.** Jellyfin fetches a
+collection's (box set's) backdrop from its metadata provider, but a playlist
+has only the generated poster collage and no backdrop, so its page had a
+plain background. When the item has no backdrop of its own, the item page
+uses the first of its contents (already fetched for the "In this playlist"
+row) that has one. An episode's comes from its series. This also covers
+folders and collections without one.
+
 ## Dependency approvals
 
 | Crate | Status |
