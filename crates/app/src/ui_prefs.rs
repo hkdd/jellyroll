@@ -28,6 +28,8 @@ pub struct UiPrefs {
     pub tone_mapping: Option<String>,
     /// Artwork disk cache size in MB; None: the config's.
     pub image_cache_mb: Option<u64>,
+    /// Screensaver delay in minutes (0 = off); None: the config's.
+    pub screensaver_minutes: Option<u64>,
 }
 
 pub fn path(data_dir: &Path) -> PathBuf {

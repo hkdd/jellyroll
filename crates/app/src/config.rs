@@ -77,6 +77,9 @@ pub struct Display {
     /// Wait after a refresh switch before playback starts, for TVs that
     /// take a while to show the new mode (the start would be missed).
     pub refresh_switch_delay_ms: u64,
+    /// Minutes without input before the screensaver starts (while
+    /// browsing or paused); 0 = off. Settings offers 5, 10, 15 or off.
+    pub screensaver_minutes: u64,
 }
 
 /// Audio output (spec 7.1). Settings choices win over these.
@@ -207,6 +210,7 @@ impl Default for Display {
             ui_resolution: UiResolution::Native,
             match_refresh: true,
             refresh_switch_delay_ms: 0,
+            screensaver_minutes: 10,
         }
     }
 }
@@ -361,6 +365,7 @@ fn validate(c: &mut Config, out: &mut Vec<String>) {
         ));
         c.playback.tone_mapping = "auto".into();
     }
+    clamp(&mut c.display.screensaver_minutes, 0, 240, "display.screensaver_minutes", out);
     clamp(&mut c.cache.images_mb, 64, 1 << 20, "cache.images_mb", out);
     clamp(&mut c.cache.textures_mb, 64, 4096, "cache.textures_mb", out);
     let i = &mut c.input;

@@ -39,6 +39,10 @@ match_refresh = true
 # switching before playback starts so the beginning isn't missed (0-10000).
 refresh_switch_delay_ms = 0
 
+# Minutes without input before the screensaver starts (while browsing or
+# with a video paused); 0 = off. Settings offers off, 5, 10 or 15.
+screensaver_minutes = 10
+
 [audio]
 # Audio output, as mpv names it: "auto", "pipewire", "alsa/hdmi:CARD=PCH,DEV=0"...
 # `jellyroll --print-diagnostics` lists them. Settings can change this.

@@ -31,7 +31,7 @@ Agreed 2026-10-14, in this order. Strike through when done.
 4. ~~**Year filter, finer.**~~ Built (D72). Keep the decade list; picking a decade then
    offers the single years within it (1990s → 1994), with "All of the
    1990s" at the top.
-5. **Screensaver.** Settings: Off / 5 / 10 / 15 minutes. Starts after that
+5. ~~**Screensaver.**~~ Built (D73). Settings: Off / 5 / 10 / 15 minutes. Starts after that
    long without input while browsing or while a video is paused. Any key
    wakes it and does nothing else. First style: The Matrix's falling green
    characters, built so more styles can be added.

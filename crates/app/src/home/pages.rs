@@ -45,6 +45,8 @@ pub enum Change {
     ToneMapping(String),
     /// Artwork disk cache size in MB.
     ImageCacheMb(u64),
+    /// Minutes before the screensaver; 0 = off.
+    ScreensaverMinutes(u64),
     ClearCache,
 }
 

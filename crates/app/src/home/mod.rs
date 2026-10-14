@@ -232,6 +232,12 @@ impl UiSetting {
         self.prefs.tone_mapping.clone().unwrap_or_else(|| self.playback.tone_mapping.clone())
     }
 
+    /// None: off.
+    pub fn screensaver_after(&self) -> Option<Duration> {
+        let m = self.prefs.screensaver_minutes.unwrap_or(self.display.screensaver_minutes);
+        (m > 0).then(|| Duration::from_secs(m * 60))
+    }
+
     pub fn image_cache_mb(&self) -> u64 {
         self.prefs.image_cache_mb.unwrap_or(self.image_cache_mb)
     }
@@ -440,6 +446,7 @@ impl HomeApp {
             deinterlace: self.ui.deinterlace(),
             tone_mapping: self.ui.tone_mapping(),
             image_cache_mb: self.ui.image_cache_mb(),
+            screensaver_minutes: self.ui.screensaver_after().map_or(0, |d| d.as_secs() / 60),
             cache_used: self.cache_used,
         }
     }
@@ -461,6 +468,7 @@ impl HomeApp {
             Change::Interpolation(on) => self.ui.prefs.interpolation = Some(on),
             Change::Deinterlace(d) => self.ui.prefs.deinterlace = Some(d),
             Change::ToneMapping(t) => self.ui.prefs.tone_mapping = Some(t),
+            Change::ScreensaverMinutes(m) => self.ui.prefs.screensaver_minutes = Some(m),
             Change::ImageCacheMb(mb) => {
                 self.ui.prefs.image_cache_mb = Some(mb);
                 self.net.send(Cmd::SetImageCache(mb << 20));
@@ -693,6 +701,11 @@ impl HomeApp {
                 self.play_req = Some(req);
             }
         }
+    }
+
+    /// The screensaver delay in effect (None: off).
+    pub fn screensaver_after(&self) -> Option<Duration> {
+        self.ui.screensaver_after()
     }
 
     /// A video is starting (Play pressed, until its first frame).

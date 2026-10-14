@@ -226,6 +226,13 @@ pub fn run<P: Platform, R: Renderer>(
     };
     let mut bench_osd_next = start;
     let mut overlay_shown = false;
+    let mut saver = crate::screensaver::Screensaver::new(
+        match &view {
+            View::Home(h) => h.screensaver_after(),
+            View::Demo(_) => None,
+        },
+        start,
+    );
 
     let bench_len = opts.bench.map(|b| match b {
         Bench::Pacing(d) | Bench::Idle(d) | Bench::Play(d) | Bench::Scroll(d) => d,
@@ -278,6 +285,7 @@ pub fn run<P: Platform, R: Renderer>(
         let deadline = earliest(deadline, script.as_ref().and_then(|s| s.next_deadline()));
         let deadline = earliest(deadline, pending_play.as_ref().map(|pp| pp.at));
         let deadline = earliest(deadline, soak.as_ref().and_then(|s| s.next_deadline()));
+        let deadline = earliest(deadline, saver.next_deadline());
         let (deadline, animating) = match (&playback, &view) {
             (Some(pb), View::Home(h)) if h.has_player() => {
                 // The "Starting…" spinner animates until the first frame.
@@ -359,6 +367,9 @@ pub fn run<P: Platform, R: Renderer>(
                 && !stop_playback
                 && let Some(rc) = h.take_remote()
             {
+                // A command from another app wakes the screensaver too,
+                // and is carried out.
+                dirty |= saver.input(now);
                 match h.remote(rc, playback.as_mut(), now) {
                     PlayerOutcome::Stop => stop_playback = true,
                     PlayerOutcome::Continue { redraw } => dirty |= redraw,
@@ -445,6 +456,9 @@ pub fn run<P: Platform, R: Renderer>(
                 PlatformEvent::Exposed => dirty = true,
                 PlatformEvent::Wake => {}
                 ref other => match input::from_event(other, view.wants_text()) {
+                    // Any key wakes the screensaver and does nothing else
+                    // (every key also restarts its wait).
+                    Some(Input::Press { .. } | Input::Typed(_)) if saver.input(now) => dirty = true,
                     Some(Input::Release(b)) => repeat.release(b),
                     Some(Input::Typed(c)) => {
                         if playback.is_none() {
@@ -503,6 +517,7 @@ pub fn run<P: Platform, R: Renderer>(
             if pending_play.is_none()
                 && let Some(a) = sk.tick(now)
             {
+                saver.input(now);
                 match (playback.as_mut(), &mut view) {
                     (Some(pb), View::Home(h)) if h.has_player() => {
                         match h.player_action(a, pb, now) {
@@ -667,6 +682,21 @@ pub fn run<P: Platform, R: Renderer>(
             }
             dirty = true;
         }
+        // ---- screensaver -------------------------------------------------
+        if let View::Home(h) = &view {
+            saver.set_after(h.screensaver_after());
+        }
+        // Playing video (or one starting) keeps it away; paused video or
+        // browsing lets it start.
+        let playing = pending_play.is_some()
+            || playback.as_ref().is_some_and(|pb| !pb.started || !pb.player.state.paused);
+        if playing {
+            dirty |= saver.keep_awake(now);
+        } else {
+            let (lw, lh) = r.logical_size();
+            dirty |= saver.tick(now, true, lw, lh);
+        }
+
         if !dirty {
             continue;
         }
@@ -676,7 +706,9 @@ pub fn run<P: Platform, R: Renderer>(
         // ---- draw ------------------------------------------------------
         let mut hud_allocs = load_allocs;
         let mut loading = load_allocs > 0;
-        if let Some(pb) = playback.as_mut() {
+        if !saver.active()
+            && let Some(pb) = playback.as_mut()
+        {
             // mpv needs default GL state; Skia must then forget its cache.
             let _video = tracing::trace_span!("video").entered();
             p.gl().reset_to_defaults();
@@ -689,7 +721,16 @@ pub fn run<P: Platform, R: Renderer>(
         // made each of mpv's fail with GL_INVALID_OPERATION).
         let timing = gpu_timer.as_mut().is_some_and(|t| t.begin(p.gl()));
         let draw_span = tracing::trace_span!("draw").entered();
-        if let Some(pb) = playback.as_mut() {
+        if saver.active() {
+            // Not a steady-state UI frame (its first one builds the rain):
+            // kept out of the frame budgets and the allocation check.
+            loading = true;
+            if r.begin_frame(fb) {
+                saver.draw(r, now);
+                let _submit = tracing::trace_span!("submit").entered();
+                r.end_frame();
+            }
+        } else if let Some(pb) = playback.as_mut() {
             let submit_start = Instant::now();
             stats.record_ms.push(ms(submit_start - frame_start));
             let home = matches!(&view, View::Home(h) if h.has_player());

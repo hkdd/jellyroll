@@ -23,6 +23,7 @@ mod posters;
 mod power;
 mod refresh;
 mod scene;
+mod screensaver;
 mod soak;
 mod systemd;
 mod ui_prefs;

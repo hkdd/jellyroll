@@ -33,6 +33,12 @@ const DEINTERLACE: [Deinterlace; 3] = [Deinterlace::Auto, Deinterlace::Always, D
 /// Artwork disk cache sizes offered (MB).
 const IMAGE_CACHE_MB: [u64; 6] = [512, 1024, 2048, 4096, 8192, 16384];
 const SCROLL: std::time::Duration = std::time::Duration::from_millis(160);
+/// Screensaver delays offered (minutes; 0 = off).
+const SCREENSAVER_MIN: [u64; 4] = [0, 5, 10, 15];
+
+fn screensaver_name(m: u64) -> String {
+    if m == 0 { s::SCREENSAVER_OFF.to_string() } else { s::fill(s::MINUTES, &[&m.to_string()]) }
+}
 
 /// "512 MB", "2 GB", "1.5 GB".
 pub fn size_label(bytes: u64) -> String {
@@ -79,6 +85,8 @@ pub struct Values {
     pub deinterlace: Deinterlace,
     pub tone_mapping: String,
     pub image_cache_mb: u64,
+    /// Minutes before the screensaver; 0 = off.
+    pub screensaver_minutes: u64,
     /// Bytes of artwork on disk, once the network thread says.
     pub cache_used: Option<u64>,
 }
@@ -89,6 +97,7 @@ enum Item {
     SignOut,
     UiResolution,
     MatchRefresh,
+    Screensaver,
     AudioDevice,
     Passthrough,
     Channels,
@@ -145,6 +154,7 @@ impl SettingsView {
             display.push(Item::UiResolution);
         }
         display.push(Item::MatchRefresh);
+        display.push(Item::Screensaver);
         [
             vec![Item::SwitchUser, Item::SignOut],
             display,
@@ -219,6 +229,10 @@ impl SettingsView {
                 _ => s::UI_RES_1080,
             }),
             Item::MatchRefresh => s::MATCH_REFRESH.into(),
+            Item::Screensaver => widgets::list_label(&s::fill(
+                s::SCREENSAVER_LABEL,
+                &[&screensaver_name(v.screensaver_minutes)],
+            )),
             Item::AudioDevice => widgets::list_label(&self.device_label()),
             Item::Passthrough => s::PASSTHROUGH.into(),
             Item::Channels => widgets::list_label(&s::fill(
@@ -269,6 +283,11 @@ impl SettingsView {
                 CHANNELS.iter().map(|c| Self::channels_name(c).to_string()).collect(),
                 CHANNELS.iter().position(|c| *c == v.channels).or(Some(0)),
             ),
+            Item::Screensaver => (
+                s::SCREENSAVER_TITLE,
+                SCREENSAVER_MIN.iter().map(|m| screensaver_name(*m)).collect(),
+                SCREENSAVER_MIN.iter().position(|m| *m == v.screensaver_minutes),
+            ),
             Item::Deinterlace => (
                 s::DEINTERLACE_TITLE,
                 vec![
@@ -302,6 +321,7 @@ impl SettingsView {
             }),
             Item::AudioDevice => Change::AudioDevice(self.devices.get(i)?.name.clone()),
             Item::Channels => Change::Channels((*CHANNELS.get(i)?).into()),
+            Item::Screensaver => Change::ScreensaverMinutes(*SCREENSAVER_MIN.get(i)?),
             Item::Deinterlace => Change::Deinterlace(*DEINTERLACE.get(i)?),
             Item::ToneMapping => Change::ToneMapping((*TONE_MAPPINGS.get(i)?).into()),
             Item::ImageCache => Change::ImageCacheMb(*IMAGE_CACHE_MB.get(i)?),
@@ -472,6 +492,7 @@ mod tests {
             deinterlace: Deinterlace::Auto,
             tone_mapping: "auto".into(),
             image_cache_mb: 2048,
+            screensaver_minutes: 10,
             cache_used: Some(300 << 20),
         }
     }
@@ -521,6 +542,10 @@ mod tests {
         assert!(press(&mut v, InputAction::Right));
         assert_eq!(select(&mut v), Some(Change::MatchRefresh(false)));
         assert!(v.blade.is_none());
+        assert!(press(&mut v, InputAction::Right));
+        assert_eq!(select(&mut v), None, "the screensaver list opens");
+        press(&mut v, InputAction::Up);
+        assert_eq!(select(&mut v), Some(Change::ScreensaverMinutes(5)));
         assert!(!press(&mut v, InputAction::Right), "end of the row");
         assert!(press(&mut v, InputAction::Up));
         assert_eq!(v.focus, (0, 1), "back to the account buttons");

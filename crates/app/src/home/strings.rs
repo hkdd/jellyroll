@@ -91,6 +91,10 @@ pub const AUDIO_HINT: &str = "Passthrough (set per output) sends Dolby and DTS a
      for a receiver that decodes them. Applies from the next video.";
 
 pub const PLAYBACK: &str = "Playback";
+pub const SCREENSAVER_LABEL: &str = "Screensaver: %s";
+pub const SCREENSAVER_TITLE: &str = "Screensaver";
+pub const SCREENSAVER_OFF: &str = "Off";
+pub const MINUTES: &str = "%s minutes";
 pub const SMOOTHING: &str = "Motion smoothing";
 pub const DEINTERLACE_LABEL: &str = "Deinterlacing: %s";
 pub const DEINTERLACE_TITLE: &str = "Deinterlacing";
@@ -257,6 +261,10 @@ pub const ALL: &[&str] = &[
     CHANNELS_STEREO,
     AUDIO_HINT,
     PLAYBACK,
+    SCREENSAVER_LABEL,
+    SCREENSAVER_TITLE,
+    SCREENSAVER_OFF,
+    MINUTES,
     SMOOTHING,
     DEINTERLACE_LABEL,
     DEINTERLACE_TITLE,

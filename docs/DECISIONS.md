@@ -1075,6 +1075,19 @@ decade the library has, newest first (from the same `/Years` answer). Back
 returns to the decades, on that decade. The button reads "Year: 1990s ›"
 or "Year: 1994 ›"; a single year filters with `years=1994`.
 
+**D73: Screensaver.** Settings → Display: Screensaver off, 5, 10 or 15
+minutes (default 10; `display.screensaver_minutes` in config.toml, 0 =
+off). It starts after that long without input while browsing or with a
+video paused; a playing or starting video keeps it away. Any key (or
+remote button, gamepad, CEC) wakes it and is otherwise ignored; a command
+from another Jellyfin app wakes it and is carried out. The first style is
+The Matrix's rain: columns of half-width katakana, digits and a few
+letters (already in the bundled font subset) falling at varied speeds
+with a bright head and a fading trail, redrawn every 40 ms rather than
+every vsync. While it shows, mpv isn't rendered. Its frames count as
+non-steady (like loading frames) for the frame budgets and the
+allocation check. More styles can be added behind the same setting.
+
 ## Dependency approvals
 
 | Crate | Status |
