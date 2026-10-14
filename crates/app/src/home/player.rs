@@ -971,6 +971,7 @@ mod tests {
             image: None,
             backdrop: None,
             progress: None,
+            played: false,
         });
         let (ui, _) = PlayerUi::new(fetched(with_next), t);
         assert_eq!(ui.next_at, Some(560.0), "the countdown starts at the credits");

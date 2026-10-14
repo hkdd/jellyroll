@@ -10,6 +10,7 @@ use std::time::Instant;
 use jellyroll_render::{Color, Point, Rect, Renderer, TextStyle, Weight};
 use jellyroll_video::va::DecodeCaps;
 
+use super::blade::TextPanel;
 use super::model::{Card, Detail, Kind, Row, Shape};
 use super::pages::{Ctx, Open};
 use super::status::wrap;
@@ -35,7 +36,11 @@ const WARN: TextStyle = TextStyle::new(19.0, Weight::Bold).max_width(TEXT_W);
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum Action {
-    Play { start_ticks: i64 },
+    Play {
+        start_ticks: i64,
+    },
+    /// The full description (it is cut to a few lines on the page).
+    More,
     Watched,
     Favorite,
 }
@@ -70,8 +75,14 @@ pub struct DetailView {
     /// are below the fold, so otherwise nothing visible changes).
     focus_episodes: bool,
     similar_req: Option<u64>,
+    /// A person's movies and shows, or what a playlist/collection holds.
+    contents: Vec<Card>,
+    contents_req: Option<u64>,
     toggle_req: Option<u64>,
     overview: Option<Vec<String>>,
+    /// The overview didn't fit: a More button opens `more`.
+    overview_cut: bool,
+    more: Option<TextPanel>,
     /// Decode warning, filled once the detail and the GPU caps are known.
     warning: Option<String>,
     unsupported: Vec<bool>,
@@ -107,8 +118,12 @@ impl DetailView {
             episodes_req: None,
             focus_episodes: false,
             similar_req: None,
+            contents: Vec::new(),
+            contents_req: None,
             toggle_req: None,
             overview: None,
+            overview_cut: false,
+            more: None,
             warning: None,
             unsupported: Vec::new(),
         }
@@ -134,6 +149,7 @@ impl DetailView {
         let Some(d) = &self.detail else { return };
         let mut b = Vec::new();
         let playable = matches!(d.card.kind, Kind::Movie | Kind::Episode | Kind::Other);
+        let watchable = d.card.kind != Kind::Person;
         if playable {
             if d.resume_ticks > 0 {
                 let label = format!("{}{}", s::RESUME_PREFIX, ticks_to_hms(d.resume_ticks));
@@ -143,10 +159,15 @@ impl DetailView {
                 b.push((Action::Play { start_ticks: 0 }, s::PLAY.into()));
             }
         }
-        b.push((
-            Action::Watched,
-            if d.played { s::MARK_UNWATCHED } else { s::MARK_WATCHED }.into(),
-        ));
+        if self.overview_cut {
+            b.push((Action::More, s::MORE.into()));
+        }
+        if watchable {
+            b.push((
+                Action::Watched,
+                if d.played { s::MARK_UNWATCHED } else { s::MARK_WATCHED }.into(),
+            ));
+        }
         b.push((
             Action::Favorite,
             if d.favorite { s::REMOVE_FAVORITE } else { s::ADD_FAVORITE }.into(),
@@ -177,6 +198,19 @@ impl DetailView {
 
     fn set_rows(&mut self, now: Instant) {
         let mut rows = Vec::new();
+        if !self.contents.is_empty() {
+            let title = match self.detail.as_ref().map(|d| d.card.kind) {
+                Some(Kind::Person) => s::FILMOGRAPHY,
+                Some(Kind::Playlist) => s::IN_PLAYLIST,
+                _ => s::IN_COLLECTION,
+            };
+            rows.push(Row {
+                key: "contents".into(),
+                title: title.into(),
+                shape: Shape::Poster,
+                cards: self.contents.clone(),
+            });
+        }
         if !self.seasons.is_empty() {
             rows.push(Row {
                 key: "seasons".into(),
@@ -242,6 +276,12 @@ impl DetailView {
     }
 
     pub fn on_action(&mut self, a: InputAction, now: Instant, ctx: &mut Ctx) -> bool {
+        if let Some(p) = &mut self.more {
+            if !p.on_action(a) {
+                self.more = None;
+            }
+            return true;
+        }
         if let Some(dir) = Dir::from_action(a) {
             let id = match self.rows.step(dir, &self.vp) {
                 Step::To(id) => id,
@@ -279,6 +319,9 @@ impl DetailView {
                         title: d.card.title.clone(),
                     });
                 }
+                Action::More => {
+                    self.more = Some(TextPanel::new(&d.card.title, &d.card.overview, now));
+                }
                 Action::Watched => {
                     self.toggle_req =
                         Some(ctx.fetch(Fetch::SetPlayed { id: self.id.clone(), on: !d.played }));
@@ -303,7 +346,7 @@ impl DetailView {
                     self.focus_episodes = true;
                 }
             }
-            (_, Kind::Person | Kind::Library) => return false,
+            (_, Kind::Library) => return false,
             _ => ctx.open = Some(Open::Detail { id: card.id.clone() }),
         }
         true
@@ -334,6 +377,17 @@ impl DetailView {
                             }
                             _ => {}
                         }
+                        let id = d.card.id.clone();
+                        self.contents_req = match d.card.kind {
+                            Kind::Person => Some(ctx.fetch(Fetch::Filmography(id))),
+                            Kind::Playlist => {
+                                Some(ctx.fetch(Fetch::Contents { id, playlist: true }))
+                            }
+                            Kind::Folder => {
+                                Some(ctx.fetch(Fetch::Contents { id, playlist: false }))
+                            }
+                            _ => None,
+                        };
                         if matches!(d.card.kind, Kind::Movie | Kind::Series) {
                             self.similar_req = Some(ctx.fetch(Fetch::Similar(d.card.id.clone())));
                         }
@@ -381,6 +435,14 @@ impl DetailView {
             }
             return true;
         }
+        if self.contents_req == Some(id) {
+            self.contents_req = None;
+            if let Fetched::Cards(c) = result {
+                self.contents = c.clone();
+                self.set_rows(now);
+            }
+            return true;
+        }
         if self.similar_req == Some(id) {
             self.similar_req = None;
             if let Fetched::Cards(c) = result {
@@ -412,7 +474,9 @@ impl DetailView {
     }
 
     pub fn is_animating(&self, now: Instant) -> bool {
-        self.rows.is_animating(now) || self.backdrop.is_animating(now)
+        self.rows.is_animating(now)
+            || self.backdrop.is_animating(now)
+            || self.more.as_ref().is_some_and(|p| p.is_animating(now))
     }
 
     pub fn wants(&self, w: &mut Wants) {
@@ -427,6 +491,23 @@ impl DetailView {
         tex: &mut Textures,
         caps: Option<&DecodeCaps>,
     ) {
+        // The overview first: whether it fits decides the More button.
+        if self.overview.is_none()
+            && let Some(d) = &self.detail
+        {
+            let mut lines = wrap(r, &d.card.overview, &BODY, TEXT_W);
+            if lines.len() > 3 {
+                lines.truncate(3);
+                if let Some(l) = lines.last_mut() {
+                    l.push('…');
+                }
+                if !self.overview_cut {
+                    self.overview_cut = true;
+                    self.set_buttons();
+                }
+            }
+            self.overview = Some(lines);
+        }
         self.layout_buttons(r);
         let (lw, lh) = r.logical_size();
         let (sx, sy) = (self.vp.sx(), self.vp.sy());
@@ -441,16 +522,6 @@ impl DetailView {
             );
             return;
         };
-        if self.overview.is_none() {
-            let mut lines = wrap(r, &d.card.overview, &BODY, TEXT_W);
-            if lines.len() > 3 {
-                lines.truncate(3);
-                if let Some(l) = lines.last_mut() {
-                    l.push('…');
-                }
-            }
-            self.overview = Some(lines);
-        }
         if self.warning.is_none() {
             self.unsupported = d
                 .badges
@@ -518,6 +589,9 @@ impl DetailView {
             widgets::draw_button(r, b.rect, &b.label, self.button_focus == Some(i), false);
         }
         self.rows.draw(r, now, tex, &self.vp);
+        if let Some(p) = &mut self.more {
+            p.draw(r, now, self.vp.safe);
+        }
         let _ = lh;
     }
 }
@@ -541,6 +615,7 @@ mod tests {
             image: None,
             backdrop: None,
             progress: None,
+            played: false,
         }
     }
 
@@ -652,5 +727,78 @@ mod tests {
         v.on_fetched(eid, &Fetched::Cards(eps), t, &mut ctx);
         assert_eq!(v.rows.focus, (1, 0), "first episode of season 2");
         assert_eq!(v.rows.rows[1].title, "s2");
+    }
+
+    fn contents_fetch(ctx: &Ctx) -> Option<Fetch> {
+        ctx.cmds.iter().find_map(|c| match c {
+            crate::net::Cmd::Fetch {
+                req: r @ (Fetch::Filmography(_) | Fetch::Contents { .. }),
+                ..
+            } => Some(r.clone()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn person_page_lists_their_work() {
+        let t = Instant::now();
+        let mut next = 0;
+        let mut ctx = Ctx::new(&mut next);
+        let mut v = DetailView::new("actor".into(), VP, t, &mut ctx);
+        let (id, _) = take_fetch(&mut ctx);
+        let mut d = detail(Kind::Person, 0);
+        d.card.id = "actor".into();
+        v.on_fetched(id, &Fetched::Detail(Box::new(d)), t, &mut ctx);
+        assert_eq!(contents_fetch(&ctx), Some(Fetch::Filmography("actor".into())));
+        let labels: Vec<&str> = v.buttons.iter().map(|b| b.label.as_str()).collect();
+        assert_eq!(labels, [s::ADD_FAVORITE], "no Play or Mark watched on a person");
+        let Some(crate::net::Cmd::Fetch { id, .. }) = ctx
+            .cmds
+            .iter()
+            .find(|c| matches!(c, crate::net::Cmd::Fetch { req: Fetch::Filmography(_), .. }))
+        else {
+            panic!()
+        };
+        let id = *id;
+        v.on_fetched(id, &Fetched::Cards(vec![card("m1", Kind::Movie)]), t, &mut ctx);
+        assert_eq!(v.rows.rows[0].key, "contents");
+        assert_eq!(v.rows.rows[0].title, s::FILMOGRAPHY);
+    }
+
+    #[test]
+    fn playlists_and_collections_list_their_items() {
+        for (kind, playlist) in [(Kind::Playlist, true), (Kind::Folder, false)] {
+            let t = Instant::now();
+            let mut next = 0;
+            let mut ctx = Ctx::new(&mut next);
+            let mut v = DetailView::new("pl".into(), VP, t, &mut ctx);
+            let (id, _) = take_fetch(&mut ctx);
+            let mut d = detail(kind, 0);
+            d.card.id = "pl".into();
+            v.on_fetched(id, &Fetched::Detail(Box::new(d)), t, &mut ctx);
+            assert_eq!(contents_fetch(&ctx), Some(Fetch::Contents { id: "pl".into(), playlist }));
+            assert!(v.buttons.iter().all(|b| !matches!(b.action, Action::Play { .. })));
+        }
+    }
+
+    #[test]
+    fn more_opens_the_full_description() {
+        let t = Instant::now();
+        let mut next = 0;
+        let mut ctx = Ctx::new(&mut next);
+        let mut v = DetailView::new("item".into(), VP, t, &mut ctx);
+        let (id, _) = take_fetch(&mut ctx);
+        v.on_fetched(id, &Fetched::Detail(Box::new(detail(Kind::Movie, 0))), t, &mut ctx);
+        // Drawing finds the overview too long for the page.
+        v.overview_cut = true;
+        v.set_buttons();
+        let i = v.buttons.iter().position(|b| b.action == Action::More).unwrap();
+        v.button_focus = Some(i);
+        v.on_action(InputAction::Select, t, &mut ctx);
+        assert!(v.more.is_some());
+        v.on_action(InputAction::Down, t, &mut ctx);
+        assert!(v.more.is_some(), "Down scrolls");
+        v.on_action(InputAction::Back, t, &mut ctx);
+        assert!(v.more.is_none());
     }
 }

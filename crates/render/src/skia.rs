@@ -524,6 +524,17 @@ impl Renderer for SkiaRenderer {
         self.canvas().draw_rrect(rrect(r, radius), &p);
     }
 
+    fn polyline(&mut self, pts: &[Point], width: f32, c: Color) {
+        let mut p = paint(c);
+        p.set_style(sk::PaintStyle::Stroke);
+        p.set_stroke_width(width);
+        p.set_stroke_cap(sk::paint::Cap::Round);
+        let canvas = self.canvas();
+        for w in pts.windows(2) {
+            canvas.draw_line((w[0].x, w[0].y), (w[1].x, w[1].y), &p);
+        }
+    }
+
     fn fill_gradient(&mut self, r: Rect, radius: f32, g: &Gradient) {
         let end = if g.vertical { (r.x, r.bottom()) } else { (r.right(), r.y) };
         let colors = [sk_color(g.from), sk_color(g.to)];

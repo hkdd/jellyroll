@@ -171,6 +171,9 @@ pub trait Renderer {
     fn fill_rect(&mut self, r: Rect, c: Color);
     fn fill_rrect(&mut self, r: Rect, radius: f32, c: Color);
     fn stroke_rrect(&mut self, r: Rect, radius: f32, width: f32, c: Color);
+    /// Connected line segments with round ends and joins (icons such as a
+    /// check mark).
+    fn polyline(&mut self, pts: &[Point], width: f32, c: Color);
     fn fill_gradient(&mut self, r: Rect, radius: f32, g: &Gradient);
     /// Soft drop shadow under a rounded rect. Pre-baked into a cached
     /// texture; never a per-frame blur.

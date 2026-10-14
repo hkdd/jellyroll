@@ -27,6 +27,15 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
 pub const TOKEN: &str = "mock-token";
+/// A description long enough to be cut on the detail page (its More).
+const LONG_OVERVIEW: &str = "A lighthouse keeper on a remote island finds a radio that \
+    receives tomorrow's weather, and slowly realizes the storms it forecasts are not \
+    natural. As the village below grows dependent on the warnings, she must decide \
+    whether to keep listening, to share what she hears, or to break the radio before \
+    it breaks her. Along the way an old friend returns, a ship goes missing, and the \
+    island's oldest story turns out to be a set of instructions. Filmed over three \
+    winters on the north coast, with a score recorded inside the lighthouse itself.";
+
 pub const SERVER_ID: &str = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
 pub const USER_ID: &str = "5e7a1c0de5e7a1c0de5e7a1c0de5e7a1";
 pub const QUICK_CONNECT_CODE: &str = "424242";
@@ -195,13 +204,17 @@ impl Library {
                         "ProductionYear": 1990 + (n % 35) as i32, "OfficialRating": rating,
                         "CommunityRating": 6.0 + (n % 30) as f64 / 10.0,
                         "RunTimeTicks": runtime.unwrap_or((85 + (n % 60) as i64) * 600_000_000),
-                        "Overview": format!("Synthetic movie number {n} from the mock server."),
+                        "Overview": if n % 2 == 0 {
+                            format!("Synthetic movie number {n} from the mock server. {}", LONG_OVERVIEW)
+                        } else {
+                            format!("Synthetic movie number {n} from the mock server.")
+                        },
                         "SortName": name.to_lowercase(),
                         "Genres": [GENRES[n % GENRES.len()], GENRES[(n + 3) % GENRES.len()]],
                         "DateCreated": format!("2024-01-01T00:00:{:02}Z", n % 60),
                         "PrimaryImageAspectRatio": 0.6667,
                         "ImageTags": tags, "ImageBlurHashes": hashes, "BackdropImageTags": [format!("b{n}")],
-                        "UserData": { "Played": false, "PlaybackPositionTicks": 0, "PlayCount": 0, "IsFavorite": n % 7 == 0 },
+                        "UserData": { "Played": n % 4 == 1, "PlaybackPositionTicks": 0, "PlayCount": 0, "IsFavorite": n % 7 == 0 },
                     }),
                 }
             })

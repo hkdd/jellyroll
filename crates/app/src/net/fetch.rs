@@ -140,6 +140,16 @@ async fn fetch(c: &Client, user: &str, f: Fetch) -> Result<Fetched, Error> {
             let r = c.send(&ep::similar(user, &id, 16)).await?;
             Fetched::Cards(cards(&r.items.unwrap_or_default(), Shape::Poster))
         }
+        Fetch::Filmography(id) => {
+            let r = c.send(&ep::filmography(user, &id)).await?;
+            Fetched::Cards(cards(&r.items.unwrap_or_default(), Shape::Poster))
+        }
+        Fetch::Contents { id, playlist } => {
+            let req =
+                if playlist { ep::playlist_items(user, &id) } else { ep::children(user, &id) };
+            let r = c.send(&req).await?;
+            Fetched::Cards(cards(&r.items.unwrap_or_default(), Shape::Poster))
+        }
         Fetch::Genres(parent) => {
             let r = c.send(&ep::genres(user, &parent)).await?;
             Fetched::Names(r.items.unwrap_or_default().into_iter().filter_map(|g| g.name).collect())

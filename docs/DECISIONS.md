@@ -808,6 +808,17 @@ checkbox above the sorts; the A-Z column is hidden while the name sort is
 reversed (the jump index assumes ascending names). The bar shows "Sort:
 Name, reversed" and "Genres: Drama +2".
 
+**D56: Browsing gaps found on the HTPC.** (1) A description cut to
+three lines gets a More button that opens the full text in a panel from
+the right (Up/Down scroll, Back closes). (2) People are selectable: a
+person's page shows their biography and their movies and shows
+(`/Items?personIds=`, newest first); no Play or Mark watched there. (3)
+Playlists and collections (box sets, folders) open a page listing what
+they contain (`/Playlists/{id}/Items`, `/Items?parentId=`); they used to
+open an empty item page. (4) Watched items get a check mark in an accent
+circle, top right of the card, everywhere cards are drawn (the font has
+no check glyph; the renderer gained `polyline`).
+
 ## Dependency approvals
 
 | Crate | Status |

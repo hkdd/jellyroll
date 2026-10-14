@@ -274,6 +274,39 @@ pub fn similar(user_id: &str, item_id: &str, limit: u32) -> Request<BaseItemDtoQ
     Request::new(Method::Get, q.0)
 }
 
+/// A person's movies and shows, newest first (a cast member's page).
+pub fn filmography(user_id: &str, person_id: &str) -> Request<BaseItemDtoQueryResult> {
+    let q = Query::new("/Items")
+        .param("userId", user_id)
+        .param("personIds", person_id)
+        .param("recursive", true)
+        .param("includeItemTypes", "Movie,Series")
+        .param("sortBy", "ProductionYear,SortName")
+        .param("sortOrder", "Descending")
+        .param("limit", 100)
+        .images();
+    Request::new(Method::Get, q.0)
+}
+
+/// A playlist's entries, in playlist order.
+pub fn playlist_items(user_id: &str, playlist_id: &str) -> Request<BaseItemDtoQueryResult> {
+    let mut path = String::from("/Playlists/");
+    encode_component(&mut path, playlist_id);
+    path.push_str("/Items");
+    let q = Query::new(&path).param("userId", user_id).param("limit", 500).images();
+    Request::new(Method::Get, q.0)
+}
+
+/// The items in a folder or collection (box set), in the server's order.
+pub fn children(user_id: &str, parent_id: &str) -> Request<BaseItemDtoQueryResult> {
+    let q = Query::new("/Items")
+        .param("userId", user_id)
+        .param("parentId", parent_id)
+        .param("limit", 500)
+        .images();
+    Request::new(Method::Get, q.0)
+}
+
 /// Genres present in a library, for the grid's filter.
 pub fn genres(user_id: &str, parent_id: &str) -> Request<BaseItemDtoQueryResult> {
     let q = Query::new("/Genres")

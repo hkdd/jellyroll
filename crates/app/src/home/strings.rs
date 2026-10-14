@@ -32,6 +32,10 @@ pub const SEASONS: &str = "Seasons";
 pub const EPISODES: &str = "Episodes";
 pub const CAST: &str = "Cast & crew";
 pub const MORE_LIKE_THIS: &str = "More like this";
+pub const MORE: &str = "More";
+pub const FILMOGRAPHY: &str = "Movies & shows";
+pub const IN_PLAYLIST: &str = "In this playlist";
+pub const IN_COLLECTION: &str = "In this collection";
 pub const NO_HW_DECODE: &str = "This device can't decode %s in hardware: it would play in software, \
      if at all (see Settings for what this GPU decodes).";
 
@@ -159,6 +163,10 @@ pub const ALL: &[&str] = &[
     EPISODES,
     CAST,
     MORE_LIKE_THIS,
+    MORE,
+    FILMOGRAPHY,
+    IN_PLAYLIST,
+    IN_COLLECTION,
     NO_HW_DECODE,
     SEARCH_TITLE,
     SEARCH_HINT,

@@ -223,6 +223,9 @@ pub fn draw_card<R: Renderer>(
         r.fill_rrect(track, 2.5, Color::rgba(0, 0, 0, 160));
         r.fill_rrect(Rect::new(track.x, track.y, track.w * p, track.h), 2.5, ACCENT);
     }
+    if card.played {
+        draw_watched(r, rect);
+    }
     if focus > 0.01 {
         r.stroke_rrect(rect.inset(-3.0), RADIUS + 3.0, 3.0, Color::WHITE.with_alpha(focus));
     }
@@ -240,6 +243,23 @@ pub fn draw_card<R: Renderer>(
             r.text(&card.subtitle, &sub_style, Point::new(base.x, ty + 26.0), TEXT_DIM);
         }
     }
+}
+
+/// The watched mark: a check in an accent circle, top right of a card.
+pub fn draw_watched<R: Renderer>(r: &mut R, card: Rect) {
+    let d = 34.0;
+    let c = Rect::new(card.right() - d - 8.0, card.y + 8.0, d, d);
+    r.fill_rrect(c, d / 2.0, ACCENT);
+    let (x, y) = (c.x, c.y);
+    r.polyline(
+        &[
+            Point::new(x + d * 0.28, y + d * 0.52),
+            Point::new(x + d * 0.44, y + d * 0.68),
+            Point::new(x + d * 0.73, y + d * 0.36),
+        ],
+        3.5,
+        Color::WHITE,
+    );
 }
 
 pub const BUTTON: TextStyle = TextStyle::new(24.0, Weight::Bold);
@@ -695,6 +715,7 @@ mod tests {
                 image: None,
                 backdrop: None,
                 progress: None,
+                played: false,
             })
             .collect();
         Row { key: key.into(), title: key.into(), shape: Shape::Poster, cards }

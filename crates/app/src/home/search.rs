@@ -214,7 +214,7 @@ impl SearchView {
                     true
                 }
                 None => match self.rows.focused_card() {
-                    Some(c) if !matches!(c.kind, Kind::Person | Kind::Library) => {
+                    Some(c) if c.kind != Kind::Library => {
                         ctx.open = Some(Open::Detail { id: c.id.clone() });
                         true
                     }
@@ -302,6 +302,7 @@ mod tests {
             image: None,
             backdrop: None,
             progress: None,
+            played: false,
         };
         v.on_fetched(ids[0], &Fetched::Page { start: 0, total: 1, cards: vec![card] }, t);
         assert_eq!(v.rows.rows.len(), 1);
@@ -332,6 +333,7 @@ mod tests {
             image: None,
             backdrop: None,
             progress: None,
+            played: false,
         };
         for c in "x".chars() {
             v.on_action(InputAction::TextInput(c), t, &mut ctx);

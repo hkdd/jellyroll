@@ -187,7 +187,6 @@ impl HomeView {
                 title: card.title.clone(),
                 collection: card.collection,
             }),
-            Kind::Person => None,
             _ => Some(Open::Detail { id: card.id.clone() }),
         };
         ctx.open.is_some()
@@ -296,6 +295,7 @@ mod tests {
                 blurhash: None,
             }),
             progress: None,
+            played: false,
         }
     }
 

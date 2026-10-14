@@ -124,6 +124,13 @@ pub enum Fetch {
         season: String,
     },
     Similar(String),
+    /// A person's movies and shows.
+    Filmography(String),
+    /// What a playlist (true) or collection/folder (false) contains.
+    Contents {
+        id: String,
+        playlist: bool,
+    },
     Genres(String),
     SetFavorite {
         id: String,

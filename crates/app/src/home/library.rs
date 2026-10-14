@@ -328,7 +328,7 @@ impl LibraryView {
             (Focus::Grid(i), InputAction::Select) => {
                 let Some(Some(card)) = self.items.get(i) else { return false };
                 ctx.open = match card.kind {
-                    Kind::Person | Kind::Library => return false,
+                    Kind::Library => return false,
                     _ => Some(Open::Detail { id: card.id.clone() }),
                 };
             }
@@ -672,6 +672,7 @@ mod tests {
                 image: None,
                 backdrop: None,
                 progress: None,
+                played: false,
             })
             .collect();
         v.on_fetched(id, &Fetched::Page { start, total, cards }, Instant::now(), ctx);
