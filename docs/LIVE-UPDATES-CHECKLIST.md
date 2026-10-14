@@ -8,7 +8,7 @@ same user.
 Before starting, follow the log on the HTPC (from SSH):
 
 ```sh
-sudo journalctl -u jellyroll -f | grep --line-buffered -E "live updates|remote control" | tee >(wl-copy)
+sudo journalctl -t jellyroll -f | grep --line-buffered -E "live updates|remote control" | tee >(wl-copy)
 ```
 
 (Running jellyroll from a console instead of the service? Use

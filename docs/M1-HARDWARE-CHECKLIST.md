@@ -39,7 +39,7 @@ results into this file or a PR.
    Expect `result: PASS`: CPU p99 < 4 ms, GPU p99 < 6 ms, 0 missed vsyncs,
    0 allocating frames. Repeat with `--double-buffer` and record both (D10).
 7. **Watchdog:** `sudo kill -STOP $(pidof jellyroll)`. Within about 20 s
-   systemd should kill and restart it (`journalctl -u jellyroll`).
+   systemd should kill and restart it (`journalctl -t jellyroll`).
 8. **Crash restart:** `sudo kill -9 $(pidof jellyroll)`. It should be back
    within about 1 s.
 9. **Input:** arrow keys move the focus frame with a short glide. Holding an
@@ -50,7 +50,7 @@ results into this file or a PR.
     `sudo systemctl restart jellyroll`. The HUD should be on at startup. Then
     add a typo key (e.g. `hudd = true`) and restart again. Expect an orange
     "CONFIG: 1 WARNING" line on screen, with the detail in
-    `journalctl -u jellyroll`.
+    `journalctl -t jellyroll`.
 
 Fill in the reference hardware (spec §17) and the verified Mesa/kernel
 versions in `docs/VERSIONS.md`.

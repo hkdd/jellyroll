@@ -1,7 +1,7 @@
 # Jellyroll configuration: ~/.config/jellyroll/config.toml
 #
 # Every key is optional; anything left out uses the default shown here.
-# Unknown keys and out-of-range values are reported (journalctl -u jellyroll
+# Unknown keys and out-of-range values are reported (journalctl -t jellyroll
 # and on screen) and ignored. Command-line flags override this file.
 # The app only reads this file; it never rewrites it.
 

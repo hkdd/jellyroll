@@ -302,8 +302,16 @@ grants DRM master and input access. It sends `READY=1` after the first frame
 and pings `WATCHDOG=1` from the render loop (`WatchdogSec=20`), with
 `Restart=always`.
 
-To get a console back: `sudo systemctl stop jellyroll && sudo systemctl start getty@tty1`.
-Logs: `journalctl -u jellyroll -f`.
+Getting a shell: Ctrl+Alt+F*n* doesn't switch consoles while jellyroll runs
+(SDL turns off the console's keyboard handling so keys don't leak into it).
+Use SSH, or from SSH `sudo chvt 2` for a login prompt on the TV with the app
+still running (`sudo chvt 1` goes back), or stop it:
+`sudo systemctl stop jellyroll && sudo systemctl start getty@tty1`. With no
+network, boot with `systemd.unit=rescue.target` added to the kernel line in
+GRUB (`e` on the entry, Ctrl+X to boot).
+
+Logs: `sudo journalctl -t jellyroll -f`. The app writes to the journal
+directly under its own name, and `-u jellyroll` shows only systemd's lines.
 
 ## Testing
 

@@ -96,5 +96,5 @@ run systemctl enable jellyroll.service
 echo
 echo "Installed. Reboot, or start now with: systemctl start jellyroll"
 echo "Config: $CFG_DIR/config.toml"
-echo "Logs: journalctl -u jellyroll -f"
+echo "Logs: sudo journalctl -t jellyroll -f"
 echo "To get a login prompt back: systemctl stop jellyroll && systemctl start getty@tty1"
