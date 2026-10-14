@@ -27,9 +27,15 @@ const SCROLL_STEP: Duration = Duration::from_millis(50);
 
 /// Starts the mock and prepares a signed-in state for it.
 pub fn setup() -> Result<(NetConfig, PathBuf), String> {
-    let dir = std::env::temp_dir().join(format!("jellyroll-bench-scroll-{}", std::process::id()));
+    setup_with("bench-scroll", MockConfig { movies: ITEMS, ..Default::default() })
+}
+
+/// The mock with `mock`, signed in, in a throwaway `jellyroll-<name>-<pid>`
+/// directory (also used by `--soak`).
+pub fn setup_with(name: &str, mock: MockConfig) -> Result<(NetConfig, PathBuf), String> {
+    let dir = std::env::temp_dir().join(format!("jellyroll-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let url = jellyroll_mock_server::spawn(MockConfig { movies: ITEMS, ..Default::default() });
+    let url = jellyroll_mock_server::spawn(mock);
     let mut state = State::load(None);
     state.remember_server(SERVER_ID, "Jellyroll Mock", &url);
     state.remember_user(SERVER_ID, USER_ID, "demo", TOKEN);

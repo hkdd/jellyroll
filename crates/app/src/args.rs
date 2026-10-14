@@ -29,6 +29,10 @@ USAGE: jellyroll [OPTIONS]
                          no account needed) for SECS, print frame stats, exit
                          non-zero if a budget is exceeded
   --bench-upload         Time ways of uploading artwork to the GPU and exit
+  --soak HOURS           Drive the UI for HOURS against the built-in mock server
+                         (no account needed), log memory every minute to
+                         soak.csv, exit non-zero if it keeps growing
+  --soak-media FILE      With --soak: also play FILE for a minute each cycle
   --print-diagnostics    Print SDL/GL/display information and exit
   -h, --help             Show this help
 ";
@@ -48,6 +52,9 @@ pub struct Options {
     pub play: Option<String>,
     pub print_diagnostics: bool,
     pub bench_upload: bool,
+    /// `--soak`: how long to run.
+    pub soak: Option<Duration>,
+    pub soak_media: Option<std::path::PathBuf>,
     pub help: bool,
 }
 
@@ -100,6 +107,17 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             "--play" => o.play = Some(it.next().ok_or("--play needs a file or URL")?),
             "--print-diagnostics" => o.print_diagnostics = true,
             "--bench-upload" => o.bench_upload = true,
+            "--soak" => {
+                let v = it.next().ok_or("--soak needs a value in hours")?;
+                let h: f64 = v.parse().map_err(|_| format!("--soak: invalid number '{v}'"))?;
+                if !(h > 0.0 && h.is_finite()) {
+                    return Err("--soak: hours must be positive".into());
+                }
+                o.soak = Some(Duration::from_secs_f64(h * 3600.0));
+            }
+            "--soak-media" => {
+                o.soak_media = Some(it.next().ok_or("--soak-media needs a file")?.into())
+            }
             "-h" | "--help" => o.help = true,
             other => return Err(format!("unknown argument '{other}' (see --help)")),
         }
@@ -123,6 +141,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             return Err("--bench-scroll scrolls the library grid, not the --demo scene".into());
         }
         _ => {}
+    }
+    if o.soak.is_some() && (o.bench.is_some() || o.play.is_some() || o.demo) {
+        return Err("--soak runs on its own (no --bench-*, --play or --demo)".into());
+    }
+    if o.soak_media.is_some() && o.soak.is_none() {
+        return Err("--soak-media needs --soak HOURS".into());
     }
     Ok(o)
 }

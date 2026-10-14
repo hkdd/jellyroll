@@ -23,6 +23,7 @@ mod posters;
 mod power;
 mod refresh;
 mod scene;
+mod soak;
 mod systemd;
 mod ui_prefs;
 
@@ -175,7 +176,24 @@ fn main() -> ExitCode {
     }
     let c = &loaded.config;
     let mut bench_dir = None;
-    let net = if let Some(args::Bench::Scroll(_)) = opts.bench {
+    let net = if opts.soak.is_some() {
+        let mock = jellyroll_mock_server::MockConfig {
+            movies: 2000,
+            media: opts.soak_media.clone(),
+            media_secs: 600,
+            ..Default::default()
+        };
+        match bench_scroll::setup_with("soak", mock) {
+            Ok((cfg, dir)) => {
+                bench_dir = Some(dir);
+                cfg
+            }
+            Err(e) => {
+                tracing::error!("{e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else if let Some(args::Bench::Scroll(_)) = opts.bench {
         match bench_scroll::setup() {
             Ok((cfg, dir)) => {
                 bench_dir = Some(dir);

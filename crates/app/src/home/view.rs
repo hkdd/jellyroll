@@ -150,6 +150,15 @@ impl HomeView {
         self.graph.focus(id);
     }
 
+    /// Home pressed on the home screen: back to the top, on the nav bar's
+    /// Home tab, rows scrolled to the start.
+    pub fn to_top(&mut self, now: Instant) {
+        self.rows.reset_focus(&self.vp, now);
+        self.rows.release_focus(now);
+        self.nav_focus = Some(0);
+        self.rebuild_graph();
+    }
+
     pub fn on_action(&mut self, a: InputAction, now: Instant, ctx: &mut Ctx) -> bool {
         if let Some(dir) = Dir::from_action(a) {
             let id = match self.rows.step(dir, &self.vp) {

@@ -761,6 +761,13 @@ impl HomeApp {
                         self.wants_dirty = true;
                         return true;
                     }
+                    // Already home: back to the top (the nav bar).
+                    InputAction::Home => {
+                        if let Some(h) = &mut self.home {
+                            h.to_top(now);
+                        }
+                        return true;
+                    }
                     InputAction::Search if !matches!(self.stack.last(), Some(Page::Search(_))) => {
                         self.open(Open::Search, now);
                         return true;

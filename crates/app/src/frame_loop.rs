@@ -231,6 +231,15 @@ pub fn run<P: Platform, R: Renderer>(
     // --bench-scroll: drive the UI like a user; measure while scrolling.
     let mut script = matches!(opts.bench, Some(Bench::Scroll(_)))
         .then(|| crate::bench_scroll::Script::new(start));
+    // --soak: drive the UI for hours and watch memory (M10).
+    let mut soak = opts.soak.map(|d| {
+        crate::soak::Soak::new(
+            d,
+            opts.soak_media.is_some(),
+            Some(std::path::Path::new("soak.csv")),
+            start,
+        )
+    });
     // Until steady state the loop must still wake up to notice it.
     let mut bench_end = match script {
         Some(_) => Some(start + crate::bench_scroll::SETUP_TIMEOUT),
@@ -266,6 +275,7 @@ pub fn run<P: Platform, R: Renderer>(
         );
         let deadline = earliest(deadline, script.as_ref().and_then(|s| s.next_deadline()));
         let deadline = earliest(deadline, pending_play.as_ref().map(|pp| pp.at));
+        let deadline = earliest(deadline, soak.as_ref().and_then(|s| s.next_deadline()));
         let (deadline, animating) = match (&playback, &view) {
             (Some(pb), View::Home(h)) if h.has_player() => {
                 (earliest(deadline, h.player_deadline(now)), pb.playing())
@@ -445,6 +455,32 @@ pub fn run<P: Platform, R: Renderer>(
                     }
                     Some(Input::Press { action: None, .. }) | None => {}
                 },
+            }
+        }
+        if let Some(sk) = soak.as_mut() {
+            if sk.finished(now) {
+                let ok = sk.report();
+                systemd.stopping();
+                return if ok { Exit::BenchPassed } else { Exit::BenchFailed };
+            }
+            if sk.sample_due(now) {
+                let st = r.stats();
+                sk.record(now, st.texture_bytes, st.gpu_cache_bytes);
+            }
+            // Scripted input goes where a key press would.
+            if pending_play.is_none()
+                && let Some(a) = sk.tick(now)
+            {
+                match (playback.as_mut(), &mut view) {
+                    (Some(pb), View::Home(h)) if h.has_player() => {
+                        match h.player_action(a, pb, now) {
+                            PlayerOutcome::Stop => stop_playback = true,
+                            PlayerOutcome::Continue { redraw } => dirty |= redraw,
+                        }
+                    }
+                    (None, _) => dirty |= view.on_action(a, now),
+                    _ => {}
+                }
             }
         }
         let mut next_episode = false;
