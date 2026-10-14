@@ -94,6 +94,18 @@ pub struct PlayRequest {
     /// Filled from settings when the request is taken (`take_play`).
     pub match_refresh: bool,
     pub audio: AudioOut,
+    /// The server says the video is interlaced.
+    pub interlaced: bool,
+    /// Filled from settings when the request is taken.
+    pub video: VideoOut,
+}
+
+/// Video processing for a playback (config, then Settings).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VideoOut {
+    pub interpolation: bool,
+    pub deinterlace: bool,
+    pub tone_mapping: String,
 }
 
 /// Audio output settings for a playback (config, then Settings).
@@ -135,6 +147,8 @@ pub struct HomeApp {
     toast: Option<(String, Instant)>,
     /// Remote control from other Jellyfin apps, for the frame loop.
     remote: std::collections::VecDeque<Remote>,
+    /// Artwork bytes on disk (Settings shows it).
+    cache_used: Option<u64>,
     /// Open over everything else (spec 5.5).
     power: Option<power_menu::PowerMenu>,
     /// Exit chosen in the power menu, for the frame loop.
@@ -166,6 +180,9 @@ pub struct UiSetting {
     pub prefs: crate::ui_prefs::UiPrefs,
     pub display: crate::config::Display,
     pub audio: crate::config::Audio,
+    pub playback: crate::config::Playback,
+    /// config.toml's artwork disk cache size (MB).
+    pub image_cache_mb: u64,
     pub save_to: Option<std::path::PathBuf>,
     /// The power menu offers exiting to the console (dev, --allow-exit).
     pub allow_exit: bool,
@@ -193,6 +210,35 @@ impl UiSetting {
 
     pub fn audio_channels(&self) -> String {
         self.prefs.audio_channels.clone().unwrap_or_else(|| self.audio.channels.clone())
+    }
+
+    pub fn interpolation(&self) -> bool {
+        self.prefs.interpolation.unwrap_or(self.playback.interpolation)
+    }
+
+    pub fn deinterlace(&self) -> crate::config::Deinterlace {
+        self.prefs.deinterlace.unwrap_or(self.playback.deinterlace)
+    }
+
+    pub fn tone_mapping(&self) -> String {
+        self.prefs.tone_mapping.clone().unwrap_or_else(|| self.playback.tone_mapping.clone())
+    }
+
+    pub fn image_cache_mb(&self) -> u64 {
+        self.prefs.image_cache_mb.unwrap_or(self.image_cache_mb)
+    }
+
+    pub fn video_out(&self, interlaced: bool) -> VideoOut {
+        use crate::config::Deinterlace as D;
+        VideoOut {
+            interpolation: self.interpolation(),
+            deinterlace: match self.deinterlace() {
+                D::Auto => interlaced,
+                D::Always => true,
+                D::Off => false,
+            },
+            tone_mapping: self.tone_mapping(),
+        }
     }
 
     pub fn audio_out(&self) -> AudioOut {
@@ -250,6 +296,7 @@ impl HomeApp {
             player_wants: Vec::new(),
             toast: None,
             remote: Default::default(),
+            cache_used: None,
             power: None,
             exit_requested: false,
             play: None,
@@ -264,6 +311,10 @@ impl HomeApp {
             purge_textures: false,
         };
         a.set_output(fb, safe_area, Instant::now());
+        // A cache size chosen in Settings wins over config.toml's.
+        if let Some(mb) = a.ui.prefs.image_cache_mb {
+            a.net.send(Cmd::SetImageCache(mb << 20));
+        }
         a
     }
 
@@ -328,6 +379,7 @@ impl HomeApp {
                 .with_ctx(now, |_, ctx| Page::Detail(Box::new(DetailView::new(id, vp, now, ctx)))),
             Open::Search => Page::Search(Box::new(SearchView::new(vp, now))),
             Open::Settings => {
+                self.net.send(Cmd::StorageInfo);
                 let (user, server) = self
                     .home
                     .as_ref()
@@ -372,6 +424,11 @@ impl HomeApp {
             passthrough: self.ui.passthrough(&device),
             audio_device: device,
             channels: self.ui.audio_channels(),
+            interpolation: self.ui.interpolation(),
+            deinterlace: self.ui.deinterlace(),
+            tone_mapping: self.ui.tone_mapping(),
+            image_cache_mb: self.ui.image_cache_mb(),
+            cache_used: self.cache_used,
         }
     }
 
@@ -389,6 +446,19 @@ impl HomeApp {
                 self.ui.prefs.passthrough.insert(d, on);
             }
             Change::Channels(ch) => self.ui.prefs.audio_channels = Some(ch),
+            Change::Interpolation(on) => self.ui.prefs.interpolation = Some(on),
+            Change::Deinterlace(d) => self.ui.prefs.deinterlace = Some(d),
+            Change::ToneMapping(t) => self.ui.prefs.tone_mapping = Some(t),
+            Change::ImageCacheMb(mb) => {
+                self.ui.prefs.image_cache_mb = Some(mb);
+                self.net.send(Cmd::SetImageCache(mb << 20));
+            }
+            Change::ClearCache => {
+                self.net.send(Cmd::ClearCache);
+                // Artwork in GPU memory goes too, so everything shown is
+                // loaded again.
+                self.purge_textures = true;
+            }
         }
         self.ui.save();
         let values = self.settings_values();
@@ -498,6 +568,13 @@ impl HomeApp {
                     self.wants_dirty = true;
                 }
                 Event::Changed(c) => self.on_changed(&c, now),
+                Event::Storage { used } => {
+                    self.cache_used = Some(used);
+                    let values = self.settings_values();
+                    if let Some(Page::Settings(v)) = self.stack.last_mut() {
+                        v.set_values(values);
+                    }
+                }
                 Event::Remote(r) => {
                     if self.remote.len() < REMOTE_QUEUE {
                         self.remote.push_back(r);
@@ -668,6 +745,7 @@ impl HomeApp {
         let mut req = self.play.take()?;
         req.match_refresh = self.ui.match_refresh(&self.output_key());
         req.audio = self.ui.audio_out();
+        req.video = self.ui.video_out(req.interlaced);
         Some(req)
     }
 

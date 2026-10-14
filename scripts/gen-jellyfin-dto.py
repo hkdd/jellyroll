@@ -69,7 +69,9 @@ SELECT = {
                     "IsForced", "IsHearingImpaired", "DeliveryMethod", "DeliveryUrl",
                     "IsTextSubtitleStream", "SupportsExternalStream",
                     # M8: refresh-rate matching.
-                    "RealFrameRate", "AverageFrameRate"],
+                    "RealFrameRate", "AverageFrameRate",
+                    # Deinterlacing only interlaced video (D67).
+                    "IsInterlaced"],
     # M7: player.
     "ChapterInfo": ["StartPositionTicks", "Name"],
     "TrickplayInfoDto": ["Width", "Height", "TileWidth", "TileHeight", "ThumbnailCount",

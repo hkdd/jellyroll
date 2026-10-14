@@ -22,6 +22,12 @@ pub struct UiPrefs {
     pub passthrough: BTreeMap<String, bool>,
     /// mpv `audio-channels`; None: the config's.
     pub audio_channels: Option<String>,
+    /// Motion smoothing, deinterlacing, tone mapping; None: the config's.
+    pub interpolation: Option<bool>,
+    pub deinterlace: Option<crate::config::Deinterlace>,
+    pub tone_mapping: Option<String>,
+    /// Artwork disk cache size in MB; None: the config's.
+    pub image_cache_mb: Option<u64>,
 }
 
 pub fn path(data_dir: &Path) -> PathBuf {

@@ -266,6 +266,13 @@ impl MetaCache {
         Some(v.value().to_vec())
     }
 
+    /// Forgets everything (Settings: Clear cache).
+    pub fn clear(&self) -> Result<(), String> {
+        let w = self.db.begin_write().map_err(|e| e.to_string())?;
+        w.delete_table(KV).map_err(|e| e.to_string())?;
+        w.commit().map_err(|e| e.to_string())
+    }
+
     pub fn put(&self, key: &str, value: &[u8]) -> Result<(), String> {
         let w = self.db.begin_write().map_err(|e| e.to_string())?;
         {
@@ -329,6 +336,27 @@ impl ImageCache {
                     .then(|| (e.path(), m.len(), m.modified().unwrap_or(SystemTime::UNIX_EPOCH)))
             })
             .collect()
+    }
+
+    /// Bytes on disk and the cap.
+    pub fn usage(&self) -> (u64, u64) {
+        (self.used, self.cap)
+    }
+
+    /// A new cap (Settings); trims at once if over it.
+    pub fn set_cap(&mut self, cap: u64) {
+        self.cap = cap;
+        self.trim();
+    }
+
+    /// Deletes every cached image (Settings: Clear cache).
+    pub fn clear(&mut self) {
+        for (path, len, _) in self.entries() {
+            if std::fs::remove_file(&path).is_ok() {
+                self.used = self.used.saturating_sub(len);
+            }
+        }
+        self.used = self.entries().iter().map(|e| e.1).sum();
     }
 
     /// Deletes least recently used files until under 90% of the cap.
@@ -430,6 +458,34 @@ mod tests {
         c.put(3, &[0; 100]);
         assert!(c.get(2).is_none(), "LRU entry evicted");
         assert!(c.get(1).is_some() && c.get(3).is_some());
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn image_cache_resizes_and_clears() {
+        let d = tmpdir("img-clear");
+        let mut c = ImageCache::open(d.clone(), 10_000);
+        for k in 0..5 {
+            c.put(k, &[0u8; 1000]);
+        }
+        assert_eq!(c.usage(), (5000, 10_000));
+        c.set_cap(3000);
+        assert!(c.usage().0 <= 2700, "trimmed under 90% of the new cap: {:?}", c.usage());
+        c.clear();
+        assert_eq!(c.usage().0, 0);
+        assert!(c.get(4).is_none());
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn meta_cache_clears() {
+        let d = tmpdir("meta-clear");
+        let m = MetaCache::open(&d.join("m.redb")).unwrap();
+        m.put("home/a", b"x").unwrap();
+        m.clear().unwrap();
+        assert_eq!(m.get("home/a"), None);
+        m.put("home/a", b"y").unwrap();
+        assert_eq!(m.get("home/a").as_deref(), Some(&b"y"[..]), "usable after clearing");
         let _ = std::fs::remove_dir_all(d);
     }
 }

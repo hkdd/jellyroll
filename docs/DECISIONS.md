@@ -966,6 +966,26 @@ types), newest first; picking one filters to that decade's ten years
 70 years is slow to pick from with a remote, and "something from the
 90s" is how people browse.
 
+**D67: Playback and storage settings (spec 7.1, 10.1).** Settings gets a
+Playback row and a Storage row; config.toml gets `[playback]` with the
+same defaults (Settings choices win, as for audio). Option names and
+values were checked against mpv 0.37 here and current mpv's manual.
+- Motion smoothing: mpv `interpolation` (off by default, spec 7.1). It
+  needs a `display-*` video sync, so with it on the player uses
+  `display-resample` even when the refresh rate wasn't matched.
+- Deinterlacing: Automatic / Always / Off. Automatic deinterlaces videos
+  the server marks interlaced (`MediaStream.IsInterlaced`) rather than
+  using mpv's `deinterlace=auto`, which older mpv lacks and whose frame
+  detection has false positives (mpv's manual says so).
+- HDR tone mapping: `tone-mapping` auto, bt.2390, spline, hable, mobius,
+  reinhard, clip; only matters for HDR video on an SDR output.
+  `hdr-compute-peak` stays mpv's default until it is benchmarked there.
+- Storage: the artwork disk cache size (512 MB to 16 GB; the GPU texture
+  cap stays in config.toml, it is a tuning knob) and Clear cache, which
+  empties the artwork and metadata caches and drops GPU textures, then
+  reloads the home screen. The page shows how much artwork is on disk.
+- The Settings page now scrolls to keep the focused row visible.
+
 ## Dependency approvals
 
 | Crate | Status |

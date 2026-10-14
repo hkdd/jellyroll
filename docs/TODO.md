@@ -8,8 +8,7 @@ priority order; strike through or delete when done.
 2. ~~**Item page: audio/subtitle quick-pick (spec 10.1).**~~ Built (D64).
 3. ~~**Multiple users and servers (spec 8).**~~ Built (D65).
 4. ~~**Library year filter (spec 10.1).**~~ Built (D66).
-5. **Settings (spec 7.1, 10.1):** playback (interpolation toggle,
-   deinterlacing, HDR tone mapping for HDR on an SDR output), caches (sizes, clear).
+5. ~~**Settings (spec 7.1, 10.1):** playback, caches.~~ Built (D67).
 6. **Config extras (spec 11):** hwdec override, input key remapping.
 7. **Developer tracing (spec 13):** spans around update/layout/draw/
    upload/swap; optional Tracy or tracing-chrome behind a feature flag.

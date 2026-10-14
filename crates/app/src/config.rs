@@ -22,6 +22,7 @@ pub struct Config {
     pub server: Server,
     pub display: Display,
     pub audio: Audio,
+    pub playback: Playback,
     pub input: Input,
     pub cache: Cache,
     pub debug: Debug,
@@ -104,6 +105,39 @@ impl Default for Audio {
             passthrough_codecs: "ac3,eac3,dts-hd,truehd".into(),
             channels: "auto".into(),
         }
+    }
+}
+
+/// When to deinterlace (D67).
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Deinterlace {
+    /// Videos the server reports as interlaced.
+    #[default]
+    Auto,
+    Always,
+    Off,
+}
+
+/// mpv `tone-mapping` choices offered (present in mpv 0.37 and current).
+pub const TONE_MAPPINGS: [&str; 7] =
+    ["auto", "bt.2390", "spline", "hable", "mobius", "reinhard", "clip"];
+
+/// Video processing (spec 7.1); Settings can override each.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Playback {
+    /// Motion smoothing (mpv `interpolation`): off by default.
+    pub interpolation: bool,
+    /// "auto" (interlaced videos only), "always" or "off".
+    pub deinterlace: Deinterlace,
+    /// HDR to SDR tone mapping: one of `TONE_MAPPINGS`.
+    pub tone_mapping: String,
+}
+
+impl Default for Playback {
+    fn default() -> Self {
+        Self { interpolation: false, deinterlace: Deinterlace::Auto, tone_mapping: "auto".into() }
     }
 }
 
@@ -319,6 +353,14 @@ fn validate(c: &mut Config, out: &mut Vec<String>) {
         "display.refresh_switch_delay_ms",
         out,
     );
+    if !TONE_MAPPINGS.contains(&c.playback.tone_mapping.as_str()) {
+        out.push(format!(
+            "playback.tone_mapping = {:?} is not one of {}, using \"auto\"",
+            c.playback.tone_mapping,
+            TONE_MAPPINGS.join(", ")
+        ));
+        c.playback.tone_mapping = "auto".into();
+    }
     clamp(&mut c.cache.images_mb, 64, 1 << 20, "cache.images_mb", out);
     clamp(&mut c.cache.textures_mb, 64, 4096, "cache.textures_mb", out);
     let i = &mut c.input;
@@ -392,5 +434,19 @@ mod tests {
         let l = load(Path::new("/nonexistent/jellyroll/config.toml"));
         assert!(l.warnings.is_empty());
         assert_eq!(l.config, Config::default());
+    }
+
+    #[test]
+    fn playback_section() {
+        let (c, w) = parse(
+            "[playback]\ninterpolation = true\ndeinterlace = \"off\"\ntone_mapping = \"hable\"\n",
+        );
+        assert!(w.is_empty(), "{w:?}");
+        assert!(c.playback.interpolation);
+        assert_eq!(c.playback.deinterlace, Deinterlace::Off);
+        assert_eq!(c.playback.tone_mapping, "hable");
+        let (c, w) = parse("[playback]\ntone_mapping = \"magic\"\n");
+        assert_eq!(c.playback.tone_mapping, "auto");
+        assert_eq!(w.len(), 1);
     }
 }

@@ -158,11 +158,50 @@ pub async fn run(cfg: NetConfig, out: Out, mut cmds: mpsc::Receiver<Cmd>) {
     .ok()
     .flatten();
 
+    let meta_dir = cfg.cache_dir.clone();
+    let meta = blocking(move || {
+        let p = meta_dir?.join("metadata.redb");
+        MetaCache::open(&p).map_err(|e| tracing::warn!("metadata cache disabled: {e}")).ok()
+    })
+    .await
+    .flatten()
+    .map(Arc::new);
+    let storage = {
+        let (disk, meta, out) = (disk.clone(), meta.clone(), out.clone());
+        move |op: Storage| {
+            let (disk, meta, out) = (disk.clone(), meta.clone(), out.clone());
+            tokio::spawn(async move {
+                let usage = blocking(move || {
+                    let disk = disk?;
+                    let mut d = disk.lock().unwrap_or_else(|e| e.into_inner());
+                    match op {
+                        Storage::Info => {}
+                        Storage::SetCap(c) => d.set_cap(c),
+                        Storage::Clear => {
+                            d.clear();
+                            if let Some(m) = &meta
+                                && let Err(e) = m.clear()
+                            {
+                                tracing::warn!("metadata cache: {e}");
+                            }
+                            tracing::info!("caches cleared");
+                        }
+                    }
+                    Some(d.usage())
+                })
+                .await
+                .flatten();
+                if let Some((used, _)) = usage {
+                    out.send(Event::Storage { used }).await;
+                }
+            });
+        }
+    };
     let images = tokio::spawn(image_worker(queue.clone(), client_rx, disk, out.clone()));
     let fetcher = tokio::spawn(fetch::worker(fetches.clone(), signed_rx.clone(), out.clone()));
     let live = tokio::spawn(super::socket::worker(signed_rx.clone(), out.clone()));
     let reporter = tokio::spawn(super::reports::worker(reports.clone(), signed_rx.clone()));
-    let session = tokio::spawn(session(cfg, out, ctl_rx, client_tx, signed_tx));
+    let session = tokio::spawn(session(cfg, out, meta, ctl_rx, client_tx, signed_tx));
     while let Some(c) = cmds.recv().await {
         match c {
             Cmd::Retry => {
@@ -186,6 +225,13 @@ pub async fn run(cfg: NetConfig, out: Out, mut cmds: mpsc::Receiver<Cmd>) {
                     r.user_id = user.clone();
                 }
                 reports.push(*r)
+            }
+            Cmd::StorageInfo => storage(Storage::Info),
+            Cmd::SetImageCache(bytes) => storage(Storage::SetCap(bytes)),
+            Cmd::ClearCache => {
+                storage(Storage::Clear);
+                // Saved pages are gone: load the home screen again.
+                let _ = ctl_tx.try_send(Ctl::Refresh);
             }
             Cmd::Flush(done) => {
                 let _ = done.send(());
@@ -259,9 +305,17 @@ async fn save_state(state: &State, path: &Option<PathBuf>) {
     .await;
 }
 
+/// Artwork cache requests from Settings.
+enum Storage {
+    Info,
+    SetCap(u64),
+    Clear,
+}
+
 async fn session(
     cfg: NetConfig,
     out: Out,
+    meta: Option<Arc<MetaCache>>,
     mut ctl: mpsc::Receiver<Ctl>,
     client_tx: watch::Sender<Option<Client>>,
     signed_tx: watch::Sender<fetch::Session>,
@@ -270,15 +324,6 @@ async fn session(
     let sp = state_path.clone();
     let mut state = blocking(move || State::load(sp.as_deref())).await.unwrap_or_default();
     save_state(&state, &state_path).await;
-    let meta_dir = cfg.cache_dir.clone();
-    let meta = blocking(move || {
-        let p = meta_dir?.join("metadata.redb");
-        MetaCache::open(&p).map_err(|e| tracing::warn!("metadata cache disabled: {e}")).ok()
-    })
-    .await
-    .flatten()
-    .map(Arc::new);
-
     let info = ClientInfo {
         client: "Jellyroll".into(),
         version: env!("CARGO_PKG_VERSION").into(),

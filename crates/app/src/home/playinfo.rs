@@ -99,6 +99,8 @@ pub struct PlayInfo {
     /// Video frame rate from the server's stream info, for refresh-rate
     /// matching (None when unknown).
     pub fps: Option<f64>,
+    /// The server reports the video as interlaced (deinterlacing, D67).
+    pub interlaced: bool,
 }
 
 impl PlayInfo {
@@ -257,6 +259,9 @@ pub fn build(
         trickplay: trickplay(item, &source_id),
         next: next.and_then(|n| model::card(n, Shape::Landscape)),
         fps: frame_rate(streams),
+        interlaced: streams
+            .iter()
+            .any(|s| s.r#type == Some(MediaStreamType::Video) && s.is_interlaced == Some(true)),
     })
 }
 
@@ -415,6 +420,7 @@ mod tests {
             trickplay: None,
             next: None,
             fps: None,
+            interlaced: false,
         };
         i.choose(TrackChoice::default());
         assert_eq!((i.default_audio, i.default_subtitle), (Some(1), Some(3)));

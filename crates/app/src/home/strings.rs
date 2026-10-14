@@ -88,6 +88,29 @@ pub const CHANNELS_STEREO: &str = "stereo";
 pub const AUDIO_HINT: &str = "Passthrough (set per output) sends Dolby and DTS audio undecoded, \
      for a receiver that decodes them. Applies from the next video.";
 
+pub const PLAYBACK: &str = "Playback";
+pub const SMOOTHING: &str = "Motion smoothing";
+pub const DEINTERLACE_LABEL: &str = "Deinterlacing: %s";
+pub const DEINTERLACE_TITLE: &str = "Deinterlacing";
+pub const DEINTERLACE_AUTO: &str = "Automatic";
+pub const DEINTERLACE_AUTO_LONG: &str = "Automatic (interlaced videos only)";
+pub const DEINTERLACE_ALWAYS: &str = "Always";
+pub const DEINTERLACE_OFF: &str = "Off";
+pub const TONE_LABEL: &str = "HDR tone mapping: %s";
+pub const TONE_TITLE: &str = "HDR tone mapping";
+pub const TONE_AUTO: &str = "Automatic";
+pub const PLAYBACK_HINT: &str = "Motion smoothing blends frames for smoother pans when the TV can't \
+     match a video's frame rate; some find it looks artificial. Tone mapping applies to HDR videos \
+     on an SDR screen. Applies from the next video.";
+pub const STORAGE: &str = "Storage";
+pub const IMAGE_CACHE_LABEL: &str = "Artwork cache: %s";
+pub const IMAGE_CACHE_TITLE: &str = "Artwork cache size";
+pub const CLEAR_CACHE: &str = "Clear cache";
+pub const STORAGE_HINT: &str = "Artwork uses %s of %s on disk. Clearing removes downloaded artwork \
+     and saved pages; they load again from the server.";
+pub const STORAGE_HINT_UNKNOWN: &str = "Clearing removes downloaded artwork and saved pages; they \
+     load again from the server.";
+
 pub const POWER_TITLE: &str = "Power";
 pub const EXIT_APP: &str = "Exit to console";
 pub const REBOOT: &str = "Restart";
@@ -222,6 +245,24 @@ pub const ALL: &[&str] = &[
     CHANNELS_AUTO,
     CHANNELS_STEREO,
     AUDIO_HINT,
+    PLAYBACK,
+    SMOOTHING,
+    DEINTERLACE_LABEL,
+    DEINTERLACE_TITLE,
+    DEINTERLACE_AUTO,
+    DEINTERLACE_AUTO_LONG,
+    DEINTERLACE_ALWAYS,
+    DEINTERLACE_OFF,
+    TONE_LABEL,
+    TONE_TITLE,
+    TONE_AUTO,
+    PLAYBACK_HINT,
+    STORAGE,
+    IMAGE_CACHE_LABEL,
+    IMAGE_CACHE_TITLE,
+    CLEAR_CACHE,
+    STORAGE_HINT,
+    STORAGE_HINT_UNKNOWN,
     POWER_TITLE,
     EXIT_APP,
     REBOOT,

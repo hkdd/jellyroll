@@ -57,6 +57,12 @@ pub enum Cmd {
     /// A playback report (start/progress/stop), sent in order and retried
     /// until delivered (spec 7.2).
     Report(Box<jellyfin_api::playback::Report>),
+    /// Report the artwork cache's use (`Event::Storage`).
+    StorageInfo,
+    /// A new artwork disk cache size in bytes (Settings).
+    SetImageCache(u64),
+    /// Delete cached artwork and saved pages (Settings), then reload.
+    ClearCache,
     /// Answers once every command sent before it has been handled (a
     /// report queued is a report saved to disk): for a clean exit.
     Flush(std::sync::mpsc::Sender<()>),
@@ -263,6 +269,10 @@ pub enum Event {
     Status(Status),
     /// Changes made elsewhere: refresh what shows them.
     Changed(Changed),
+    /// Bytes of artwork in the disk cache.
+    Storage {
+        used: u64,
+    },
     Remote(Remote),
     /// Home data. `fresh` is false for the cached copy shown at startup.
     Home {

@@ -149,6 +149,8 @@ impl PlayerUi {
             fps: i.fps,
             match_refresh: false,
             audio: Default::default(),
+            interlaced: i.interlaced,
+            video: Default::default(),
         };
         let next_at = i.next.as_ref().map(|_| {
             let credits = i.segments.iter().find(|s| s.kind == SegmentKind::Credits);
@@ -959,6 +961,7 @@ mod tests {
             }),
             next: None,
             fps: None,
+            interlaced: false,
         }
     }
 

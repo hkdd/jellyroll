@@ -52,6 +52,17 @@ passthrough_codecs = "ac3,eac3,dts-hd,truehd"
 # "5.1", "7.1".
 channels = "auto"
 
+[playback]
+# Settings can change each of these.
+# Motion smoothing (mpv interpolation): blends frames when the TV can't run
+# at the video's frame rate. Off by default.
+interpolation = false
+# "auto" (only videos the server reports as interlaced), "always", "off".
+deinterlace = "auto"
+# HDR to SDR tone mapping: "auto", "bt.2390", "spline", "hable", "mobius",
+# "reinhard", "clip".
+tone_mapping = "auto"
+
 [input]
 # HDMI-CEC: control jellyroll with the TV remote (needs a CEC-capable GPU
 # port or a USB adapter such as Pulse-Eight; see README).

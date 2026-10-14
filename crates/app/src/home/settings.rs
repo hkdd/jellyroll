@@ -1,8 +1,11 @@
-//! Settings (spec 10.1): the account (sign out, change server), display
+//! Settings (spec 10.1): the account (switch user, sign out), display
 //! (UI resolution above 1080p (D44), refresh-rate matching), audio output
-//! (device, passthrough, channels), and what this device is (versions,
-//! display, which codecs the GPU decodes). Input and cache settings are in
-//! config.toml.
+//! (device, passthrough, channels), playback (motion smoothing,
+//! deinterlacing, HDR tone mapping), storage (artwork cache size, clear),
+//! and what this device is (versions, display, which codecs the GPU
+//! decodes). Input settings are in config.toml.
+//!
+//! The page scrolls to keep the focused row in view.
 //!
 //! Each section is a row of buttons: Left/Right within a row, Up/Down
 //! between rows. On/off settings are toggles (Select flips them); the
@@ -17,13 +20,47 @@ use super::pages::{Change, Ctx, Open};
 use super::strings as s;
 use super::theme::{BG, TEXT, TEXT_DIM};
 use super::widgets::{self, Viewport};
+use crate::anim::Tween;
 use crate::audio::AudioDevice;
-use crate::config::UiResolution;
+use crate::config::{Deinterlace, TONE_MAPPINGS, UiResolution};
 use crate::input::InputAction;
 use crate::net::Cmd;
 
 /// mpv `audio-channels` choices, in the order Select cycles them.
 pub const CHANNELS: [&str; 4] = ["auto", "stereo", "5.1", "7.1"];
+
+const DEINTERLACE: [Deinterlace; 3] = [Deinterlace::Auto, Deinterlace::Always, Deinterlace::Off];
+/// Artwork disk cache sizes offered (MB).
+const IMAGE_CACHE_MB: [u64; 6] = [512, 1024, 2048, 4096, 8192, 16384];
+const SCROLL: std::time::Duration = std::time::Duration::from_millis(160);
+
+/// "512 MB", "2 GB", "1.5 GB".
+pub fn size_label(bytes: u64) -> String {
+    let mb = bytes as f64 / (1024.0 * 1024.0);
+    if mb < 1024.0 {
+        format!("{} MB", mb.round() as u64)
+    } else {
+        let gb = mb / 1024.0;
+        if (gb - gb.round()).abs() < 0.05 {
+            format!("{} GB", gb.round() as u64)
+        } else {
+            format!("{gb:.1} GB")
+        }
+    }
+}
+
+fn tone_name(t: &str) -> &str {
+    match t {
+        "auto" => s::TONE_AUTO,
+        "bt.2390" => "BT.2390",
+        "spline" => "Spline",
+        "hable" => "Hable",
+        "mobius" => "Mobius",
+        "reinhard" => "Reinhard",
+        "clip" => "Clip",
+        other => other,
+    }
+}
 
 /// The current setting values, as HomeApp resolves them (config, then
 /// choices saved from this page).
@@ -38,6 +75,12 @@ pub struct Values {
     /// Passthrough on the current audio device.
     pub passthrough: bool,
     pub channels: String,
+    pub interpolation: bool,
+    pub deinterlace: Deinterlace,
+    pub tone_mapping: String,
+    pub image_cache_mb: u64,
+    /// Bytes of artwork on disk, once the network thread says.
+    pub cache_used: Option<u64>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -49,6 +92,11 @@ enum Item {
     AudioDevice,
     Passthrough,
     Channels,
+    Interpolation,
+    Deinterlace,
+    ToneMapping,
+    ImageCache,
+    ClearCache,
 }
 
 pub struct SettingsView {
@@ -61,6 +109,11 @@ pub struct SettingsView {
     focus: (usize, usize),
     /// A list open for this item.
     blade: Option<(Item, Blade)>,
+    /// Where each row starts (logical y before scrolling), from the last
+    /// draw, and the page height.
+    row_tops: Vec<f32>,
+    content_h: f32,
+    scroll: Tween,
 }
 
 impl SettingsView {
@@ -80,10 +133,13 @@ impl SettingsView {
             devices,
             focus: (0, 0),
             blade: None,
+            row_tops: Vec::new(),
+            content_h: 0.0,
+            scroll: Tween::settled(0.0, Instant::now()),
         }
     }
 
-    fn rows(&self) -> [Vec<Item>; 3] {
+    fn rows(&self) -> [Vec<Item>; 5] {
         let mut display = Vec::new();
         if self.values.resolution.is_some() {
             display.push(Item::UiResolution);
@@ -93,6 +149,8 @@ impl SettingsView {
             vec![Item::SwitchUser, Item::SignOut],
             display,
             vec![Item::AudioDevice, Item::Passthrough, Item::Channels],
+            vec![Item::Interpolation, Item::Deinterlace, Item::ToneMapping],
+            vec![Item::ImageCache, Item::ClearCache],
         ]
     }
 
@@ -146,6 +204,7 @@ impl SettingsView {
         match item {
             Item::MatchRefresh => Some(self.values.match_refresh),
             Item::Passthrough => Some(self.values.passthrough),
+            Item::Interpolation => Some(self.values.interpolation),
             _ => None,
         }
     }
@@ -166,6 +225,23 @@ impl SettingsView {
                 s::CHANNELS_LABEL,
                 &[Self::channels_name(&v.channels)],
             )),
+            Item::Interpolation => s::SMOOTHING.into(),
+            Item::Deinterlace => widgets::list_label(&s::fill(
+                s::DEINTERLACE_LABEL,
+                &[match v.deinterlace {
+                    Deinterlace::Auto => s::DEINTERLACE_AUTO,
+                    Deinterlace::Always => s::DEINTERLACE_ALWAYS,
+                    Deinterlace::Off => s::DEINTERLACE_OFF,
+                }],
+            )),
+            Item::ToneMapping => {
+                widgets::list_label(&s::fill(s::TONE_LABEL, &[tone_name(&v.tone_mapping)]))
+            }
+            Item::ImageCache => widgets::list_label(&s::fill(
+                s::IMAGE_CACHE_LABEL,
+                &[&size_label(v.image_cache_mb << 20)],
+            )),
+            Item::ClearCache => s::CLEAR_CACHE.into(),
         }
     }
 
@@ -193,6 +269,25 @@ impl SettingsView {
                 CHANNELS.iter().map(|c| Self::channels_name(c).to_string()).collect(),
                 CHANNELS.iter().position(|c| *c == v.channels).or(Some(0)),
             ),
+            Item::Deinterlace => (
+                s::DEINTERLACE_TITLE,
+                vec![
+                    s::DEINTERLACE_AUTO_LONG.into(),
+                    s::DEINTERLACE_ALWAYS.into(),
+                    s::DEINTERLACE_OFF.into(),
+                ],
+                DEINTERLACE.iter().position(|d| *d == v.deinterlace),
+            ),
+            Item::ToneMapping => (
+                s::TONE_TITLE,
+                TONE_MAPPINGS.iter().map(|t| tone_name(t).to_string()).collect(),
+                TONE_MAPPINGS.iter().position(|t| *t == v.tone_mapping).or(Some(0)),
+            ),
+            Item::ImageCache => (
+                s::IMAGE_CACHE_TITLE,
+                IMAGE_CACHE_MB.iter().map(|mb| size_label(mb << 20)).collect(),
+                IMAGE_CACHE_MB.iter().position(|mb| *mb == v.image_cache_mb),
+            ),
             _ => return None,
         })
     }
@@ -207,12 +302,16 @@ impl SettingsView {
             }),
             Item::AudioDevice => Change::AudioDevice(self.devices.get(i)?.name.clone()),
             Item::Channels => Change::Channels((*CHANNELS.get(i)?).into()),
+            Item::Deinterlace => Change::Deinterlace(*DEINTERLACE.get(i)?),
+            Item::ToneMapping => Change::ToneMapping((*TONE_MAPPINGS.get(i)?).into()),
+            Item::ImageCache => Change::ImageCacheMb(*IMAGE_CACHE_MB.get(i)?),
             _ => return None,
         })
     }
 
     pub fn is_animating(&self, now: Instant) -> bool {
         self.blade.as_ref().is_some_and(|(_, b)| b.is_animating(now))
+            || self.scroll.is_animating(now)
     }
 
     pub fn on_action(&mut self, a: InputAction, now: Instant, ctx: &mut Ctx) -> bool {
@@ -248,6 +347,11 @@ impl SettingsView {
                 Item::Passthrough => {
                     ctx.open = Some(Open::Setting(Change::Passthrough(!self.values.passthrough)))
                 }
+                Item::Interpolation => {
+                    ctx.open =
+                        Some(Open::Setting(Change::Interpolation(!self.values.interpolation)))
+                }
+                Item::ClearCache => ctx.open = Some(Open::Setting(Change::ClearCache)),
                 item => match self.list(item) {
                     Some((title, options, current)) => {
                         self.blade = Some((item, Blade::new(title, options, current, now)));
@@ -257,19 +361,37 @@ impl SettingsView {
             },
             _ => return false,
         }
+        self.scroll_to_focus(now);
         true
     }
 
+    /// Keeps the focused row in view: the top rows show the title, the
+    /// last one scrolls to the end of the page (About).
+    fn scroll_to_focus(&mut self, now: Instant) {
+        let Some(top) = self.row_tops.get(self.focus.0).copied() else { return };
+        let (_, lh) = (self.vp.lw, 1080.0);
+        let max = (self.content_h - lh + self.vp.sy()).max(0.0);
+        let last = self.focus.0 + 1 == self.rows().len();
+        let target = if last { max } else { (top - lh * 0.35).clamp(0.0, max) };
+        if (target - self.scroll.target()).abs() > 0.5 {
+            self.scroll.retarget(target, now, SCROLL);
+        }
+    }
+
     pub fn draw<R: Renderer>(&mut self, r: &mut R, now: Instant) {
-        let (sx, sy) = (self.vp.sx(), self.vp.sy());
+        let (sx, sy0) = (self.vp.sx(), self.vp.sy());
         r.clear(BG);
+        let offset = self.scroll.value(now);
+        let sy = sy0 - offset;
         r.text(s::SETTINGS_TITLE, &TextStyle::new(40.0, Weight::Bold), Point::new(sx, sy), TEXT);
         let head = TextStyle::new(28.0, Weight::Bold);
         let body = TextStyle::new(22.0, Weight::Regular).max_width(1500.0);
         let rows = self.rows();
-        let heads = [s::ACCOUNT, s::DISPLAY, s::AUDIO];
+        let heads = [s::ACCOUNT, s::DISPLAY, s::AUDIO, s::PLAYBACK, s::STORAGE];
         let mut y = sy + 80.0;
+        self.row_tops.clear();
         for (ri, items) in rows.iter().enumerate() {
+            self.row_tops.push(y + offset);
             r.text(heads[ri], &head, Point::new(sx, y), TEXT);
             y += 44.0;
             if ri == 0 {
@@ -297,11 +419,23 @@ impl SettingsView {
             let hint = match ri {
                 1 => Some(s::fill(s::DISPLAY_HINT, &[&self.values.output])),
                 2 => Some(s::AUDIO_HINT.to_string()),
+                3 => Some(s::PLAYBACK_HINT.to_string()),
+                4 => Some(match self.values.cache_used {
+                    Some(used) => s::fill(
+                        s::STORAGE_HINT,
+                        &[&size_label(used), &size_label(self.values.image_cache_mb << 20)],
+                    ),
+                    None => s::STORAGE_HINT_UNKNOWN.to_string(),
+                }),
                 _ => None,
             };
             if let Some(h) = hint {
-                r.text(&h, &body, Point::new(sx, y), TEXT_DIM);
-                y += 36.0;
+                let plain = TextStyle::new(22.0, Weight::Regular);
+                for line in super::status::wrap(r, &h, &plain, 1500.0) {
+                    r.text(&line, &body, Point::new(sx, y), TEXT_DIM);
+                    y += 30.0;
+                }
+                y += 6.0;
             }
             y += 28.0;
         }
@@ -313,6 +447,7 @@ impl SettingsView {
             r.text(v, &body, Point::new(sx + 320.0, y), TEXT);
             y += 34.0;
         }
+        self.content_h = y + offset;
         if let Some((_, b)) = &self.blade {
             b.draw(r, now, self.vp.safe);
         }
@@ -333,6 +468,11 @@ mod tests {
             audio_device: "auto".into(),
             passthrough: false,
             channels: "auto".into(),
+            interpolation: false,
+            deinterlace: Deinterlace::Auto,
+            tone_mapping: "auto".into(),
+            image_cache_mb: 2048,
+            cache_used: Some(300 << 20),
         }
     }
 
@@ -425,5 +565,40 @@ mod tests {
         assert_eq!(select(&mut v), None);
         assert!(v.blade.is_none());
         assert_eq!(v.device_label(), s::fill(s::AUDIO_OUTPUT, &[s::AUDIO_AUTO]));
+    }
+
+    #[test]
+    fn playback_and_storage_rows() {
+        let mut v = SettingsView::new(VP, "alice", "home", Vec::new(), values(None), devices());
+        for _ in 0..3 {
+            press(&mut v, InputAction::Down);
+        }
+        assert_eq!(v.focus, (3, 0));
+        assert_eq!(select(&mut v), Some(Change::Interpolation(true)), "a toggle");
+        press(&mut v, InputAction::Right);
+        assert_eq!(v.label(Item::Deinterlace), "Deinterlacing: Automatic  ›");
+        select(&mut v);
+        press(&mut v, InputAction::Down);
+        assert_eq!(select(&mut v), Some(Change::Deinterlace(Deinterlace::Always)));
+        press(&mut v, InputAction::Right);
+        select(&mut v);
+        press(&mut v, InputAction::Down);
+        assert_eq!(select(&mut v), Some(Change::ToneMapping("bt.2390".into())));
+        press(&mut v, InputAction::Down);
+        assert_eq!(v.focus, (4, 1), "the column is kept where it can be");
+        press(&mut v, InputAction::Left);
+        assert_eq!(v.label(Item::ImageCache), "Artwork cache: 2 GB  ›");
+        select(&mut v);
+        press(&mut v, InputAction::Down);
+        assert_eq!(select(&mut v), Some(Change::ImageCacheMb(4096)));
+        press(&mut v, InputAction::Right);
+        assert_eq!(select(&mut v), Some(Change::ClearCache));
+    }
+
+    #[test]
+    fn sizes_read_naturally() {
+        assert_eq!(size_label(300 << 20), "300 MB");
+        assert_eq!(size_label(2048 << 20), "2 GB");
+        assert_eq!(size_label(1536 << 20), "1.5 GB");
     }
 }

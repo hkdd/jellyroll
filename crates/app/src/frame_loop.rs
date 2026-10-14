@@ -195,6 +195,8 @@ pub fn run<P: Platform, R: Renderer>(
                 prefs: save_to.as_deref().map(crate::ui_prefs::load).unwrap_or_default(),
                 display: config.config.display.clone(),
                 audio: config.config.audio.clone(),
+                playback: config.config.playback.clone(),
+                image_cache_mb: config.config.cache.images_mb,
                 save_to,
                 allow_exit: opts.allow_exit,
             };
@@ -905,10 +907,16 @@ fn start_play<P: Platform>(
         start_secs: Some(req.start_secs),
         audio_track: req.audio_track,
         sub_track: req.sub_track,
-        video_sync: if matched { "display-resample" } else { "audio" }.into(),
+        // Interpolation needs display sync even when the mode didn't match
+        // (smoothing 24p on 60 Hz is what it is for).
+        video_sync: if matched || req.video.interpolation { "display-resample" } else { "audio" }
+            .into(),
         audio_device: req.audio.device,
         audio_spdif: req.audio.spdif,
         audio_channels: req.audio.channels,
+        interpolation: req.video.interpolation,
+        deinterlace: req.video.deinterlace,
+        tone_mapping: req.video.tone_mapping,
         ..Default::default()
     };
     match Playback::start_with(p, &req.url, &req.title, popts, now) {

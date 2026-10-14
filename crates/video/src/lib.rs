@@ -60,6 +60,14 @@ pub struct PlayerOptions {
     pub audio_device: Option<String>,
     pub audio_spdif: Option<String>,
     pub audio_channels: Option<String>,
+    /// mpv `interpolation` (spec 7.1: off by default, a user toggle). It
+    /// needs a `display-*` `video_sync`.
+    pub interpolation: bool,
+    /// mpv `deinterlace` (the app decides per video, D67).
+    pub deinterlace: bool,
+    /// mpv `tone-mapping` for HDR video on an SDR output ("auto",
+    /// "bt.2390", "hable"...).
+    pub tone_mapping: String,
 }
 
 impl Default for PlayerOptions {
@@ -78,6 +86,9 @@ impl Default for PlayerOptions {
             audio_device: None,
             audio_spdif: None,
             audio_channels: None,
+            interpolation: false,
+            deinterlace: false,
+            tone_mapping: "auto".into(),
         }
     }
 }
@@ -382,7 +393,8 @@ impl Player {
 
         // Spec 7.1: configured through the API only; no config files,
         // scripts, OSC or default key bindings. The app draws its own OSD.
-        let options: [(&str, &str); 23] = [
+        let yes_no = |b: bool| if b { "yes" } else { "no" };
+        let options: [(&str, &str); 25] = [
             ("config", "no"),
             ("load-scripts", "no"),
             ("osc", "no"),
@@ -393,7 +405,9 @@ impl Player {
             ("hwdec", &opts.hwdec),
             ("gpu-hwdec-interop", &default_hwdec_interop()),
             ("video-sync", &opts.video_sync),
-            ("interpolation", "no"),
+            ("interpolation", yes_no(opts.interpolation)),
+            ("deinterlace", yes_no(opts.deinterlace)),
+            ("tone-mapping", &opts.tone_mapping),
             ("cache", "yes"),
             ("demuxer-max-bytes", &opts.cache_max_bytes),
             ("demuxer-max-back-bytes", &opts.cache_max_back_bytes),

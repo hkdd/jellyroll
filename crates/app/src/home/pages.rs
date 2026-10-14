@@ -40,6 +40,12 @@ pub enum Change {
     /// Passthrough on the current audio device.
     Passthrough(bool),
     Channels(String),
+    Interpolation(bool),
+    Deinterlace(crate::config::Deinterlace),
+    ToneMapping(String),
+    /// Artwork disk cache size in MB.
+    ImageCacheMb(u64),
+    ClearCache,
 }
 
 /// Collects a page's requests while it handles input or data.

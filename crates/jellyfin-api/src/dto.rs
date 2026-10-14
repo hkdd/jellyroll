@@ -237,6 +237,8 @@ pub struct MediaStream {
     pub real_frame_rate: Option<f32>,
     #[serde(rename = "AverageFrameRate", skip_serializing_if = "Option::is_none")]
     pub average_frame_rate: Option<f32>,
+    #[serde(rename = "IsInterlaced", skip_serializing_if = "Option::is_none")]
+    pub is_interlaced: Option<bool>,
 }
 
 /// Class ChapterInfo.
