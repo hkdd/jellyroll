@@ -834,6 +834,19 @@ a TV power cycle (playback continued). Open: sound after a TV power cycle
 with the ELD-triggered audio reopen (D54), and passthrough to a receiver
 (no Dolby/DTS-capable receiver tested yet). Merged with M7 in one PR.
 
+**D59: M9 deferred to new hardware.** Checked before building (spec 5.2,
+M9): on the reference HTPC, HDR10 is blocked twice over. The HD 530
+(Skylake) has no full HEVC Main10 decode (the M7 log: `no_decode=HEVC
+10-bit`), and HDR content is almost all 10-bit HEVC; software decode of
+4K Main10 is beyond its CPU and D19 forbids it silently. And i915 sends
+HDR metadata on gen9 only through MCA LSPCON parts, not a separate
+DP-to-HDMI adapter. Overlay-plane video would need mpv to hand frames to
+the app (libmpv has no such API), and the native DRM backend alone buys
+nothing measurable (0 missed vsyncs, refresh switching works through
+SDL). M9 waits for newer hardware such as an Intel N150 (Twin Lake, Xe graphics: HEVC 10-bit and
+AV1 decode, native HDMI 2.0 with HDR in i915).
+M10 comes first.
+
 ## Dependency approvals
 
 | Crate | Status |

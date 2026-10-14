@@ -21,7 +21,8 @@ and verified versions.
 | **M6** Browsing: libraries (10k-item grids), detail pages, search, settings, password sign-in; play from the server | **Built.** On the HTPC: search and series pages verified; scroll benchmark 0 missed vsyncs, 0 allocating frames; native 4K over the CPU/GPU budgets on frames that load artwork (accepted, D44; 1080p upscaled in Settings). Rest of the walkthrough: `docs/M6-HARDWARE-CHECKLIST.md` |
 | **M7** Player UX: OSD, track menus, trickplay, skip segments, next-up, progress reporting, resume | **Done.** On the HTPC: movie and episode flows, resume points and watched state on the server, next-episode autoplay (D49) |
 | **M8** Display features: refresh-rate matching, audio passthrough, hotplug/TV standby, power menu | **Done** except two retests: on the HTPC 24p plays at 24 Hz, the power menu works, a TV power cycle is survived; open: sound after the power cycle, passthrough (D58) |
-| M9, M10 | Not started |
+| M9 HDR10, native DRM, overlay-plane video | **Deferred** to newer hardware (e.g. an Intel N150): the HD 530 can neither decode HEVC 10-bit nor send HDR metadata through its adapter (D59) |
+| M10 Hardening: error states, soak test, restart, install | In progress |
 
 The app connects to your Jellyfin server and shows its home screen: My
 Media, Continue Watching, Next Up, the latest additions to each library and
