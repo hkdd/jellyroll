@@ -17,7 +17,7 @@ use super::store::{self, ImageCache, MetaCache, State};
 use super::{
     Cmd, Event, FoundServer, ImageJob, ImageSource, NetConfig, PublicUser, Status, fetch, images,
 };
-use crate::home::model::{self, HomeData, Row, Shape};
+use crate::home::model::{self, Art, HomeData, Row, Shape};
 
 /// How often the home screen is refreshed while idle.
 const REFRESH_EVERY: Duration = Duration::from_secs(5 * 60);
@@ -555,11 +555,12 @@ async fn session(
         // ---- 5. home, refreshed until something breaks -------------------
         loop {
             match fetch_home(&client, &user_id).await {
-                Ok(rows) => {
+                Ok((rows, backdrop)) => {
                     let data = HomeData {
                         server_name: server_name.clone(),
                         user_name: user_name.clone(),
                         rows,
+                        backdrop,
                     };
                     if let Some(m) = meta.clone()
                         && let Ok(bytes) = serde_json::to_vec(&data)
@@ -753,19 +754,22 @@ async fn quick_connect(
 }
 
 /// Fetches every home row (spec 8). Rows that fail are left out (logged);
-/// the libraries list and auth failures fail the whole screen.
-async fn fetch_home(client: &Client, user: &str) -> Result<Vec<Row>, Error> {
+/// the libraries list and auth failures fail the whole screen. Also the
+/// default backdrop (D76).
+async fn fetch_home(client: &Client, user: &str) -> Result<(Vec<Row>, Option<Art>), Error> {
     let reqs = (
         ep::user_views(user),
         ep::resume(user, 12),
         ep::next_up(user, 16),
         ep::favorites(user, 24),
+        ep::newest_movie_backdrop(user),
     );
-    let (views, resume, next_up, favorites) = tokio::join!(
+    let (views, resume, next_up, favorites, newest) = tokio::join!(
         client.send(&reqs.0),
         client.send(&reqs.1),
         client.send(&reqs.2),
         client.send(&reqs.3),
+        client.send(&reqs.4),
     );
     let views = views?.items.unwrap_or_default();
 
@@ -805,7 +809,8 @@ async fn fetch_home(client: &Client, user: &str) -> Result<Vec<Row>, Error> {
     if let Some(r) = keep(favorites)? {
         rows.extend(model::row("favorites", "Favorites", Shape::Poster, &items(r)));
     }
-    Ok(rows)
+    let backdrop = keep(newest)?.and_then(|r| items(r).first().and_then(model::backdrop));
+    Ok((rows, backdrop))
 }
 
 /// A row's result: auth failures propagate, other errors drop the row.

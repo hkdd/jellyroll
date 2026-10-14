@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use jellyroll_render::{Color, Point, Rect, Renderer, TextStyle, Weight};
 
-use super::model::{HomeData, Kind};
+use super::model::{Art, HomeData, Kind};
 use super::pages::{Ctx, Open};
 use super::strings as s;
 use super::textures::Textures;
@@ -201,9 +201,18 @@ impl HomeView {
         ctx.open.is_some()
     }
 
-    /// Backdrop crossfade once the focused card's backdrop is loaded.
+    /// The focused card's backdrop, else the default (the newest movie's,
+    /// D76): library tiles, playlists and the nav have none of their own.
+    fn backdrop_art(&self) -> Option<&Art> {
+        self.rows.focused_card().and_then(|c| c.backdrop.as_ref()).or(self.data.backdrop.as_ref())
+    }
+
+    /// Backdrop crossfade once the wanted backdrop is loaded.
     pub fn update(&mut self, now: Instant, tex: &Textures) -> bool {
-        let want = self.rows.focused_keys().and_then(|k| k.backdrop);
+        let want =
+            self.rows.focused_keys().and_then(|k| k.backdrop).or_else(|| {
+                self.data.backdrop.as_ref().map(|a| widgets::backdrop_key(a, &self.vp))
+            });
         self.backdrop.update(want, now, tex)
     }
 
@@ -213,7 +222,7 @@ impl HomeView {
 
     /// The focused backdrop first, then rows (see `RowList::wants`).
     pub fn wants(&self, w: &mut Wants) {
-        w.backdrop(self.rows.focused_card().and_then(|c| c.backdrop.as_ref()));
+        w.backdrop(self.backdrop_art());
         self.rows.wants(w, &self.vp, true);
     }
 
@@ -312,6 +321,7 @@ mod tests {
         HomeData {
             server_name: "s".into(),
             user_name: "u".into(),
+            backdrop: None,
             rows: rows
                 .iter()
                 .map(|(k, shape, n)| Row {
@@ -332,6 +342,23 @@ mod tests {
     }
 
     const VP: Viewport = Viewport { lw: 1920.0, safe: 0.025, scale: 2.0 };
+
+    #[test]
+    fn cards_without_a_backdrop_show_the_newest_movies() {
+        let t = Instant::now();
+        let mut d = data(&[("views", Shape::Landscape, 2), ("latest", Shape::Poster, 3)]);
+        for c in &mut d.rows[0].cards {
+            c.backdrop = None;
+        }
+        let newest = card("new", Kind::Movie).backdrop;
+        d.backdrop = newest.clone();
+        let mut v = HomeView::new(d, VP, t);
+        assert_eq!(v.backdrop_art(), newest.as_ref(), "library tiles have none");
+        let mut next = 0;
+        let mut ctx = Ctx::new(&mut next);
+        v.on_action(InputAction::Down, t, &mut ctx);
+        assert_eq!(v.backdrop_art().unwrap().item_id, "latest0", "a movie shows its own");
+    }
 
     #[test]
     fn select_opens_the_right_page() {

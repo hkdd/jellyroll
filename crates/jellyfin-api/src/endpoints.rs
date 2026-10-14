@@ -151,6 +151,21 @@ pub fn latest(user_id: &str, parent_id: &str, limit: u32) -> Request<Vec<BaseIte
     Request::new(Method::Get, q.0)
 }
 
+/// The most recently added movie that has a backdrop (the home screen's
+/// default background).
+pub fn newest_movie_backdrop(user_id: &str) -> Request<BaseItemDtoQueryResult> {
+    let q = Query::new("/Items")
+        .param("userId", user_id)
+        .param("recursive", true)
+        .param("includeItemTypes", "Movie")
+        .param("imageTypes", "Backdrop")
+        .param("sortBy", "DateCreated")
+        .param("sortOrder", "Descending")
+        .param("limit", 1)
+        .row();
+    Request::new(Method::Get, q.0)
+}
+
 /// Favorite movies and shows, by name.
 pub fn favorites(user_id: &str, limit: u32) -> Request<BaseItemDtoQueryResult> {
     let q = Query::new("/Items")

@@ -109,6 +109,9 @@ pub struct HomeData {
     pub server_name: String,
     pub user_name: String,
     pub rows: Vec<Row>,
+    /// Shown when the focused card has none: the newest movie's (D76).
+    #[serde(default)]
+    pub backdrop: Option<Art>,
 }
 
 fn first_tag(tags: &Option<Vec<String>>) -> Option<String> {
@@ -142,7 +145,7 @@ fn own_art(item: &BaseItemDto, kind: ImageType) -> Option<Art> {
 
 /// Backdrop for the hero: the item's own, else its parent's (episode →
 /// series). Parent blurhashes aren't in the item, so none for those.
-fn backdrop(item: &BaseItemDto) -> Option<Art> {
+pub fn backdrop(item: &BaseItemDto) -> Option<Art> {
     own_art(item, ImageType::Backdrop).or_else(|| {
         Some(Art {
             item_id: item.parent_backdrop_item_id.clone()?,
@@ -589,6 +592,7 @@ mod tests {
         let d = HomeData {
             server_name: "s".into(),
             user_name: "u".into(),
+            backdrop: None,
             rows: vec![row("r", "R", Shape::Poster, &[parse(r#"{"Id":"x","Name":"X"}"#)]).unwrap()],
         };
         let j = serde_json::to_vec(&d).unwrap();

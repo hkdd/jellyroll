@@ -1101,6 +1101,16 @@ uses the first of its contents (already fetched for the "In this playlist"
 row) that has one. An episode's comes from its series. This also covers
 folders and collections without one.
 
+**D76: The home screen's default backdrop is the newest movie's.** Library
+tiles ("My Media", focused at start), playlists and the nav bar have no
+backdrop, so the home screen often opened on a plain background. The home
+fetch also asks for the most recently added movie that has a backdrop
+(`/Items`, `includeItemTypes=Movie`, `imageTypes=Backdrop`, newest
+`DateCreated` first, limit 1). Its backdrop shows whenever the focused card
+has none of its own. It is stored with the cached home data and refreshes
+with it, so a newly added movie takes over on the next refresh or library
+update (D63).
+
 ## Dependency approvals
 
 | Crate | Status |

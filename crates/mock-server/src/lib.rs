@@ -834,6 +834,8 @@ impl Server {
             .map(|y| y.split(',').filter_map(|y| y.trim().parse().ok()).collect())
             .unwrap_or_default();
         let before = q("namelessthan").map(str::to_lowercase);
+        let image_types: Vec<&str> =
+            q("imagetypes").map(|t| t.split(',').collect()).unwrap_or_default();
         let mut v: Vec<&Value> = src
             .iter()
             .map(|i| &i.json)
@@ -854,6 +856,12 @@ impl Server {
                         .is_some_and(|a| a.iter().any(|x| genres.iter().any(|g| x == *g)))
             })
             .filter(|j| before.as_ref().is_none_or(|b| sort_name(j).as_str() < b.as_str()))
+            .filter(|j| {
+                image_types.iter().all(|t| match *t {
+                    "Backdrop" => j["BackdropImageTags"].as_array().is_some_and(|a| !a.is_empty()),
+                    t => j["ImageTags"].get(t).is_some(),
+                })
+            })
             .collect();
         let key = q("sortby").unwrap_or("SortName").split(',').next().unwrap_or("SortName");
         match key {
