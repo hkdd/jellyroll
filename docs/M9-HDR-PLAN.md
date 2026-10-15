@@ -225,8 +225,7 @@ above), TODO.md (M9 status), debug report fields, config.example.toml.
 
 ## Resume here
 
-Steps 1–4 are built and pushed (main, commit b57144a or later) but not yet
-run on beelink01. Next:
+Steps 1–4 work on beelink01 (cb0f79f; see Field notes). Next:
 
 1. Get the probe output from beelink01 (`--print-diagnostics | grep ^hdr`)
    and check `PQ yes`, `HDR_OUTPUT_METADATA present`, `BT2020_RGB` listed.
@@ -251,3 +250,7 @@ run on beelink01. Next:
   `/sys/kernel/debug/dri/*/i915_display_info` (pipe bpp, output format)
   between a working and a failing start, and consider Colorspace
   `Default` (metadata only) or capping `max bpc`.
+- 2026-10-15, after cb0f79f: both films (HDR10 and Dolby Vision with an
+  HDR10 base layer) start reliably in HDR10 on beelink01 with the
+  sequenced switch. Steps 1–4 confirmed on hardware. Next: Step 5 (OSD
+  brightness in HDR), then Step 6 only if banding is visible.
