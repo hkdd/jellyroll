@@ -139,3 +139,15 @@ One commit, objects and properties:
 | 2 set_mode_hdr | done | `Platform::set_mode_hdr -> Result<bool>` (false = fall back); SDL impl keeps `kms: (ModeInfo, DrmMode, meta)` for `current_mode` and `reapply_mode` while SDL's own mode is stale |
 | 3 Frame loop | done | `prepare_mode` tries `set_mode_hdr` whenever HDR changes; `restore_mode` tries it for desktop + SDR; refresh-only changes still go through SDL. Untested on hardware |
 | 4 Test + docs | docs done (D87, README); awaiting beelink01 test | |
+
+## Resume here
+
+Steps 1–3 are pushed (948672f). Next: test on beelink01. In the journal
+(`sudo journalctl -t jellyroll | grep -Ei "single commit|one change|two-step|refused|unavailable"`)
+expect `display switched (single commit)` and `output mode and HDR for
+playback (one change)` at start, `output mode and SDR restored (one
+change)` at stop. If it says `refused (…)`/`unavailable`, the reason is in
+that line; the two-step path still runs, so playback isn't broken.
+Watch for: SDL modesetting back to its stale mode (`KMSDRM: Trying
+format` after a single switch, outside playback start/stop), and exit to
+console restoring the console.
