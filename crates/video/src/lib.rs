@@ -130,6 +130,10 @@ pub struct PlaybackState {
     pub drops: FrameDrops,
     /// Waiting for the network (`paused-for-cache`) or seeking.
     pub buffering: bool,
+    /// Seconds of stream buffered ahead (`demuxer-cache-duration`).
+    pub cache_secs: f64,
+    /// Network read rate, bytes per second (`cache-speed`).
+    pub cache_speed: i64,
     pub seeking: bool,
 }
 
@@ -199,8 +203,10 @@ const OBS_DELAYED: u64 = 12;
 const OBS_MISTIMED: u64 = 13;
 const OBS_BUFFERING: u64 = 14;
 const OBS_SEEKING: u64 = 15;
+const OBS_CACHE_SECS: u64 = 16;
+const OBS_CACHE_SPEED: u64 = 17;
 
-const OBSERVED: [(u64, &str, c_int); 15] = [
+const OBSERVED: [(u64, &str, c_int); 17] = [
     (OBS_TIME_POS, "time-pos", MPV_FORMAT_DOUBLE),
     (OBS_DURATION, "duration", MPV_FORMAT_DOUBLE),
     (OBS_PAUSE, "pause", MPV_FORMAT_FLAG),
@@ -216,6 +222,8 @@ const OBSERVED: [(u64, &str, c_int); 15] = [
     (OBS_MISTIMED, "mistimed-frame-count", MPV_FORMAT_INT64),
     (OBS_BUFFERING, "paused-for-cache", MPV_FORMAT_FLAG),
     (OBS_SEEKING, "seeking", MPV_FORMAT_FLAG),
+    (OBS_CACHE_SECS, "demuxer-cache-duration", MPV_FORMAT_DOUBLE),
+    (OBS_CACHE_SPEED, "cache-speed", MPV_FORMAT_INT64),
 ];
 
 /// mpv's built-in scripts and UI features, disabled explicitly
@@ -702,6 +710,8 @@ impl Player {
                             OBS_MISTIMED => st.drops.mistimed = i64v(),
                             OBS_BUFFERING => st.buffering = *(p.data as *const c_int) != 0,
                             OBS_SEEKING => st.seeking = *(p.data as *const c_int) != 0,
+                            OBS_CACHE_SECS => st.cache_secs = f64v(),
+                            OBS_CACHE_SPEED => st.cache_speed = i64v(),
                             _ => {}
                         }
                     }

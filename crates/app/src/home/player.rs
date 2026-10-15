@@ -124,7 +124,7 @@ pub struct PlayerUi {
     scrub_shown: i64,
     count_l: Line<48>,
     count_shown: i64,
-    info: [Line<112>; 6],
+    info: [Line<112>; 7],
 }
 
 fn secs_to_ticks(s: f64) -> i64 {
@@ -935,6 +935,13 @@ impl PlayerUi {
         let _ = write!(self.info[3], "Method  {:?} (no transcoding)", i.play_method);
         let _ = write!(self.info[4], "Dropped  vo {}  decoder {}", d.vo, d.decoder);
         let _ = write!(self.info[5], "Delayed {}  mistimed {}", d.delayed, d.mistimed);
+        let _ = write!(
+            self.info[6],
+            "Buffer  {:.0} s ahead  network {:.1} Mbit/s{}",
+            st.cache_secs,
+            crate::playback::mbit(st.cache_speed),
+            if st.buffering { "  (waiting)" } else { "" }
+        );
         let style = TextStyle::new(18.0, Weight::Regular);
         let lh = 26.0;
         r.fill_rrect(Rect::new(x, y, 640.0, lh * self.info.len() as f32 + 24.0), 8.0, PANEL);

@@ -156,7 +156,7 @@ impl Osd {
         y: f32,
     ) {
         let style = TextStyle::new(18.0, Weight::Regular);
-        let mut lines: [Line<96>; 5] = Default::default();
+        let mut lines: [Line<96>; 6] = Default::default();
         let hw =
             if s.software_decode() { "software (no hardware decoder)" } else { s.hwdec.as_str() };
         let _ = write!(
@@ -168,6 +168,13 @@ impl Osd {
         let _ = write!(lines[2], "Audio  {}", s.audio_codec);
         let _ = write!(lines[3], "Dropped  vo {}  decoder {}", d.vo, d.decoder);
         let _ = write!(lines[4], "Delayed {}  mistimed {}", d.delayed, d.mistimed);
+        let _ = write!(
+            lines[5],
+            "Buffer  {:.0} s  network {:.1} Mbit/s{}",
+            s.cache_secs,
+            crate::playback::mbit(s.cache_speed),
+            if s.buffering { "  (waiting)" } else { "" }
+        );
         let (w, lh) = (620.0, 26.0);
         r.fill_rrect(Rect::new(x, y, w, lh * lines.len() as f32 + 24.0), 8.0, PANEL);
         for (i, l) in lines.iter().enumerate() {

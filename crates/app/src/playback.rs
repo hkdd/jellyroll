@@ -32,6 +32,14 @@ pub struct Playback {
     reported_decoder: bool,
     /// When mpv was started (the first-frame log says how long it took).
     opened_at: Instant,
+    /// Since when playback has been waiting for the network.
+    stalled_at: Option<Instant>,
+    stalls: u32,
+}
+
+/// Bytes per second to Mbit/s.
+pub fn mbit(bytes_per_sec: i64) -> f64 {
+    bytes_per_sec as f64 * 8.0 / 1_000_000.0
 }
 
 fn title_from(url: &str) -> &str {
@@ -81,6 +89,8 @@ impl Playback {
             drops_next: now,
             reported_decoder: false,
             opened_at: now,
+            stalled_at: None,
+            stalls: 0,
         })
     }
 
@@ -111,6 +121,14 @@ impl Playback {
                     redraw = true;
                 }
                 PlayerEvent::EndFile { reason, error } => {
+                    let d = self.player.frame_drops();
+                    tracing::info!(
+                        dropped_vo = d.vo,
+                        dropped_decoder = d.decoder,
+                        delayed = d.delayed,
+                        stalls = self.stalls,
+                        "playback totals"
+                    );
                     match &error {
                         Some(e) => tracing::error!(?reason, "playback ended: {e}"),
                         None => tracing::info!(?reason, "playback ended"),
@@ -120,6 +138,7 @@ impl Playback {
                 PlayerEvent::Shutdown => self.ended = Some((EndReason::Quit, None)),
             }
         }
+        self.note_stall(now);
         redraw |= self.player.frame_ready();
         if self.osd.diagnostics && now >= self.drops_next {
             self.drops_next = now + DROPS_REFRESH;
@@ -127,6 +146,32 @@ impl Playback {
             redraw = true;
         }
         redraw
+    }
+
+    /// Logs when playback stops to wait for the network and when it resumes,
+    /// so a slow connection shows in the log (and debug reports).
+    fn note_stall(&mut self, now: Instant) {
+        let s = &self.player.state;
+        let waiting = self.started && s.buffering && !s.seeking;
+        match (waiting, self.stalled_at) {
+            (true, None) => {
+                self.stalled_at = Some(now);
+                self.stalls += 1;
+                tracing::warn!(
+                    at = format!("{:.1}", s.time_pos),
+                    network_mbit = format!("{:.1}", mbit(s.cache_speed)),
+                    "buffering: the stream is arriving slower than it plays"
+                );
+            }
+            (false, Some(t)) => {
+                self.stalled_at = None;
+                tracing::info!(
+                    waited = format!("{:.1}", now.duration_since(t).as_secs_f64()),
+                    "buffering done"
+                );
+            }
+            _ => {}
+        }
     }
 
     /// Logs the active decoder once it is known. Software decoding is never
