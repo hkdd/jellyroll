@@ -1007,7 +1007,7 @@ fn prepare_play<P: Platform>(
     now: Instant,
 ) -> PendingPlay {
     let want = want_hdr(p, &req);
-    let mut pp = prepare_mode(p, req, playing_mode, settle, now);
+    let mut pp = prepare_mode(p, req, playing_mode, (want, hdr_on), settle, now);
     if want != *hdr_on {
         if pp.needs_present {
             // Two changes back to back can leave the TV without a picture
@@ -1022,11 +1022,14 @@ fn prepare_play<P: Platform>(
     pp
 }
 
-/// The refresh-rate half of [`prepare_play`].
+/// The refresh-rate half of [`prepare_play`]. When HDR changes too
+/// (`hdr`: wanted, current), both go to the TV as one change if the
+/// platform can (M9); otherwise the caller switches HDR afterwards.
 fn prepare_mode<P: Platform>(
     p: &mut P,
     req: crate::home::PlayRequest,
     playing_mode: &mut Option<ModeInfo>,
+    hdr: (bool, &mut bool),
     settle: Duration,
     now: Instant,
 ) -> PendingPlay {
@@ -1054,6 +1057,26 @@ fn prepare_mode<P: Platform>(
     };
     if pending.req.match_refresh && target.is_none() {
         tracing::info!(fps = pending.req.fps, "no output mode matches this video's frame rate");
+    }
+    let (hdr_want, hdr_on) = hdr;
+    if hdr_want != *hdr_on {
+        let meta = hdr_want.then(jellyroll_platform::drm_hdr::HdrMetadata::default);
+        match p.set_mode_hdr(want.as_ref(), meta.as_ref()) {
+            Ok(true) => {
+                tracing::info!(
+                    fps = pending.req.fps,
+                    mode = ?want.as_ref().or(desktop.as_ref()),
+                    hdr = hdr_want,
+                    "output mode and HDR for playback (one change)"
+                );
+                *playing_mode = want;
+                *hdr_on = hdr_want;
+                pending.needs_present = true;
+                return pending;
+            }
+            Ok(false) => {}
+            Err(e) => tracing::warn!("one-change mode + HDR switch: {e}"),
+        }
     }
     if unchanged {
         return pending;
@@ -1133,6 +1156,17 @@ fn restore_mode<P: Platform>(
 ) -> bool {
     let mut switched = false;
     if *hdr_on {
+        // Desktop mode and SDR as one change, when the platform can.
+        match p.set_mode_hdr(None, None) {
+            Ok(true) => {
+                tracing::info!("output mode and SDR restored (one change)");
+                *hdr_on = false;
+                *playing_mode = None;
+                return true;
+            }
+            Ok(false) => {}
+            Err(e) => tracing::warn!("one-change restore: {e}"),
+        }
         match p.set_hdr(None) {
             Ok(()) => {
                 tracing::info!("HDR10 passthrough off");

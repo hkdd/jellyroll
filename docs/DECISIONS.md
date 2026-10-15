@@ -1285,6 +1285,22 @@ first, so dithering stays on. Still open: drawing the OSD in PQ (it looks
 dim in HDR) and a 10-bit framebuffer. Steps, kernel structs and progress
 are in `docs/M9-HDR-PLAN.md`.
 
+**D87: Refresh rate and HDR in one display change.** D86 switched the TV
+into HDR with separate property changes after SDL's refresh switch. Back
+to back, the LG TV sometimes stayed on "no signal". Waiting
+(`display.hdr_switch_delay_ms`) fixed it, but the margin was a guess and
+the start had two black re-syncs. Now, whenever HDR changes, jellyroll
+makes one atomic commit on SDL's DRM fd: the CRTC's `MODE_ID` and
+`ACTIVE`, plus the connector's `CRTC_ID`, `HDR_OUTPUT_METADATA` and
+`Colorspace`, tested first with TEST_ONLY. This works because SDL's
+per-frame atomic flips only set plane properties (MODE_ID only on SDL's
+own modesets), so with an unchanged resolution SDL keeps flipping onto
+the new timing. jellyroll then reports that mode itself (`current_mode`)
+and re-commits it after a TV power cycle (`reapply_mode`). A different
+resolution, no atomic support, or a refused test falls back to the D86
+two-step path with the delay. Refresh-only changes still go through
+SDL. Plan and progress: `docs/M9-SINGLE-SWITCH-PLAN.md`.
+
 ## Dependency approvals
 
 | Crate | Status |

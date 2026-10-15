@@ -266,7 +266,8 @@ On hardware that can send HDR over HDMI (e.g. Intel N100/N150; not the
 HD 530), jellyroll switches an HDR-capable TV into HDR10 for HDR10 videos
 and sends the picture unchanged, instead of tone-mapping it to SDR on the
 GPU. The TV re-syncs once at the start and once at the end, together with
-the refresh-rate switch. It is used when the server reports the video as
+the refresh-rate switch (one change to the TV when the resolution stays
+the same; otherwise two, `display.hdr_switch_delay_ms` apart). It is used when the server reports the video as
 HDR10 (or Dolby Vision with an HDR10 base layer), the TV's EDID lists
 HDR10 (PQ), and **Settings → HDR passthrough** is Automatic (config
 `playback.hdr`). The Info panel (`i`) says "HDR10 to the TV" while it is

@@ -137,5 +137,5 @@ One commit, objects and properties:
 | Plan (this file) | done | |
 | 1 Atomic plumbing | done | in `drm_hdr.rs`: `DrmMode`, `pick_mode`, `connector_modes`, `atomic_commit`, `HdrSwitch::commit_mode_hdr` (TEST_ONLY then commit); layout tests |
 | 2 set_mode_hdr | done | `Platform::set_mode_hdr -> Result<bool>` (false = fall back); SDL impl keeps `kms: (ModeInfo, DrmMode, meta)` for `current_mode` and `reapply_mode` while SDL's own mode is stale |
-| 3 Frame loop | not started | |
-| 4 Test + docs | not started | |
+| 3 Frame loop | done | `prepare_mode` tries `set_mode_hdr` whenever HDR changes; `restore_mode` tries it for desktop + SDR; refresh-only changes still go through SDL. Untested on hardware |
+| 4 Test + docs | docs done (D87, README); awaiting beelink01 test | |
