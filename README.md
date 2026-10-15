@@ -260,6 +260,26 @@ During playback:
 | Previous / next | Previous / next chapter |
 | Back | Close the menu, cancel a seek or the next-episode countdown, or stop |
 
+### HDR10 passthrough
+
+On hardware that can send HDR over HDMI (e.g. Intel N100/N150; not the
+HD 530), jellyroll switches an HDR-capable TV into HDR10 for HDR10 videos
+and sends the picture unchanged, instead of tone-mapping it to SDR on the
+GPU. The TV re-syncs once at the start and once at the end, together with
+the refresh-rate switch. It is used when the server reports the video as
+HDR10 (or Dolby Vision with an HDR10 base layer), the TV's EDID lists
+HDR10 (PQ), and **Settings → HDR passthrough** is Automatic (config
+`playback.hdr`). The Info panel (`i`) says "HDR10 to the TV" while it is
+on. HLG and Dolby Vision without an HDR10 layer are still tone-mapped.
+
+Check what the TV and the output support (works while jellyroll runs):
+
+```
+sudo -u jellyroll /usr/local/bin/jellyroll --print-diagnostics 2>&1 | grep ^hdr
+```
+
+Status and design: `docs/M9-HDR-PLAN.md`.
+
 ### Debug info (playback problems)
 
 On an item page, **Debug info** writes everything needed to diagnose why that

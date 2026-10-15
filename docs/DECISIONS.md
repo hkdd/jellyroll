@@ -1265,6 +1265,26 @@ bilinear costs almost nothing visible. Tone mapping still runs, using a fixed
 peak instead of a measured one. The Info panel shows which rendering is in
 use.
 
+**D86: HDR10 passthrough (M9, in progress).** On the N150, tone-mapping 4K
+HDR10 to SDR on the GPU drops frames (D85). The TV can do that mapping
+itself, so jellyroll now switches it into HDR10. SDL's KMSDRM backend owns
+the display and has no HDR support. jellyroll sets two connector
+properties on SDL's DRM master fd (window property
+`SDL.window.kmsdrm.drm_fd`): `HDR_OUTPUT_METADATA` (a static-metadata blob)
+and `Colorspace` = `BT2020_RGB`. It uses the plain DRM ioctls, without
+libdrm. SDL never touches those properties, so they persist across its page
+flips. On i915 a change is a full modeset, so it is done at playback start
+with the refresh switch, and counted as a mode switch for D84's grace.
+HDR10 is decided from Jellyfin's `VideoRangeType` before mpv starts,
+because switching after the first frame would black the screen mid-start.
+For the same reason the metadata sent is a generic 1000 cd/m² BT.2020
+mastering display; the file's own values arrive only later, from mpv.
+mpv renders PQ/BT.2020 with a 10000 cd/m² target peak, so it does no tone
+mapping. The framebuffer stays 8-bit, because SDL always picks ARGB8888
+first, so dithering stays on. Still open: drawing the OSD in PQ (it looks
+dim in HDR) and a 10-bit framebuffer. Steps, kernel structs and progress
+are in `docs/M9-HDR-PLAN.md`.
+
 ## Dependency approvals
 
 | Crate | Status |

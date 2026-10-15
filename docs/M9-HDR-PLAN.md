@@ -221,4 +221,4 @@ above), TODO.md (M9 status), debug report fields, config.example.toml.
 | 4 Flow + setting + grace | done (`frame_loop::switch_hdr` in `prepare_play`, off in `restore_mode`; HDR10 known from Jellyfin's VideoRangeType before mpv starts so the TV re-syncs once, with the refresh switch; metadata is the generic default (1000 cd/m², BT.2020) since mpv's values only arrive after playback starts; setting `HDR passthrough` in the display row; Info panel says SDR/HDR10 to the TV; untested on hardware) | see git log |
 | 5 OSD in PQ | not started | |
 | 6 10-bit framebuffer | not started | |
-| 7 Docs | not started | |
+| 7 Docs | partly (README "HDR10 passthrough", D86; finish after hardware test) | see git log |
