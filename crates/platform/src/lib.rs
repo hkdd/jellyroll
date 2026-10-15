@@ -287,4 +287,19 @@ pub trait Platform {
     /// Turns typed-character events ([`PlatformEvent::Text`]) on or off,
     /// for text fields.
     fn set_text_input(&mut self, on: bool);
+
+    /// HDR10 passthrough (M9): `Some` sends the metadata to the TV and
+    /// switches it into HDR; `None` back to SDR. The TV re-syncs either
+    /// way. Only on KMSDRM with a connector that supports it.
+    fn set_hdr(&mut self, meta: Option<&drm_hdr::HdrMetadata>) -> Result<(), String> {
+        match meta {
+            Some(_) => Err("HDR passthrough needs the KMSDRM backend".into()),
+            None => Ok(()),
+        }
+    }
+
+    /// What the connected TV says it supports; None if not known.
+    fn hdr_caps(&self) -> Option<drm_hdr::HdrCaps> {
+        None
+    }
 }

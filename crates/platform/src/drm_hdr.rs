@@ -342,6 +342,117 @@ pub fn destroy_blob(fd: RawFd, id: u32) -> std::io::Result<()> {
     ioctl_mut(fd, DESTROYPROPBLOB, &mut DestroyBlob { blob_id: id })
 }
 
+/// Switches one connector between SDR and HDR10 through the DRM master fd
+/// (SDL's). Dropping it puts the connector back to SDR.
+pub struct HdrSwitch {
+    fd: RawFd,
+    pub connector: Connector,
+    hdr_prop: u32,
+    /// `Colorspace` property id and its `BT2020_RGB` / `Default` values.
+    colorspace: Option<(u32, u64, u64)>,
+    /// The metadata blob in use while HDR is on.
+    blob: Option<u32>,
+}
+
+/// EBUSY: a page flip is in flight; retry.
+const EBUSY: i32 = 16;
+const BUSY_RETRIES: u32 = 25;
+
+fn with_retry(mut f: impl FnMut() -> std::io::Result<()>) -> std::io::Result<()> {
+    let mut n = 0;
+    loop {
+        match f() {
+            Err(e) if e.raw_os_error() == Some(EBUSY) && n < BUSY_RETRIES => {
+                n += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            r => return r,
+        }
+    }
+}
+
+impl HdrSwitch {
+    /// Finds the connected output on `fd`'s device that has
+    /// `HDR_OUTPUT_METADATA`. `fd` must stay open while this lives.
+    pub fn new(fd: RawFd) -> Result<Self, String> {
+        let mut why = String::from("no connected output");
+        for c in connected() {
+            let props = match connector_props(fd, c.id) {
+                Ok(p) => p,
+                Err(e) => {
+                    why = format!("{}: {e}", c.name);
+                    continue;
+                }
+            };
+            let Some(hdr) = props.iter().find(|p| p.name == "HDR_OUTPUT_METADATA") else {
+                why = format!("{} has no HDR_OUTPUT_METADATA property", c.name);
+                continue;
+            };
+            let colorspace = props
+                .iter()
+                .find(|p| p.name == "Colorspace")
+                .and_then(|p| Some((p.id, p.enum_value("BT2020_RGB")?, p.enum_value("Default")?)));
+            return Ok(Self { fd, connector: c, hdr_prop: hdr.id, colorspace, blob: None });
+        }
+        Err(why)
+    }
+
+    pub fn is_on(&self) -> bool {
+        self.blob.is_some()
+    }
+
+    /// Sends `meta` to the TV and switches the colour space to BT.2020.
+    /// The TV re-syncs. A failed colour-space change is logged, not fatal
+    /// (TVs switch to HDR on the InfoFrame alone).
+    pub fn enable(&mut self, meta: &HdrMetadata) -> Result<(), String> {
+        let blob = create_blob(self.fd, &meta.to_blob()).map_err(|e| format!("blob: {e}"))?;
+        let (fd, conn, prop) = (self.fd, self.connector.id, self.hdr_prop);
+        if let Err(e) = with_retry(|| set_connector_prop(fd, conn, prop, blob as u64)) {
+            let _ = destroy_blob(fd, blob);
+            return Err(format!("HDR_OUTPUT_METADATA: {e}"));
+        }
+        if let Some(old) = self.blob.replace(blob) {
+            let _ = destroy_blob(fd, old);
+        }
+        if let Some((cs, bt2020, _)) = self.colorspace
+            && let Err(e) = with_retry(|| set_connector_prop(fd, conn, cs, bt2020))
+        {
+            tracing::warn!("Colorspace BT2020_RGB: {e} (sending HDR metadata only)");
+        }
+        Ok(())
+    }
+
+    /// Back to SDR: no metadata, default colour space. The TV re-syncs.
+    pub fn disable(&mut self) -> Result<(), String> {
+        let Some(blob) = self.blob else { return Ok(()) };
+        let (fd, conn) = (self.fd, self.connector.id);
+        if let Some((cs, _, default)) = self.colorspace
+            && let Err(e) = with_retry(|| set_connector_prop(fd, conn, cs, default))
+        {
+            tracing::warn!("Colorspace Default: {e}");
+        }
+        let prop = self.hdr_prop;
+        with_retry(|| set_connector_prop(fd, conn, prop, 0))
+            .map_err(|e| format!("HDR_OUTPUT_METADATA off: {e}"))?;
+        self.blob = None;
+        let _ = destroy_blob(fd, blob);
+        Ok(())
+    }
+}
+
+impl Drop for HdrSwitch {
+    fn drop(&mut self) {
+        if let Err(e) = self.disable() {
+            tracing::warn!("leaving HDR on exit: {e}");
+        }
+    }
+}
+
+/// The HDR support of the TV on the first connected output that reports it.
+pub fn tv_caps() -> Option<HdrCaps> {
+    connected().iter().find_map(|c| parse_edid_hdr(&c.edid))
+}
+
 /// Human-readable HDR facts for every connected output, for
 /// `--print-diagnostics` and debug reports: the TV's HDR support and the
 /// connector properties passthrough needs.

@@ -99,6 +99,9 @@ impl Gamepads {
 }
 
 pub struct SdlPlatform {
+    /// HDR10 passthrough on SDL's DRM fd, once used. Dropped first: it
+    /// puts the TV back to SDR while SDL still holds the device.
+    hdr: Option<crate::drm_hdr::HdrSwitch>,
     // Drop order matters: context before window before subsystems.
     _gl_ctx: GLContext,
     window: Window,
@@ -274,6 +277,7 @@ impl SdlPlatform {
                 return Err("SDL_RegisterEvents failed".into());
             }
             return Ok(Self {
+                hdr: None,
                 _gl_ctx: ctx,
                 window,
                 video,
@@ -433,6 +437,23 @@ fn convert(ev: Event, window: &Window, wake_type: u32) -> Option<PlatformEvent> 
     })
 }
 
+impl SdlPlatform {
+    /// SDL's DRM master fd (KMSDRM only).
+    fn drm_fd(&self) -> Option<std::os::fd::RawFd> {
+        if self.dev_window {
+            return None;
+        }
+        // SAFETY: the window is alive; the property name is SDL's static
+        // C string; reading a number property has no other preconditions.
+        let fd = unsafe {
+            use sdl3::sys::{properties::SDL_GetNumberProperty, video::*};
+            let props = SDL_GetWindowProperties(self.window.raw());
+            SDL_GetNumberProperty(props, SDL_PROP_WINDOW_KMSDRM_DRM_FD_NUMBER, -1)
+        };
+        (fd >= 0).then_some(fd as std::os::fd::RawFd)
+    }
+}
+
 impl Platform for SdlPlatform {
     fn gl(&self) -> &Gl {
         &self.gl
@@ -512,6 +533,25 @@ impl Platform for SdlPlatform {
         // recreate its surfaces and modeset on the next swap.
         let mode = self.window.display_mode();
         self.window.set_display_mode(mode).map_err(|e| e.to_string())
+    }
+
+    fn set_hdr(&mut self, meta: Option<&crate::drm_hdr::HdrMetadata>) -> Result<(), String> {
+        if self.hdr.is_none() {
+            if meta.is_none() {
+                return Ok(());
+            }
+            let fd = self.drm_fd().ok_or("HDR passthrough needs the KMSDRM backend")?;
+            self.hdr = Some(crate::drm_hdr::HdrSwitch::new(fd)?);
+        }
+        let hdr = self.hdr.as_mut().expect("set above");
+        match meta {
+            Some(m) => hdr.enable(m),
+            None => hdr.disable(),
+        }
+    }
+
+    fn hdr_caps(&self) -> Option<crate::drm_hdr::HdrCaps> {
+        if self.dev_window { None } else { crate::drm_hdr::tv_caps() }
     }
 
     fn display_modes(&self) -> Vec<ModeInfo> {

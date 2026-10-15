@@ -216,7 +216,7 @@ above), TODO.md (M9 status), debug report fields, config.example.toml.
 |---|---|---|
 | Plan (this file) | done | |
 | 1 Probe | done (`drm_hdr.rs`: EDID, connector props, blob/setprop ioctls; tested in unit tests, awaiting beelink01 output) | see git log |
-| 2 Set/clear on connector | not started | |
+| 2 Set/clear on connector | done (`drm_hdr::HdrSwitch`, `Platform::set_hdr` / `hdr_caps`; SDL fd from the window property; untested on hardware) | see git log |
 | 3 mpv PQ target | not started | |
 | 4 Flow + setting + grace | not started | |
 | 5 OSD in PQ | not started | |
