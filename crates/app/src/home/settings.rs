@@ -22,7 +22,7 @@ use super::theme::{BG, TEXT, TEXT_DIM};
 use super::widgets::{self, Viewport};
 use crate::anim::Tween;
 use crate::audio::AudioDevice;
-use crate::config::{Deinterlace, TONE_MAPPINGS, UiResolution};
+use crate::config::{Deinterlace, RENDER_QUALITIES, TONE_MAPPINGS, UiResolution};
 use crate::input::InputAction;
 use crate::net::Cmd;
 
@@ -68,6 +68,16 @@ fn tone_name(t: &str) -> &str {
     }
 }
 
+fn quality_name(q: &str, long: bool) -> &str {
+    match q {
+        "auto" if long => s::QUALITY_AUTO_LONG,
+        "auto" => s::QUALITY_AUTO,
+        "high" => s::QUALITY_HIGH,
+        "fast" => s::QUALITY_FAST,
+        other => other,
+    }
+}
+
 /// The current setting values, as HomeApp resolves them (config, then
 /// choices saved from this page).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -84,6 +94,7 @@ pub struct Values {
     pub interpolation: bool,
     pub deinterlace: Deinterlace,
     pub tone_mapping: String,
+    pub render_quality: String,
     pub image_cache_mb: u64,
     /// Minutes before the screensaver; 0 = off.
     pub screensaver_minutes: u64,
@@ -104,6 +115,7 @@ enum Item {
     Interpolation,
     Deinterlace,
     ToneMapping,
+    RenderQuality,
     ImageCache,
     ClearCache,
 }
@@ -159,7 +171,7 @@ impl SettingsView {
             vec![Item::SwitchUser, Item::SignOut],
             display,
             vec![Item::AudioDevice, Item::Passthrough, Item::Channels],
-            vec![Item::Interpolation, Item::Deinterlace, Item::ToneMapping],
+            vec![Item::Interpolation, Item::Deinterlace, Item::ToneMapping, Item::RenderQuality],
             vec![Item::ImageCache, Item::ClearCache],
         ]
     }
@@ -256,6 +268,10 @@ impl SettingsView {
             Item::ToneMapping => {
                 widgets::list_label(&s::fill(s::TONE_LABEL, &[tone_name(&v.tone_mapping)]))
             }
+            Item::RenderQuality => widgets::list_label(&s::fill(
+                s::QUALITY_LABEL,
+                &[quality_name(&v.render_quality, false)],
+            )),
             Item::ImageCache => widgets::list_label(&s::fill(
                 s::IMAGE_CACHE_LABEL,
                 &[&size_label(v.image_cache_mb << 20)],
@@ -307,6 +323,11 @@ impl SettingsView {
                 TONE_MAPPINGS.iter().map(|t| tone_name(t).to_string()).collect(),
                 TONE_MAPPINGS.iter().position(|t| *t == v.tone_mapping).or(Some(0)),
             ),
+            Item::RenderQuality => (
+                s::QUALITY_TITLE,
+                RENDER_QUALITIES.iter().map(|q| quality_name(q, true).to_string()).collect(),
+                RENDER_QUALITIES.iter().position(|q| *q == v.render_quality).or(Some(0)),
+            ),
             Item::ImageCache => (
                 s::IMAGE_CACHE_TITLE,
                 IMAGE_CACHE_MB.iter().map(|mb| size_label(mb << 20)).collect(),
@@ -329,6 +350,7 @@ impl SettingsView {
             Item::Screensaver => Change::ScreensaverMinutes(*SCREENSAVER_MIN.get(i)?),
             Item::Deinterlace => Change::Deinterlace(*DEINTERLACE.get(i)?),
             Item::ToneMapping => Change::ToneMapping((*TONE_MAPPINGS.get(i)?).into()),
+            Item::RenderQuality => Change::RenderQuality((*RENDER_QUALITIES.get(i)?).into()),
             Item::ImageCache => Change::ImageCacheMb(*IMAGE_CACHE_MB.get(i)?),
             _ => return None,
         })
@@ -496,6 +518,7 @@ mod tests {
             interpolation: false,
             deinterlace: Deinterlace::Auto,
             tone_mapping: "auto".into(),
+            render_quality: "auto".into(),
             image_cache_mb: 2048,
             screensaver_minutes: 10,
             cache_used: Some(300 << 20),
@@ -618,6 +641,12 @@ mod tests {
         select(&mut v);
         press(&mut v, InputAction::Down);
         assert_eq!(select(&mut v), Some(Change::ToneMapping("bt.2390".into())));
+        press(&mut v, InputAction::Right);
+        assert_eq!(v.label(Item::RenderQuality), "Video rendering: Automatic  ›");
+        select(&mut v);
+        press(&mut v, InputAction::Down);
+        assert_eq!(select(&mut v), Some(Change::RenderQuality("high".into())));
+        press(&mut v, InputAction::Left);
         press(&mut v, InputAction::Down);
         assert_eq!(v.focus, (4, 1), "the column is kept where it can be");
         press(&mut v, InputAction::Left);

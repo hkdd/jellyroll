@@ -69,6 +69,10 @@ pub struct PlayerOptions {
     /// mpv `tone-mapping` for HDR video on an SDR output ("auto",
     /// "bt.2390", "hable"...).
     pub tone_mapping: String,
+    /// Scaling and HDR processing cost: "high" (mpv's defaults), "fast"
+    /// (mpv's `fast` profile) or "auto" (fast for 4K or HDR video, which
+    /// low-power GPUs can't render at full quality in time).
+    pub render_quality: String,
 }
 
 impl Default for PlayerOptions {
@@ -90,6 +94,7 @@ impl Default for PlayerOptions {
             interpolation: false,
             deinterlace: false,
             tone_mapping: "auto".into(),
+            render_quality: "auto".into(),
         }
     }
 }
@@ -135,6 +140,8 @@ pub struct PlaybackState {
     /// Network read rate, bytes per second (`cache-speed`).
     pub cache_speed: i64,
     pub seeking: bool,
+    /// Rendering with mpv's `fast` profile.
+    pub fast_render: bool,
 }
 
 impl PlaybackState {
@@ -250,6 +257,15 @@ pub struct Player {
     _drm_params: Box<mpv_opengl_drm_params_v2>,
     _render_node: Option<std::fs::File>,
     pub state: PlaybackState,
+    /// `render_quality` "auto": switch to fast rendering for 4K or HDR.
+    render_auto: bool,
+    fast_render: bool,
+}
+
+/// Video that needs fast rendering under `render_quality` "auto": larger
+/// than 1440p, or HDR (PQ or HLG transfer).
+fn needs_fast_render(w: i64, h: i64, gamma: &str) -> bool {
+    w * h > 2560 * 1440 || matches!(gamma, "pq" | "hlg")
 }
 
 fn cstr(s: &str) -> CString {
@@ -398,6 +414,8 @@ impl Player {
             _drm_params: drm_params,
             _render_node: render_node,
             state: PlaybackState::default(),
+            render_auto: opts.render_quality == "auto",
+            fast_render: opts.render_quality == "fast",
         };
 
         // Spec 7.1: configured through the API only; no config files,
@@ -436,6 +454,10 @@ impl Player {
         ];
         for (k, v) in options {
             player.set_option(k, v)?;
+        }
+        if player.fast_render {
+            player.set_option("profile", "fast")?;
+            player.state.fast_render = true;
         }
         if let Some(h) = &opts.http_header {
             if h.contains(',') {
@@ -562,7 +584,7 @@ impl Player {
     }
 
     pub fn load(&mut self, url: &str) -> Result<(), String> {
-        self.state = PlaybackState::default();
+        self.state = PlaybackState { fast_render: self.fast_render, ..Default::default() };
         self.command(&["loadfile", url])
     }
 
@@ -618,6 +640,44 @@ impl Player {
         self.state.drops
     }
 
+    /// With `render_quality` "auto", switches to mpv's `fast` profile once
+    /// the video is known to be 4K or HDR: full-quality scaling, HDR peak
+    /// detection and dithering at 4K take longer than a frame on low-power
+    /// GPUs (Intel N100/N150), so every frame was dropped.
+    fn auto_render_quality(&mut self) {
+        if !self.render_auto || self.fast_render {
+            return;
+        }
+        let w: i64 = self.property("video-params/w").and_then(|v| v.parse().ok()).unwrap_or(0);
+        let h: i64 = self.property("video-params/h").and_then(|v| v.parse().ok()).unwrap_or(0);
+        let gamma = self.property("video-params/gamma").unwrap_or_default();
+        if !needs_fast_render(w, h, &gamma) {
+            return;
+        }
+        tracing::info!(w, h, gamma, "4K or HDR video: fast rendering");
+        if let Err(e) = self.command(&["apply-profile", "fast"]) {
+            tracing::warn!("{e}");
+            return;
+        }
+        self.fast_render = true;
+        self.state.fast_render = true;
+    }
+
+    /// A property as mpv formats it; None if unavailable.
+    fn property(&self, name: &str) -> Option<String> {
+        let n = cstr(name);
+        // SAFETY: handle valid; name NUL-terminated; mpv allocates the result.
+        let p = unsafe { mpv_get_property_string(self.mpv, n.as_ptr()) };
+        if p.is_null() {
+            return None;
+        }
+        // SAFETY: non-null, NUL-terminated, owned by us until mpv_free.
+        let s = unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned();
+        // SAFETY: allocated by mpv; freed once.
+        unsafe { mpv_free(p.cast()) };
+        Some(s)
+    }
+
     /// Drains mpv's event queue into `out` and updates [`Self::state`].
     /// Cheap when nothing is pending (one atomic load).
     pub fn poll_events(&mut self, out: &mut Vec<PlayerEvent>) {
@@ -657,7 +717,10 @@ impl Player {
                     self.state.file_loaded = true;
                     out.push(PlayerEvent::FileLoaded);
                 }
-                MPV_EVENT_VIDEO_RECONFIG => out.push(PlayerEvent::VideoReconfig),
+                MPV_EVENT_VIDEO_RECONFIG => {
+                    self.auto_render_quality();
+                    out.push(PlayerEvent::VideoReconfig);
+                }
                 MPV_EVENT_PLAYBACK_RESTART => out.push(PlayerEvent::PlaybackRestart),
                 MPV_EVENT_END_FILE => {
                     // SAFETY: data points to mpv_event_end_file for this id.
@@ -783,6 +846,16 @@ impl Drop for Player {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fast_render_for_4k_or_hdr() {
+        assert!(needs_fast_render(3840, 2160, "bt.1886"));
+        assert!(needs_fast_render(3840, 1600, "bt.1886"), "scope 4K");
+        assert!(needs_fast_render(1920, 1080, "pq"));
+        assert!(needs_fast_render(1920, 1080, "hlg"));
+        assert!(!needs_fast_render(1920, 1080, "bt.1886"));
+        assert!(!needs_fast_render(0, 0, ""), "unknown");
+    }
 
     #[test]
     fn api_version_is_v2() {

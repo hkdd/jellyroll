@@ -26,6 +26,7 @@ pub struct UiPrefs {
     pub interpolation: Option<bool>,
     pub deinterlace: Option<crate::config::Deinterlace>,
     pub tone_mapping: Option<String>,
+    pub render_quality: Option<String>,
     /// Artwork disk cache size in MB; None: the config's.
     pub image_cache_mb: Option<u64>,
     /// Screensaver delay in minutes (0 = off); None: the config's.

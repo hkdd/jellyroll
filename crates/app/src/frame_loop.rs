@@ -1065,6 +1065,7 @@ fn start_play<P: Platform>(
         interpolation: req.video.interpolation,
         deinterlace: req.video.deinterlace,
         tone_mapping: req.video.tone_mapping,
+        render_quality: req.video.render_quality,
         ..Default::default()
     };
     match Playback::start_with(p, &req.url, &req.title, popts, now) {

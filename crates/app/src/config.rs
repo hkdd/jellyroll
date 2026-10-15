@@ -126,6 +126,9 @@ pub enum Deinterlace {
 pub const TONE_MAPPINGS: [&str; 7] =
     ["auto", "bt.2390", "spline", "hable", "mobius", "reinhard", "clip"];
 
+/// Video rendering choices (D85): "auto" is fast for 4K and HDR video.
+pub const RENDER_QUALITIES: [&str; 3] = ["auto", "high", "fast"];
+
 /// Video processing (spec 7.1); Settings can override each.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -136,11 +139,18 @@ pub struct Playback {
     pub deinterlace: Deinterlace,
     /// HDR to SDR tone mapping: one of `TONE_MAPPINGS`.
     pub tone_mapping: String,
+    /// Scaling and HDR processing: one of `RENDER_QUALITIES`.
+    pub render_quality: String,
 }
 
 impl Default for Playback {
     fn default() -> Self {
-        Self { interpolation: false, deinterlace: Deinterlace::Auto, tone_mapping: "auto".into() }
+        Self {
+            interpolation: false,
+            deinterlace: Deinterlace::Auto,
+            tone_mapping: "auto".into(),
+            render_quality: "auto".into(),
+        }
     }
 }
 
@@ -364,6 +374,14 @@ fn validate(c: &mut Config, out: &mut Vec<String>) {
             TONE_MAPPINGS.join(", ")
         ));
         c.playback.tone_mapping = "auto".into();
+    }
+    if !RENDER_QUALITIES.contains(&c.playback.render_quality.as_str()) {
+        out.push(format!(
+            "playback.render_quality = {:?} is not one of {}, using \"auto\"",
+            c.playback.render_quality,
+            RENDER_QUALITIES.join(", ")
+        ));
+        c.playback.render_quality = "auto".into();
     }
     clamp(&mut c.display.screensaver_minutes, 0, 240, "display.screensaver_minutes", out);
     clamp(&mut c.cache.images_mb, 64, 1 << 20, "cache.images_mb", out);

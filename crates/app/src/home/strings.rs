@@ -116,9 +116,15 @@ pub const DEINTERLACE_OFF: &str = "Off";
 pub const TONE_LABEL: &str = "HDR tone mapping: %s";
 pub const TONE_TITLE: &str = "HDR tone mapping";
 pub const TONE_AUTO: &str = "Automatic";
+pub const QUALITY_LABEL: &str = "Video rendering: %s";
+pub const QUALITY_TITLE: &str = "Video rendering";
+pub const QUALITY_AUTO: &str = "Automatic";
+pub const QUALITY_AUTO_LONG: &str = "Automatic (fast for 4K and HDR)";
+pub const QUALITY_HIGH: &str = "High quality";
+pub const QUALITY_FAST: &str = "Fast";
 pub const PLAYBACK_HINT: &str = "Motion smoothing blends frames for smoother pans when the TV can't \
      match a video's frame rate; some find it looks artificial. Tone mapping applies to HDR videos \
-     on an SDR screen. Applies from the next video.";
+     on an SDR screen. Fast rendering keeps 4K and HDR smooth on low-power hardware. Applies from the next video.";
 pub const STORAGE: &str = "Storage";
 pub const IMAGE_CACHE_LABEL: &str = "Artwork cache: %s";
 pub const IMAGE_CACHE_TITLE: &str = "Artwork cache size";
@@ -319,6 +325,12 @@ pub const ALL: &[&str] = &[
     TONE_LABEL,
     TONE_TITLE,
     TONE_AUTO,
+    QUALITY_LABEL,
+    QUALITY_TITLE,
+    QUALITY_AUTO,
+    QUALITY_AUTO_LONG,
+    QUALITY_HIGH,
+    QUALITY_FAST,
     PLAYBACK_HINT,
     STORAGE,
     IMAGE_CACHE_LABEL,

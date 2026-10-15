@@ -109,6 +109,7 @@ pub struct VideoOut {
     pub interpolation: bool,
     pub deinterlace: bool,
     pub tone_mapping: String,
+    pub render_quality: String,
 }
 
 /// Audio output settings for a playback (config, then Settings).
@@ -232,6 +233,10 @@ impl UiSetting {
         self.prefs.tone_mapping.clone().unwrap_or_else(|| self.playback.tone_mapping.clone())
     }
 
+    pub fn render_quality(&self) -> String {
+        self.prefs.render_quality.clone().unwrap_or_else(|| self.playback.render_quality.clone())
+    }
+
     /// None: off.
     pub fn screensaver_after(&self) -> Option<Duration> {
         let m = self.prefs.screensaver_minutes.unwrap_or(self.display.screensaver_minutes);
@@ -252,6 +257,7 @@ impl UiSetting {
                 D::Off => false,
             },
             tone_mapping: self.tone_mapping(),
+            render_quality: self.render_quality(),
         }
     }
 
@@ -463,6 +469,7 @@ impl HomeApp {
             interpolation: self.ui.interpolation(),
             deinterlace: self.ui.deinterlace(),
             tone_mapping: self.ui.tone_mapping(),
+            render_quality: self.ui.render_quality(),
             image_cache_mb: self.ui.image_cache_mb(),
             screensaver_minutes: self.ui.screensaver_after().map_or(0, |d| d.as_secs() / 60),
             cache_used: self.cache_used,
@@ -486,6 +493,7 @@ impl HomeApp {
             Change::Interpolation(on) => self.ui.prefs.interpolation = Some(on),
             Change::Deinterlace(d) => self.ui.prefs.deinterlace = Some(d),
             Change::ToneMapping(t) => self.ui.prefs.tone_mapping = Some(t),
+            Change::RenderQuality(q) => self.ui.prefs.render_quality = Some(q),
             Change::ScreensaverMinutes(m) => self.ui.prefs.screensaver_minutes = Some(m),
             Change::ImageCacheMb(mb) => {
                 self.ui.prefs.image_cache_mb = Some(mb);

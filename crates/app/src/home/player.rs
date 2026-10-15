@@ -930,7 +930,8 @@ impl PlayerUi {
             "Video  {} {}×{} @ {:.3} fps",
             st.video_codec, st.width, st.height, st.fps
         );
-        let _ = write!(self.info[1], "Decoder  {hw}");
+        let render = if st.fast_render { "fast rendering" } else { "high-quality rendering" };
+        let _ = write!(self.info[1], "Decoder  {hw}  ·  {render}");
         let _ = write!(self.info[2], "Audio  {}", st.audio_codec);
         let _ = write!(self.info[3], "Method  {:?} (no transcoding)", i.play_method);
         let _ = write!(self.info[4], "Dropped  vo {}  decoder {}", d.vo, d.decoder);
