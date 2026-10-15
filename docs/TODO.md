@@ -39,6 +39,24 @@ Agreed 2026-10-14, in this order. Strike through when done.
    header (next to the year and rating) for watched items; cards already
    have one.
 
+Added 2026-10-15:
+
+7. **More screensavers, and a choice of which.** The Matrix rain (D73) was
+   built so more styles can be added; now add them and make them
+   configurable.
+   - Settings: pick a style (or "Random"), alongside the existing
+     Off / 5 / 10 / 15 minutes; per-style options where they make sense.
+   - **Weather:** current conditions and a short forecast for a
+     configured location, refreshed while it runs. Needs a weather data
+     source (to choose; ask before adding any dependency or account).
+   - **Retro, in the style of 1990s Windows screensavers:** 3D Pipes
+     first; others of that kind to pick from, e.g. Starfield, Mystify
+     (bouncing polygons), Flying Toasters-style sprites, 3D Maze, Bezier
+     curves. Original artwork and code, not copies of Microsoft's assets.
+   - Same rules as today: starts after the delay while browsing or paused,
+     any key wakes it and does nothing else, light on the GPU (they run
+     for hours), and correct in HDR mode (the UI layer is converted, M9).
+
 Done earlier (D63-D68): live updates and remote control, audio/subtitle
 choice before Play, several users and servers, year filter by decade,
 playback and storage settings, developer tracing.
