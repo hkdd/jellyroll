@@ -102,6 +102,10 @@ pub struct SdlPlatform {
     /// HDR10 passthrough on SDL's DRM fd, once used. Dropped first: it
     /// puts the TV back to SDR while SDL still holds the device.
     hdr: Option<crate::drm_hdr::HdrSwitch>,
+    /// The mode and HDR state of the last one-commit switch (M9), while
+    /// they differ from what SDL thinks it set: SDL's own mode is stale
+    /// then, and `current_mode` / `reapply_mode` must use this.
+    kms: Option<(ModeInfo, crate::drm_hdr::DrmMode, Option<crate::drm_hdr::HdrMetadata>)>,
     // Drop order matters: context before window before subsystems.
     _gl_ctx: GLContext,
     window: Window,
@@ -278,6 +282,7 @@ impl SdlPlatform {
             }
             return Ok(Self {
                 hdr: None,
+                kms: None,
                 _gl_ctx: ctx,
                 window,
                 video,
@@ -491,6 +496,9 @@ impl Platform for SdlPlatform {
     }
 
     fn current_mode(&self) -> Option<ModeInfo> {
+        if let Some((m, _, _)) = &self.kms {
+            return Some(m.clone());
+        }
         // A mode set with `set_mode`, else the desktop mode.
         if let Some(m) = self.window.display_mode() {
             return Some(mode_info(&m));
@@ -522,12 +530,18 @@ impl Platform for SdlPlatform {
             }
         };
         // KMSDRM applies it with a modeset on the next swap.
+        self.kms = None;
         self.window.set_display_mode(sdl_mode).map_err(|e| e.to_string())
     }
 
     fn reapply_mode(&mut self) -> Result<(), String> {
         if self.dev_window {
             return Ok(());
+        }
+        // Our own one-commit switch: SDL's idea of the mode is stale, so
+        // commit ours again.
+        if let (Some((_, drm, meta)), Some(hdr)) = (&self.kms, self.hdr.as_mut()) {
+            return hdr.commit_mode_hdr(drm, meta.as_ref());
         }
         // Setting the fullscreen mode, even the same one, makes KMSDRM
         // recreate its surfaces and modeset on the next swap.
@@ -548,6 +562,74 @@ impl Platform for SdlPlatform {
             Some(m) => hdr.enable(m),
             None => hdr.disable(),
         }
+    }
+
+    fn set_mode_hdr(
+        &mut self,
+        mode: Option<&ModeInfo>,
+        meta: Option<&crate::drm_hdr::HdrMetadata>,
+    ) -> Result<bool, String> {
+        let Some(fd) = self.drm_fd() else { return Ok(false) };
+        let Some(target) = mode.cloned().or_else(|| self.desktop_mode()) else {
+            return Ok(false);
+        };
+        // SDL's framebuffer and plane sizes stay; only the timing changes.
+        if (target.width as u32, target.height as u32) != self.framebuffer_size() {
+            tracing::info!(?target, "one-commit switch: resolution differs; two-step switch");
+            return Ok(false);
+        }
+        if self.hdr.is_none() {
+            match crate::drm_hdr::HdrSwitch::new(fd) {
+                Ok(h) => self.hdr = Some(h),
+                Err(e) => {
+                    tracing::info!("one-commit switch unavailable: {e}");
+                    return Ok(false);
+                }
+            }
+        }
+        let hdr = self.hdr.as_mut().expect("set above");
+        let hz = if target.refresh_den > 0 {
+            target.refresh_num as f64 / target.refresh_den as f64
+        } else {
+            target.refresh_hz as f64
+        };
+        let modes = match hdr.modes() {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::info!("one-commit switch unavailable: {e}");
+                return Ok(false);
+            }
+        };
+        let Some(drm) =
+            crate::drm_hdr::pick_mode(&modes, target.width as u32, target.height as u32, hz)
+                .copied()
+        else {
+            tracing::info!(?target, hz, "one-commit switch: no matching kernel mode");
+            return Ok(false);
+        };
+        if let Err(e) = hdr.commit_mode_hdr(&drm, meta) {
+            tracing::info!("one-commit switch refused ({e}); two-step switch");
+            return Ok(false);
+        }
+        tracing::info!(
+            w = target.width,
+            h = target.height,
+            hz = format!("{:.3}", drm.hz()),
+            hdr = meta.is_some(),
+            "display switched (single commit)"
+        );
+        // Back at SDL's own mode in SDR: nothing to remember.
+        let sdl_mode = self.window.display_mode().map(|m| mode_info(&m)).or(self.desktop_mode());
+        let same = |m: &ModeInfo| {
+            (m.width, m.height, m.refresh_num, m.refresh_den)
+                == (target.width, target.height, target.refresh_num, target.refresh_den)
+        };
+        self.kms = if meta.is_none() && sdl_mode.as_ref().is_some_and(same) {
+            None
+        } else {
+            Some((target, drm, meta.cloned()))
+        };
+        Ok(true)
     }
 
     fn hdr_caps(&self) -> Option<crate::drm_hdr::HdrCaps> {

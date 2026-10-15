@@ -298,6 +298,20 @@ pub trait Platform {
         }
     }
 
+    /// Output mode (`None`: the desktop mode) and HDR10 (`Some`) or SDR in
+    /// **one** display change, so the TV re-syncs once (M9). `Ok(true)`:
+    /// done, effective now. `Ok(false)`: not possible here (no atomic
+    /// modesetting, a different resolution, the driver refused the test);
+    /// nothing changed, use [`Platform::set_mode`] and
+    /// [`Platform::set_hdr`] instead.
+    fn set_mode_hdr(
+        &mut self,
+        _mode: Option<&ModeInfo>,
+        _hdr: Option<&drm_hdr::HdrMetadata>,
+    ) -> Result<bool, String> {
+        Ok(false)
+    }
+
     /// What the connected TV says it supports; None if not known.
     fn hdr_caps(&self) -> Option<drm_hdr::HdrCaps> {
         None
