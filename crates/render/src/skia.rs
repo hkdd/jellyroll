@@ -108,6 +108,8 @@ pub struct SkiaRenderer {
     pool: HashMap<PoolKey, Vec<sk::Surface>>,
     frame: u64,
     stats: RenderStats,
+    /// sRGB → PQ conversion for UI over HDR video (compiled on first use).
+    pq_effect: Option<sk::RuntimeEffect>,
 }
 
 fn sk_color(c: Color) -> sk::Color4f {
@@ -317,6 +319,7 @@ impl SkiaRenderer {
             pool: HashMap::new(),
             frame: 0,
             stats: RenderStats::default(),
+            pq_effect: None,
         })
     }
 
@@ -670,6 +673,23 @@ impl Renderer for SkiaRenderer {
         self.canvas().save_layer_alpha_f(None, alpha.clamp(0.0, 1.0));
     }
 
+    fn push_hdr(&mut self, white_nits: f32) {
+        if self.pq_effect.is_none() {
+            match sk::RuntimeEffect::make_for_color_filter(SRGB_TO_PQ, None) {
+                Ok(e) => self.pq_effect = Some(e),
+                Err(e) => {
+                    tracing::warn!("sRGB to PQ shader: {e}");
+                    self.canvas().save();
+                    return;
+                }
+            }
+        }
+        let filter = pq_filter(self.pq_effect.as_ref().expect("set above"), white_nits);
+        let mut paint = sk::Paint::default();
+        paint.set_color_filter(filter);
+        self.canvas().save_layer(&sk::canvas::SaveLayerRec::default().paint(&paint));
+    }
+
     fn pop(&mut self) {
         let c = self.canvas();
         if c.save_count() > 2 {
@@ -780,5 +800,71 @@ impl Renderer for SkiaRenderer {
             render_scale_pct: (self.opts.render_scale * 100.0).round() as u32,
             ..self.stats
         }
+    }
+}
+
+/// sRGB (BT.709) to PQ (BT.2020) for UI drawn over HDR10 video. Skia hands
+/// colour filters premultiplied colour (checked), so it is unpremultiplied
+/// first and premultiplied again after.
+const SRGB_TO_PQ: &str = r#"
+uniform float scale;
+half4 main(half4 c) {
+    float a = c.a;
+    if (a <= 0.0) { return half4(0); }
+    float3 s = clamp(float3(c.rgb) / a, 0.0, 1.0);
+    float3 lo = s / 12.92;
+    float3 hi = pow((s + 0.055) / 1.055, float3(2.4));
+    float3 lin = mix(lo, hi, step(float3(0.04045), s));
+    float3 l2 = float3(
+        dot(lin, float3(0.6274, 0.3293, 0.0433)),
+        dot(lin, float3(0.0691, 0.9195, 0.0114)),
+        dot(lin, float3(0.0164, 0.0880, 0.8956)));
+    float3 y = pow(max(l2 * scale, 0.0), float3(0.1593017578125));
+    float3 pq = pow((0.8359375 + 18.8515625 * y) / (1.0 + 18.6875 * y), float3(78.84375));
+    return half4(half3(pq * a), half(a));
+}
+"#;
+
+/// The colour filter for `white_nits` (sRGB white's luminance in PQ).
+fn pq_filter(effect: &sk::RuntimeEffect, white_nits: f32) -> Option<sk::ColorFilter> {
+    let scale = (white_nits / 10_000.0).clamp(0.0, 1.0);
+    effect.make_color_filter(sk::Data::new_copy(&scale.to_ne_bytes()), None)
+}
+
+#[cfg(test)]
+mod pq_tests {
+    use super::*;
+
+    /// Draws `c` through the filter on a CPU surface; returns (r, g, b, a).
+    fn through(c: sk::Color4f) -> (u8, u8, u8, u8) {
+        let e = sk::RuntimeEffect::make_for_color_filter(SRGB_TO_PQ, None).unwrap();
+        let mut surf = sk::surfaces::raster_n32_premul((2, 2)).unwrap();
+        let canvas = surf.canvas();
+        canvas.clear(sk::Color::TRANSPARENT);
+        let mut lp = sk::Paint::default();
+        lp.set_color_filter(pq_filter(&e, 203.0));
+        canvas.save_layer(&sk::canvas::SaveLayerRec::default().paint(&lp));
+        canvas.draw_rect(sk::Rect::new(0.0, 0.0, 2.0, 2.0), &sk::Paint::new(c, None));
+        canvas.restore();
+        let px = surf.image_snapshot().peek_pixels().unwrap().get_color((0, 0));
+        (px.r(), px.g(), px.b(), px.a())
+    }
+
+    #[test]
+    fn white_lands_at_reference_white_not_peak() {
+        // PQ code for 203 cd/m² is 0.5806 → 148.
+        let (r, g, b, a) = through(sk::Color4f::new(1.0, 1.0, 1.0, 1.0));
+        assert_eq!(a, 255);
+        for v in [r, g, b] {
+            assert!((146..=150).contains(&v), "white → {v}");
+        }
+        let (r, g, b, _) = through(sk::Color4f::new(0.0, 0.0, 0.0, 1.0));
+        assert_eq!((r, g, b), (0, 0, 0), "black stays black");
+        assert_eq!(through(sk::Color4f::new(1.0, 1.0, 1.0, 0.0)).3, 0, "transparent");
+        // Half-transparent white: same colour, half coverage (premultiplied).
+        let (r, _, _, a) = through(sk::Color4f::new(1.0, 1.0, 1.0, 0.5));
+        assert!((127..=129).contains(&a), "{a}");
+        // get_color unpremultiplies.
+        assert!((144..=152).contains(&r), "half white → {r}");
     }
 }

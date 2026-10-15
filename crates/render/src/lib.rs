@@ -192,6 +192,11 @@ pub trait Renderer {
     fn push_transform(&mut self, translate: Point, scale: f32);
     /// Group opacity. Uses an offscreen layer: avoid in hot paths (spec 6.1).
     fn push_opacity(&mut self, alpha: f32);
+    /// Draws what follows (until `pop`) for a TV in HDR10 mode: sRGB
+    /// colours are converted to PQ/BT.2020 with sRGB white at
+    /// `white_nits` cd/m² (BT.2408 reference white: 203), instead of
+    /// landing at the TV's peak. Uses an offscreen layer.
+    fn push_hdr(&mut self, white_nits: f32);
     fn pop(&mut self);
 
     /// Uploads premultiplied-alpha RGBA8 pixels as a GPU texture (the GPU's

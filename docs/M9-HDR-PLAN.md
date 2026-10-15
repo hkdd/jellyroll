@@ -219,7 +219,7 @@ above), TODO.md (M9 status), debug report fields, config.example.toml.
 | 2 Set/clear on connector | done (`drm_hdr::HdrSwitch`, `Platform::set_hdr` / `hdr_caps`; SDL fd from the window property; untested on hardware) | see git log |
 | 3 mpv PQ target | done (`Player::video_hdr`, `set_hdr_output`; mpv 0.37 checked with an x265 HDR10 clip: gamma/primaries/max-luma/min-luma/max-cll/max-fall work, `prim-*-x/y` do not exist there, so primaries fall back to BT.2020/D65) | see git log |
 | 4 Flow + setting + grace | done (`frame_loop::switch_hdr` in `prepare_play`, off in `restore_mode`; HDR10 known from Jellyfin's VideoRangeType before mpv starts so the TV re-syncs once, with the refresh switch; metadata is the generic default (1000 cd/m², BT.2020) since mpv's values only arrive after playback starts; setting `HDR passthrough` in the display row; Info panel says SDR/HDR10 to the TV; untested on hardware) | see git log |
-| 5 OSD in PQ | not started | |
+| 5 OSD in PQ | done, awaiting TV check: `Renderer::push_hdr` (Skia layer with an SkSL sRGB→PQ colour filter, white at 203 cd/m²; CPU-tested), applied by `frame_loop::hdr_ui` around every UI frame while `hdr_on` | see git log |
 | 6 10-bit framebuffer | not started | |
 | 7 Docs | partly (README "HDR10 passthrough", D86; finish after hardware test) | see git log |
 
@@ -265,3 +265,8 @@ Steps 1–4 work on beelink01 (cb0f79f; see Field notes). Next:
   white**: as expected, sRGB UI values drawn straight into a PQ signal
   land near the TV's peak (sRGB white = PQ code 1.0 = 10000 cd/m²), not
   dim as first guessed. Step 5 (map UI white to ~203 cd/m² in PQ) fixes it.
+- Step 5 built: UI white now 203 cd/m² in PQ instead of peak. Skia gives
+  colour filters premultiplied colour (probed on a raster surface), so the
+  shader unpremultiplies first. Blending of translucent panels happens in
+  PQ space (approximate, fine for UI). If it now looks too dim or too
+  bright, tune `HDR_UI_WHITE_NITS` in `frame_loop.rs`.

@@ -802,7 +802,9 @@ pub fn run<P: Platform, R: Renderer>(
             // kept out of the frame budgets and the allocation check.
             loading = true;
             if r.begin_frame(fb) {
+                hdr_ui(r, hdr_on, true);
                 saver.draw(r, now);
+                hdr_ui(r, hdr_on, false);
                 let _submit = tracing::trace_span!("submit").entered();
                 r.end_frame();
             }
@@ -816,6 +818,7 @@ pub fn run<P: Platform, R: Renderer>(
             let overlay =
                 if home { overlay_shown } else { pb.osd.any_visible(now, &pb.player.state) };
             if (overlay || hud.visible || starting) && r.begin_frame(fb) {
+                hdr_ui(r, hdr_on, true);
                 // OSD text (time) and HUD lines change while playing; keep
                 // their shaping out of the steady-state allocation check.
                 let a0 = alloc_counter::allocations();
@@ -827,6 +830,7 @@ pub fn run<P: Platform, R: Renderer>(
                 let (lw, lh) = r.logical_size();
                 hud.draw(r, &stats, lw * (1.0 - safe_area), lh * safe_area);
                 hud_allocs = alloc_counter::allocations() - a0;
+                hdr_ui(r, hdr_on, false);
                 let _submit = tracing::trace_span!("submit").entered();
                 r.end_frame();
             }
@@ -835,10 +839,12 @@ pub fn run<P: Platform, R: Renderer>(
             // The output is switching modes for the video: the page with
             // "Starting…" over it.
             if r.begin_frame(fb) {
+                hdr_ui(r, hdr_on, true);
                 match &mut view {
                     View::Home(h) => h.draw(r, now, notice),
                     View::Demo(_) => r.clear(jellyroll_render::Color::BLACK),
                 }
+                hdr_ui(r, hdr_on, false);
                 let _submit = tracing::trace_span!("submit").entered();
                 r.end_frame();
             }
@@ -1188,6 +1194,20 @@ fn restore_mode<P: Platform>(
             tracing::warn!("restoring the output mode failed: {e}");
             switched
         }
+    }
+}
+
+/// The UI's white on a TV in HDR10 mode: BT.2408 reference white, the
+/// level graphics and subtitles sit at in HDR video (M9 step 5).
+const HDR_UI_WHITE_NITS: f32 = 203.0;
+
+/// While the TV is in HDR10 mode, the UI drawn between `start` and end is
+/// converted to PQ (otherwise its white lands at the TV's peak).
+fn hdr_ui<R: Renderer>(r: &mut R, hdr_on: bool, start: bool) {
+    match (hdr_on, start) {
+        (true, true) => r.push_hdr(HDR_UI_WHITE_NITS),
+        (true, false) => r.pop(),
+        _ => {}
     }
 }
 
