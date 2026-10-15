@@ -117,6 +117,10 @@ fn build(i: &Input) -> String {
     let _ = writeln!(o, "LIBVA_DRIVER_NAME: {:?}", std::env::var("LIBVA_DRIVER_NAME").ok());
     let _ = writeln!(o, "\ndisplays (/sys/class/drm):\n{}", drm_connectors());
     let _ = writeln!(o, "packages:\n{}", packages());
+    let _ = writeln!(o, "HDR (TV support, connector properties):");
+    for l in jellyroll_platform::drm_hdr::report() {
+        let _ = writeln!(o, "{l}");
+    }
 
     section(&mut o, "Audio");
     let _ = writeln!(o, "sound cards (/proc/asound/cards):\n{}", read_trim("/proc/asound/cards"));

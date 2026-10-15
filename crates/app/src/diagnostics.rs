@@ -29,6 +29,9 @@ pub fn print(opts: &SdlOptions) -> ExitCode {
     println!("jellyroll: {}", env!("CARGO_PKG_VERSION"));
     println!("kernel: {}", read_trim("/proc/sys/kernel/osrelease").unwrap_or_default());
     println!("dri_devices: {}", list_dir("/dev/dri", "").join(", "));
+    for l in jellyroll_platform::drm_hdr::report() {
+        println!("{l}");
+    }
     println!("cec_devices: {}", list_dir("/dev", "cec").join(", "));
     match jellyroll_platform::cec::probe(cec_device.as_deref()) {
         Ok(i) => {

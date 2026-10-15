@@ -107,7 +107,7 @@ source's, mpv does no tone mapping. Back to SDR: set all three to `auto`.
 
 ## Steps
 
-### Step 1 — Read-only HDR probe (`jellyroll --hdr-probe`)
+### Step 1 — Read-only HDR probe (in `--print-diagnostics` and debug reports)
 
 Platform crate, new `crates/platform/src/drm_hdr.rs` (unsafe allowed here):
 
@@ -117,12 +117,13 @@ Platform crate, new `crates/platform/src/drm_hdr.rs` (unsafe allowed here):
   min_lum}>` (pure, unit-tested with a synthetic EDID).
 - `connector_props(fd, connector_id)` → names, ids, current values, and
   enum names for `Colorspace`; works on any open card fd without master.
-- CLI flag `--hdr-probe` in `args.rs`: prints, per connector, the EDID HDR
-  caps and whether `HDR_OUTPUT_METADATA`, `Colorspace` (with its enum list)
-  and `max bpc` exist, then exits. Runs without stopping jellyroll.
+- `drm_hdr::report()` lines (`hdr.<connector>.tv`, `.HDR_OUTPUT_METADATA`,
+  `.Colorspace` with its choices, `.max_bpc`) are printed first thing by
+  `--print-diagnostics` (before SDL starts, so they print even while the
+  service holds the display).
 - Also add the same lines to the debug report (D83).
 - Test on beelink01:
-  `ssh -t jon@beelink01 'sudo -u jellyroll /usr/local/bin/jellyroll --hdr-probe' | tee >(xclip -selection clipboard)`
+  `ssh -t jon@beelink01 'sudo -u jellyroll /usr/local/bin/jellyroll --print-diagnostics 2>&1 | grep ^hdr' | tee >(xclip -selection clipboard)`
   Expect: `PQ yes`, `HDR_OUTPUT_METADATA present`, `Colorspace: … BT2020_RGB …`.
 
 ### Step 2 — Set and clear HDR on the connector
@@ -214,7 +215,7 @@ above), TODO.md (M9 status), debug report fields, config.example.toml.
 | Step | State | Commit |
 |---|---|---|
 | Plan (this file) | done | |
-| 1 Probe | not started | |
+| 1 Probe | done (`drm_hdr.rs`: EDID, connector props, blob/setprop ioctls; tested in unit tests, awaiting beelink01 output) | see git log |
 | 2 Set/clear on connector | not started | |
 | 3 mpv PQ target | not started | |
 | 4 Flow + setting + grace | not started | |

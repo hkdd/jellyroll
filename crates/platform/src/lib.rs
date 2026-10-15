@@ -10,6 +10,7 @@
 pub mod alloc_counter;
 pub mod cec;
 mod console;
+pub mod drm_hdr;
 pub mod gl;
 pub mod hdmi_audio;
 mod hotplug;
