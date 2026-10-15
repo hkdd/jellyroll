@@ -38,6 +38,10 @@ match_refresh = true
 # Some TVs take a second or two to show a new mode; wait this long after
 # switching before playback starts so the beginning isn't missed (0-10000).
 refresh_switch_delay_ms = 0
+# HDR10 passthrough: after a refresh switch, wait this long (and until the
+# TV's link is back) before switching the TV into HDR. Too short and some
+# TVs stay on "no signal" (0-20000).
+hdr_switch_delay_ms = 3000
 
 # Minutes without input before the screensaver starts (while browsing or
 # with a video paused); 0 = off. Settings offers off, 5, 10 or 15.

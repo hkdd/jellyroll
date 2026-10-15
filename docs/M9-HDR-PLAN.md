@@ -245,7 +245,7 @@ Steps 1–4 work on beelink01 (cb0f79f; see Field notes). Next:
   modeset were back to back (the HDR set happened in `prepare_play`, the
   refresh modeset at the next swap). Changed: the HDR switch now waits
   until the refresh switch is presented, the link is back, and
-  `HDR_AFTER_MODE` (3 s) has passed; mpv starts after that
+  `display.hdr_switch_delay_ms` (default 3000) has passed; mpv starts after that
   (`PendingPlay.hdr_next`). If it still fails, compare
   `/sys/kernel/debug/dri/*/i915_display_info` (pipe bpp, output format)
   between a working and a failing start, and consider Colorspace

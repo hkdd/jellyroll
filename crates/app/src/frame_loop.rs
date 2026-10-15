@@ -279,6 +279,7 @@ pub fn run<P: Platform, R: Renderer>(
     let mut link_dropped_at: Option<Instant> = None;
     let mut pending_play: Option<PendingPlay> = None;
     let switch_delay = Duration::from_millis(config.config.display.refresh_switch_delay_ms);
+    let hdr_delay = Duration::from_millis(config.config.display.hdr_switch_delay_ms);
     let mut last_present: Option<Instant> = None;
     let mut alloc_warned = false;
 
@@ -295,7 +296,7 @@ pub fn run<P: Platform, R: Renderer>(
             pending_play.as_ref().map(|pp| match pp.hdr_next {
                 // While the link is down, its return (an event) wakes the
                 // loop; poll gently rather than spin on a past deadline.
-                Some(_) => (pp.at + HDR_AFTER_MODE).max(now + Duration::from_millis(100)),
+                Some(_) => (pp.at + hdr_delay).max(now + Duration::from_millis(100)),
                 None => pp.at,
             }),
         );
@@ -708,7 +709,7 @@ pub fn run<P: Platform, R: Renderer>(
             && !pp.needs_present
             && pp.hdr_next.is_some()
             && link_dropped_at.is_none()
-            && now >= pp.at + HDR_AFTER_MODE
+            && now >= pp.at + hdr_delay
             && let Some(want) = pp.hdr_next.take()
         {
             if apply_hdr(p, want, &mut hdr_on) {
@@ -1155,10 +1156,6 @@ fn restore_mode<P: Platform>(
         }
     }
 }
-
-/// After a refresh switch, how long the link must have been back before
-/// the HDR switch (two changes back to back left the TV without a picture).
-const HDR_AFTER_MODE: Duration = Duration::from_secs(3);
 
 /// How long after a mode switch a dropped link counts as the TV re-syncing
 /// (D84). TVs take 1-5 s; some drop the link twice.
