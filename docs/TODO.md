@@ -57,13 +57,36 @@ Added 2026-10-15:
      any key wakes it and does nothing else, light on the GPU (they run
      for hours), and correct in HDR mode (the UI layer is converted, M9).
 
+8. **Input device setup: teach jellyroll a remote's buttons.** For USB
+   wireless remotes (and similar) whose buttons send keys jellyroll
+   doesn't expect. Replaces "key remapping: not doing" below.
+   - Settings → **Add device**: name it, then a walkthrough asks for each
+     jellyroll action in turn ("Press the button you want for **Home**"),
+     covering every action jellyroll has (Up, Down, Left, Right, OK, Back,
+     Home, Menu, Play/Pause, Stop, Seek back/forward, Next/Previous,
+     Volume up/down, Mute, Info, Search...). Each step can be skipped
+     (button doesn't exist); a button already used is pointed out; Back on
+     a known keyboard or gamepad (not the device being set up) cancels.
+   - The mapping belongs to that one device, identified by what the
+     kernel reports for it (USB vendor:product, name, serial or physical
+     path), so other keyboards keep the defaults. A USB receiver often
+     shows up as several input devices (keyboard, consumer keys, mouse):
+     group them as one remote.
+   - Some remotes send a key combination for one button (e.g. Home =
+     Alt+Esc or the Windows key): record what the button actually sends.
+   - Settings lists configured devices: rename, redo, test (press buttons
+     and see which action each does), delete.
+   - Needs per-device key events: check whether SDL's KMSDRM input says
+     which device a key came from; otherwise read those devices' events
+     directly (evdev).
+
 Done earlier (D63-D68): live updates and remote control, audio/subtitle
 choice before Play, several users and servers, year filter by decade,
 playback and storage settings, developer tracing.
 
 Not doing:
-- Config extras (hwdec override, key remapping): other changes coming
-  make them unnecessary.
+- Config extras (hwdec override): other changes coming make them
+  unnecessary. (Key remapping is now item 8, as a guided setup.)
 - Automatic subtitles for foreign-language audio: Jellyfin's per-user
   "Smart" subtitle mode already does it, and jellyroll starts with the
   server's default tracks.
