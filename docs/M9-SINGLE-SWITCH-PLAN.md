@@ -138,7 +138,7 @@ One commit, objects and properties:
 | 1 Atomic plumbing | done | in `drm_hdr.rs`: `DrmMode`, `pick_mode`, `connector_modes`, `atomic_commit`, `HdrSwitch::commit_mode_hdr` (TEST_ONLY then commit); layout tests |
 | 2 set_mode_hdr | done | `Platform::set_mode_hdr -> Result<bool>` (false = fall back); SDL impl keeps `kms: (ModeInfo, DrmMode, meta)` for `current_mode` and `reapply_mode` while SDL's own mode is stale |
 | 3 Frame loop | done | `prepare_mode` tries `set_mode_hdr` whenever HDR changes; `restore_mode` tries it for desktop + SDR; refresh-only changes still go through SDL. Untested on hardware |
-| 4 Test + docs | done | beelink01 2026-10-15: both HDR films started and stopped with one change each (`display switched (single commit)` ×4), HDR badge, no drops, no SDL re-modeset afterwards. Exit-to-console not yet rechecked |
+| 4 Test + docs | done | beelink01 2026-10-15: both HDR films started and stopped with one change each (`display switched (single commit)` ×4), HDR badge, no drops, no SDL re-modeset afterwards. Exit to console after HDR checked: fine |
 
 ## Resume here
 
@@ -156,5 +156,5 @@ console restoring the console.
 
 Works on beelink01 + LG TV: every HDR start and stop was a single commit;
 the two-step fallback and `display.hdr_switch_delay_ms` were not needed.
-Open: recheck Exit to console after an HDR film; Step 5 of the HDR plan
+Exit to console checked (fine). Open: Step 5 of the HDR plan
 (OSD brightness in HDR); the native backend (10-bit) only if banding shows.

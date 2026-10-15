@@ -259,3 +259,9 @@ Steps 1–4 work on beelink01 (cb0f79f; see Field notes). Next:
   changes and a delay — plan in `docs/M9-SINGLE-SWITCH-PLAN.md`.
 - 2026-10-15: start/stop now one atomic commit (D87), confirmed on
   beelink01; no "no signal" and no delay.
+- 2026-10-15 (beelink01): Exit to console after an HDR film gives a
+  working console. **Banding: none noticed so far; needs more viewing
+  before closing Step 6.** **OSD in HDR looks extremely bright, like pure
+  white**: as expected, sRGB UI values drawn straight into a PQ signal
+  land near the TV's peak (sRGB white = PQ code 1.0 = 10000 cd/m²), not
+  dim as first guessed. Step 5 (map UI white to ~203 cd/m² in PQ) fixes it.
