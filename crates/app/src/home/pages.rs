@@ -49,6 +49,7 @@ pub enum Change {
     Deinterlace(crate::config::Deinterlace),
     ToneMapping(String),
     RenderQuality(String),
+    Hdr(String),
     /// Artwork disk cache size in MB.
     ImageCacheMb(u64),
     /// Minutes before the screensaver; 0 = off.

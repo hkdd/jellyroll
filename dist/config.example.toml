@@ -70,6 +70,9 @@ tone_mapping = "auto"
 # low-power GPUs such as the Intel N100/N150 can't render at full quality),
 # "high" (always full quality) or "fast".
 render_quality = "auto"
+# HDR10 passthrough: "auto" switches an HDR-capable TV into HDR10 for HDR10
+# videos (no tone mapping); "off" always sends SDR (mpv tone-maps).
+hdr = "auto"
 
 [input]
 # HDMI-CEC: control jellyroll with the TV remote (needs a CEC-capable GPU

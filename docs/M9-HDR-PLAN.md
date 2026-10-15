@@ -218,7 +218,7 @@ above), TODO.md (M9 status), debug report fields, config.example.toml.
 | 1 Probe | done (`drm_hdr.rs`: EDID, connector props, blob/setprop ioctls; tested in unit tests, awaiting beelink01 output) | see git log |
 | 2 Set/clear on connector | done (`drm_hdr::HdrSwitch`, `Platform::set_hdr` / `hdr_caps`; SDL fd from the window property; untested on hardware) | see git log |
 | 3 mpv PQ target | done (`Player::video_hdr`, `set_hdr_output`; mpv 0.37 checked with an x265 HDR10 clip: gamma/primaries/max-luma/min-luma/max-cll/max-fall work, `prim-*-x/y` do not exist there, so primaries fall back to BT.2020/D65) | see git log |
-| 4 Flow + setting + grace | not started | |
+| 4 Flow + setting + grace | done (`frame_loop::switch_hdr` in `prepare_play`, off in `restore_mode`; HDR10 known from Jellyfin's VideoRangeType before mpv starts so the TV re-syncs once, with the refresh switch; metadata is the generic default (1000 cd/m², BT.2020) since mpv's values only arrive after playback starts; setting `HDR passthrough` in the display row; Info panel says SDR/HDR10 to the TV; untested on hardware) | see git log |
 | 5 OSD in PQ | not started | |
 | 6 10-bit framebuffer | not started | |
 | 7 Docs | not started | |

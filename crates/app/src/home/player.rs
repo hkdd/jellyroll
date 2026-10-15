@@ -155,6 +155,7 @@ impl PlayerUi {
             match_refresh: false,
             audio: Default::default(),
             interlaced: i.interlaced,
+            hdr10: i.hdr10,
             video: Default::default(),
         };
         let next_at = i.next.as_ref().map(|_| {
@@ -931,7 +932,8 @@ impl PlayerUi {
             st.video_codec, st.width, st.height, st.fps
         );
         let render = if st.fast_render { "fast rendering" } else { "high-quality rendering" };
-        let _ = write!(self.info[1], "Decoder  {hw}  ·  {render}");
+        let out = if st.hdr_output { "HDR10 to the TV" } else { "SDR to the TV" };
+        let _ = write!(self.info[1], "Decoder  {hw}  ·  {render}  ·  {out}");
         let _ = write!(self.info[2], "Audio  {}", st.audio_codec);
         let _ = write!(self.info[3], "Method  {:?} (no transcoding)", i.play_method);
         let _ = write!(self.info[4], "Dropped  vo {}  decoder {}", d.vo, d.decoder);
@@ -1000,6 +1002,7 @@ pub(super) mod tests {
             next: None,
             fps: None,
             interlaced: false,
+            hdr10: false,
             video: None,
             stream_ok: true,
         }

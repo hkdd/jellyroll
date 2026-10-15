@@ -73,6 +73,8 @@ pub struct PlayerOptions {
     /// (mpv's `fast` profile) or "auto" (fast for 4K or HDR video, which
     /// low-power GPUs can't render at full quality in time).
     pub render_quality: String,
+    /// The TV is in HDR10 mode (M9): render PQ/BT.2020, no tone mapping.
+    pub hdr_output: bool,
 }
 
 impl Default for PlayerOptions {
@@ -95,6 +97,7 @@ impl Default for PlayerOptions {
             deinterlace: false,
             tone_mapping: "auto".into(),
             render_quality: "auto".into(),
+            hdr_output: false,
         }
     }
 }
@@ -292,6 +295,25 @@ fn needs_fast_render(w: i64, h: i64, gamma: &str) -> bool {
     w * h > 2560 * 1440 || matches!(gamma, "pq" | "hlg")
 }
 
+/// mpv options for an HDR10 (PQ, BT.2020) or an automatic (SDR) target.
+fn hdr_target(on: bool, fast: bool) -> [(&'static str, &'static str); 4] {
+    if on {
+        [
+            ("target-trc", "pq"),
+            ("target-prim", "bt.2020"),
+            ("target-peak", "10000"),
+            ("dither", "ordered"),
+        ]
+    } else {
+        [
+            ("target-trc", "auto"),
+            ("target-prim", "auto"),
+            ("target-peak", "auto"),
+            ("dither", if fast { "no" } else { "fruit" }),
+        ]
+    }
+}
+
 fn cstr(s: &str) -> CString {
     CString::new(s).unwrap_or_default()
 }
@@ -482,6 +504,12 @@ impl Player {
         if player.fast_render {
             player.set_option("profile", "fast")?;
             player.state.fast_render = true;
+        }
+        if opts.hdr_output {
+            for (k, v) in hdr_target(true, player.fast_render) {
+                player.set_option(k, v)?;
+            }
+            player.state.hdr_output = true;
         }
         if let Some(h) = &opts.http_header {
             if h.contains(',') {
@@ -689,6 +717,10 @@ impl Player {
         }
         self.fast_render = true;
         self.state.fast_render = true;
+        if self.state.hdr_output {
+            // The fast profile turned dithering off; PQ in 8 bits needs it.
+            let _ = self.command(&["set", "dither", "ordered"]);
+        }
     }
 
     /// The video's HDR description; None until the video is configured.
@@ -715,22 +747,7 @@ impl Player {
     /// panel). Dithering stays on (the framebuffer is 8-bit; the fast
     /// profile turns it off). Off: mpv picks the target again (SDR).
     pub fn set_hdr_output(&mut self, on: bool) {
-        let opts: [(&str, &str); 4] = if on {
-            [
-                ("target-trc", "pq"),
-                ("target-prim", "bt.2020"),
-                ("target-peak", "10000"),
-                ("dither", "ordered"),
-            ]
-        } else {
-            [
-                ("target-trc", "auto"),
-                ("target-prim", "auto"),
-                ("target-peak", "auto"),
-                ("dither", if self.fast_render { "no" } else { "fruit" }),
-            ]
-        };
-        for (k, v) in opts {
+        for (k, v) in hdr_target(on, self.fast_render) {
             if let Err(e) = self.command(&["set", k, v]) {
                 tracing::warn!("{k}={v}: {e}");
             }

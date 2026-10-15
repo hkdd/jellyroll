@@ -271,6 +271,8 @@ pub fn run<P: Platform, R: Renderer>(
     // the desktop mode), and a play request waiting for a mode switch to
     // be presented (and the TV given time) before mpv starts.
     let mut playing_mode: Option<ModeInfo> = None;
+    // The TV is in HDR10 mode (M9).
+    let mut hdr_on = false;
     // When jellyroll last changed the output mode, and a disconnect seen
     // soon after (the TV re-syncing, D84).
     let mut mode_switched_at: Option<Instant> = None;
@@ -655,7 +657,8 @@ pub fn run<P: Platform, R: Renderer>(
             if let View::Home(h) = &mut view
                 && let Some(req) = h.take_play()
             {
-                pending_play = Some(prepare_play(p, req, &mut playing_mode, switch_delay, now));
+                pending_play =
+                    Some(prepare_play(p, req, &mut playing_mode, &mut hdr_on, switch_delay, now));
                 if pending_play.as_ref().is_some_and(|pp| pp.needs_present) {
                     mode_switched_at = Some(now);
                 }
@@ -682,7 +685,8 @@ pub fn run<P: Platform, R: Renderer>(
             if let View::Home(h) = &mut view
                 && let Some(req) = h.take_play()
             {
-                pending_play = Some(prepare_play(p, req, &mut playing_mode, switch_delay, now));
+                pending_play =
+                    Some(prepare_play(p, req, &mut playing_mode, &mut hdr_on, switch_delay, now));
                 if pending_play.as_ref().is_some_and(|pp| pp.needs_present) {
                     mode_switched_at = Some(now);
                 }
@@ -694,9 +698,9 @@ pub fn run<P: Platform, R: Renderer>(
         if pending_play.as_ref().is_some_and(|pp| !pp.needs_present && now >= pp.at)
             && let Some(pp) = pending_play.take()
         {
-            playback = start_play(p, pp.req, pp.matched, now);
+            playback = start_play(p, pp.req, pp.matched, pp.hdr, now);
             if playback.is_none() {
-                if restore_mode(p, &mut playing_mode) {
+                if restore_mode(p, &mut playing_mode, &mut hdr_on) {
                     mode_switched_at = Some(now);
                 }
                 if let View::Home(h) = &mut view {
@@ -717,7 +721,7 @@ pub fn run<P: Platform, R: Renderer>(
         }
         if std::mem::take(&mut stop_playback) {
             playback = None;
-            if restore_mode(p, &mut playing_mode) {
+            if restore_mode(p, &mut playing_mode, &mut hdr_on) {
                 mode_switched_at = Some(now);
             }
             // mpv changed GL state; Skia must not trust its cache.
@@ -959,6 +963,8 @@ struct PendingPlay {
     settle: Duration,
     /// Start no earlier than this.
     at: Instant,
+    /// The TV is in HDR10 mode: mpv renders PQ.
+    hdr: bool,
 }
 
 /// Picks the output mode for a request (spec 5.2) and asks for it.
@@ -968,9 +974,11 @@ fn prepare_play<P: Platform>(
     p: &mut P,
     req: crate::home::PlayRequest,
     playing_mode: &mut Option<ModeInfo>,
+    hdr_on: &mut bool,
     settle: Duration,
     now: Instant,
 ) -> PendingPlay {
+    let hdr_switched = switch_hdr(p, &req, hdr_on);
     let desktop = p.desktop_mode();
     let target = match (req.match_refresh, req.fps, &desktop) {
         (true, Some(fps), Some(d)) => crate::refresh::pick(&p.display_modes(), d, fps).cloned(),
@@ -984,8 +992,14 @@ fn prepare_play<P: Platform>(
         (Some(a), Some(b)) => crate::refresh::same(a, b),
         _ => false,
     };
-    let mut pending =
-        PendingPlay { matched: target.is_some(), needs_present: false, settle, at: now, req };
+    let mut pending = PendingPlay {
+        matched: target.is_some(),
+        needs_present: hdr_switched,
+        settle,
+        at: now,
+        req,
+        hdr: *hdr_on,
+    };
     if pending.req.match_refresh && target.is_none() {
         tracing::info!(fps = pending.req.fps, "no output mode matches this video's frame rate");
     }
@@ -1016,11 +1030,64 @@ fn prepare_play<P: Platform>(
     pending
 }
 
-/// Back to the desktop mode after playback, if it was changed. True if
-/// a mode switch was requested.
-fn restore_mode<P: Platform>(p: &mut P, playing_mode: &mut Option<ModeInfo>) -> bool {
-    if playing_mode.take().is_none() {
+/// HDR10 passthrough for a request (M9): switches the TV into HDR10 for
+/// an HDR10 video when the setting allows it and the TV supports PQ, and
+/// back to SDR otherwise. True if the TV was switched (it re-syncs).
+fn switch_hdr<P: Platform>(p: &mut P, req: &crate::home::PlayRequest, hdr_on: &mut bool) -> bool {
+    let want = req.hdr10
+        && req.video.hdr == "auto"
+        && match p.hdr_caps() {
+            Some(c) if c.pq => true,
+            Some(_) => {
+                tracing::info!("the TV doesn't support HDR10 (EDID); tone mapping to SDR");
+                false
+            }
+            None => {
+                tracing::info!("the TV reports no HDR support (EDID); tone mapping to SDR");
+                false
+            }
+        };
+    if want == *hdr_on {
         return false;
+    }
+    let meta = want.then(jellyroll_platform::drm_hdr::HdrMetadata::default);
+    match p.set_hdr(meta.as_ref()) {
+        Ok(()) => {
+            tracing::info!(on = want, "HDR10 passthrough");
+            *hdr_on = want;
+            true
+        }
+        Err(e) if want => {
+            tracing::warn!("HDR10 passthrough failed: {e}; tone mapping to SDR");
+            false
+        }
+        Err(e) => {
+            tracing::warn!("switching the TV back to SDR failed: {e}");
+            false
+        }
+    }
+}
+
+/// Back to the desktop mode and SDR after playback, if they were changed.
+/// True if a switch was requested.
+fn restore_mode<P: Platform>(
+    p: &mut P,
+    playing_mode: &mut Option<ModeInfo>,
+    hdr_on: &mut bool,
+) -> bool {
+    let mut switched = false;
+    if *hdr_on {
+        match p.set_hdr(None) {
+            Ok(()) => {
+                tracing::info!("HDR10 passthrough off");
+                *hdr_on = false;
+                switched = true;
+            }
+            Err(e) => tracing::warn!("switching the TV back to SDR failed: {e}"),
+        }
+    }
+    if playing_mode.take().is_none() {
+        return switched;
     }
     match p.set_mode(None) {
         Ok(()) => {
@@ -1029,7 +1096,7 @@ fn restore_mode<P: Platform>(p: &mut P, playing_mode: &mut Option<ModeInfo>) -> 
         }
         Err(e) => {
             tracing::warn!("restoring the output mode failed: {e}");
-            false
+            switched
         }
     }
 }
@@ -1048,6 +1115,7 @@ fn start_play<P: Platform>(
     p: &P,
     req: crate::home::PlayRequest,
     matched: bool,
+    hdr: bool,
     now: Instant,
 ) -> Option<Playback> {
     let popts = jellyroll_video::PlayerOptions {
@@ -1066,6 +1134,7 @@ fn start_play<P: Platform>(
         deinterlace: req.video.deinterlace,
         tone_mapping: req.video.tone_mapping,
         render_quality: req.video.render_quality,
+        hdr_output: hdr,
         ..Default::default()
     };
     match Playback::start_with(p, &req.url, &req.title, popts, now) {

@@ -99,6 +99,8 @@ pub struct PlayRequest {
     pub audio: AudioOut,
     /// The server says the video is interlaced.
     pub interlaced: bool,
+    /// The server says the video is HDR10 (or has an HDR10 base layer).
+    pub hdr10: bool,
     /// Filled from settings when the request is taken.
     pub video: VideoOut,
 }
@@ -110,6 +112,8 @@ pub struct VideoOut {
     pub deinterlace: bool,
     pub tone_mapping: String,
     pub render_quality: String,
+    /// HDR10 passthrough: "auto" or "off" (M9).
+    pub hdr: String,
 }
 
 /// Audio output settings for a playback (config, then Settings).
@@ -233,6 +237,10 @@ impl UiSetting {
         self.prefs.tone_mapping.clone().unwrap_or_else(|| self.playback.tone_mapping.clone())
     }
 
+    pub fn hdr(&self) -> String {
+        self.prefs.hdr.clone().unwrap_or_else(|| self.playback.hdr.clone())
+    }
+
     pub fn render_quality(&self) -> String {
         self.prefs.render_quality.clone().unwrap_or_else(|| self.playback.render_quality.clone())
     }
@@ -258,6 +266,7 @@ impl UiSetting {
             },
             tone_mapping: self.tone_mapping(),
             render_quality: self.render_quality(),
+            hdr: self.hdr(),
         }
     }
 
@@ -470,6 +479,7 @@ impl HomeApp {
             deinterlace: self.ui.deinterlace(),
             tone_mapping: self.ui.tone_mapping(),
             render_quality: self.ui.render_quality(),
+            hdr: self.ui.hdr(),
             image_cache_mb: self.ui.image_cache_mb(),
             screensaver_minutes: self.ui.screensaver_after().map_or(0, |d| d.as_secs() / 60),
             cache_used: self.cache_used,
@@ -494,6 +504,7 @@ impl HomeApp {
             Change::Deinterlace(d) => self.ui.prefs.deinterlace = Some(d),
             Change::ToneMapping(t) => self.ui.prefs.tone_mapping = Some(t),
             Change::RenderQuality(q) => self.ui.prefs.render_quality = Some(q),
+            Change::Hdr(h) => self.ui.prefs.hdr = Some(h),
             Change::ScreensaverMinutes(m) => self.ui.prefs.screensaver_minutes = Some(m),
             Change::ImageCacheMb(mb) => {
                 self.ui.prefs.image_cache_mb = Some(mb);

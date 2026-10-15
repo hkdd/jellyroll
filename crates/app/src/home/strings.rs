@@ -122,6 +122,11 @@ pub const QUALITY_AUTO: &str = "Automatic";
 pub const QUALITY_AUTO_LONG: &str = "Automatic (fast for 4K and HDR)";
 pub const QUALITY_HIGH: &str = "High quality";
 pub const QUALITY_FAST: &str = "Fast";
+pub const HDR_LABEL: &str = "HDR passthrough: %s";
+pub const HDR_TITLE: &str = "HDR passthrough";
+pub const HDR_AUTO: &str = "Automatic";
+pub const HDR_AUTO_LONG: &str = "Automatic (HDR10 videos on an HDR TV)";
+pub const HDR_OFF: &str = "Off (tone-map to SDR)";
 pub const PLAYBACK_HINT: &str = "Motion smoothing blends frames for smoother pans when the TV can't \
      match a video's frame rate; some find it looks artificial. Tone mapping applies to HDR videos \
      on an SDR screen. Fast rendering keeps 4K and HDR smooth on low-power hardware. Applies from the next video.";
@@ -331,6 +336,11 @@ pub const ALL: &[&str] = &[
     QUALITY_AUTO_LONG,
     QUALITY_HIGH,
     QUALITY_FAST,
+    HDR_LABEL,
+    HDR_TITLE,
+    HDR_AUTO,
+    HDR_AUTO_LONG,
+    HDR_OFF,
     PLAYBACK_HINT,
     STORAGE,
     IMAGE_CACHE_LABEL,

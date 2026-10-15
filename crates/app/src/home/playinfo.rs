@@ -101,6 +101,8 @@ pub struct PlayInfo {
     pub fps: Option<f64>,
     /// The server reports the video as interlaced (deinterlacing, D67).
     pub interlaced: bool,
+    /// The video is HDR10 or has an HDR10 base layer (M9 passthrough).
+    pub hdr10: bool,
     /// The video stream: codec (None when not one VA-API knows), size.
     pub video: Option<VideoFormat>,
     /// False when the server can't send the file as it is and this is not
@@ -340,6 +342,21 @@ pub fn build(
         interlaced: streams
             .iter()
             .any(|s| s.r#type == Some(MediaStreamType::Video) && s.is_interlaced == Some(true)),
+        hdr10: streams.iter().any(|s| {
+            use jellyfin_api::dto::VideoRangeType as V;
+            s.r#type == Some(MediaStreamType::Video)
+                && matches!(
+                    s.video_range_type,
+                    Some(
+                        V::HDR10
+                            | V::HDR10Plus
+                            | V::DOVIWithHDR10
+                            | V::DOVIWithHDR10Plus
+                            | V::DOVIWithEL
+                            | V::DOVIWithELHDR10Plus
+                    )
+                )
+        }),
         video,
         stream_ok,
     })
@@ -503,6 +520,7 @@ mod tests {
             next: None,
             fps: None,
             interlaced: false,
+            hdr10: false,
             video: None,
             stream_ok: true,
         };

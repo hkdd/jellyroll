@@ -22,7 +22,7 @@ use super::theme::{BG, TEXT, TEXT_DIM};
 use super::widgets::{self, Viewport};
 use crate::anim::Tween;
 use crate::audio::AudioDevice;
-use crate::config::{Deinterlace, RENDER_QUALITIES, TONE_MAPPINGS, UiResolution};
+use crate::config::{Deinterlace, HDR_MODES, RENDER_QUALITIES, TONE_MAPPINGS, UiResolution};
 use crate::input::InputAction;
 use crate::net::Cmd;
 
@@ -95,6 +95,7 @@ pub struct Values {
     pub deinterlace: Deinterlace,
     pub tone_mapping: String,
     pub render_quality: String,
+    pub hdr: String,
     pub image_cache_mb: u64,
     /// Minutes before the screensaver; 0 = off.
     pub screensaver_minutes: u64,
@@ -116,6 +117,7 @@ enum Item {
     Deinterlace,
     ToneMapping,
     RenderQuality,
+    Hdr,
     ImageCache,
     ClearCache,
 }
@@ -166,6 +168,8 @@ impl SettingsView {
             display.push(Item::UiResolution);
         }
         display.push(Item::MatchRefresh);
+        // Next to refresh matching: both change what the TV is sent.
+        display.push(Item::Hdr);
         display.push(Item::Screensaver);
         [
             vec![Item::SwitchUser, Item::SignOut],
@@ -272,6 +276,10 @@ impl SettingsView {
                 s::QUALITY_LABEL,
                 &[quality_name(&v.render_quality, false)],
             )),
+            Item::Hdr => widgets::list_label(&s::fill(
+                s::HDR_LABEL,
+                &[if v.hdr == "off" { s::HDR_OFF } else { s::HDR_AUTO }],
+            )),
             Item::ImageCache => widgets::list_label(&s::fill(
                 s::IMAGE_CACHE_LABEL,
                 &[&size_label(v.image_cache_mb << 20)],
@@ -328,6 +336,11 @@ impl SettingsView {
                 RENDER_QUALITIES.iter().map(|q| quality_name(q, true).to_string()).collect(),
                 RENDER_QUALITIES.iter().position(|q| *q == v.render_quality).or(Some(0)),
             ),
+            Item::Hdr => (
+                s::HDR_TITLE,
+                vec![s::HDR_AUTO_LONG.into(), s::HDR_OFF.into()],
+                HDR_MODES.iter().position(|h| *h == v.hdr).or(Some(0)),
+            ),
             Item::ImageCache => (
                 s::IMAGE_CACHE_TITLE,
                 IMAGE_CACHE_MB.iter().map(|mb| size_label(mb << 20)).collect(),
@@ -351,6 +364,7 @@ impl SettingsView {
             Item::Deinterlace => Change::Deinterlace(*DEINTERLACE.get(i)?),
             Item::ToneMapping => Change::ToneMapping((*TONE_MAPPINGS.get(i)?).into()),
             Item::RenderQuality => Change::RenderQuality((*RENDER_QUALITIES.get(i)?).into()),
+            Item::Hdr => Change::Hdr((*HDR_MODES.get(i)?).into()),
             Item::ImageCache => Change::ImageCacheMb(*IMAGE_CACHE_MB.get(i)?),
             _ => return None,
         })
@@ -519,6 +533,7 @@ mod tests {
             deinterlace: Deinterlace::Auto,
             tone_mapping: "auto".into(),
             render_quality: "auto".into(),
+            hdr: "auto".into(),
             image_cache_mb: 2048,
             screensaver_minutes: 10,
             cache_used: Some(300 << 20),
@@ -574,6 +589,11 @@ mod tests {
         assert!(press(&mut v, InputAction::Right));
         assert_eq!(select(&mut v), Some(Change::MatchRefresh(false)));
         assert!(v.blade.is_none());
+        assert!(press(&mut v, InputAction::Right));
+        assert_eq!(v.label(Item::Hdr), "HDR passthrough: Automatic  ›");
+        assert_eq!(select(&mut v), None, "the HDR list opens");
+        press(&mut v, InputAction::Down);
+        assert_eq!(select(&mut v), Some(Change::Hdr("off".into())));
         assert!(press(&mut v, InputAction::Right));
         assert_eq!(select(&mut v), None, "the screensaver list opens");
         press(&mut v, InputAction::Up);
