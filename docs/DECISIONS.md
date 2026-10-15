@@ -1203,6 +1203,32 @@ each HDMI output with its screen ("… HDMI 0 · LG TV SSCR2") and shows where
 automatic plays ("automatic (HDMI 0 · LG TV SSCR2)"). An output chosen by
 hand is used as is.
 
+**D83: "Debug info" on the item page writes a playback debug report.** For
+an item that won't play well, the owner of the HTPC presses Debug info, and
+the report can be handed over for diagnosis. A dialog says where it goes:
+`<data dir>/debug/jellyroll-debug-<title>-<UTC time>.txt` (on an install
+`/home/jellyroll/.local/share/jellyroll/debug/`). Not /tmp: the unit has
+`PrivateTmp=yes`, so it would be invisible outside the service. On Write it
+collects, on a background thread:
+- this machine: OS, kernel, CPU, memory, the VA-API driver and what it
+  decodes, DRM connectors and modes, `rpm -q` of the packages that decide
+  playback (VA-API drivers, FFmpeg, mpv, PipeWire, SOF firmware);
+- audio: sound cards, HDMI outputs with a screen (D82), mpv's outputs,
+  where automatic plays;
+- settings in effect and the saved choices;
+- the server's raw JSON (every field, via `Request::raw`): public system
+  info, the item with its media streams, PlaybackInfo for direct play and
+  for a transcode (request and answer);
+- jellyroll's decision: the D71 check, play method, stream, tracks, PlayInfo;
+- a test decode (`video::probe`): a hidden mpv (`vo=null`, `ao=null`,
+  `hwdec=vaapi-copy` on the probed render node) plays the stream for 8 s
+  after its first frame (45 s limit) with a verbose log, then reports
+  track-list, video params, `hwdec-current`, drops, cache state and so on;
+- the last 400 info-and-above log lines, kept in memory by a tracing layer
+  (the journal isn't readable by the service user).
+Access tokens (`api_key=`, `ApiKey=`, `Token="…"`, `"AccessToken"`) are
+redacted. It shows on playable items only, after the other buttons.
+
 ## Dependency approvals
 
 | Crate | Status |

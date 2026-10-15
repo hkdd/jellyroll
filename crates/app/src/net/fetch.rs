@@ -195,5 +195,44 @@ async fn fetch(c: &Client, user: &str, f: Fetch) -> Result<Fetched, Error> {
         Fetch::Play { id, start_ticks, tracks, transcode } => {
             play(c, user, &id, start_ticks, tracks, transcode).await?
         }
+        Fetch::Debug(id) => Fetched::Debug(Box::new(debug(c, user, &id).await)),
     })
+}
+
+/// Everything the server says about playing an item (D83). Each part keeps
+/// its own error, so a report is written whatever fails.
+async fn debug(c: &Client, user: &str, id: &str) -> super::DebugServer {
+    use jellyfin_api::playback::{TranscodeRequest, playback_info};
+    fn pretty(r: Result<serde_json::Value, Error>) -> String {
+        match r {
+            Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_default(),
+            Err(e) => format!("(error: {e})"),
+        }
+    }
+    let body = |b: &Option<String>| {
+        b.as_deref()
+            .and_then(|b| serde_json::from_str::<serde_json::Value>(b).ok())
+            .and_then(|v| serde_json::to_string_pretty(&v).ok())
+            .unwrap_or_default()
+    };
+    let direct = playback_info(user, id, None);
+    let t = TranscodeRequest { start_ticks: 0, ..Default::default() };
+    let transcode = playback_info(user, id, Some(&t));
+    let (direct_body, transcode_body) = (body(&direct.body), body(&transcode.body));
+    let reqs = (ep::public_info().raw(), ep::item(user, id).raw(), direct.raw(), transcode.raw());
+    let (server_info, item, d, t) =
+        tokio::join!(c.send(&reqs.0), c.send(&reqs.1), c.send(&reqs.2), c.send(&reqs.3));
+    let play = match play(c, user, id, 0, super::TrackChoice::default(), false).await {
+        Ok(Fetched::Play(p)) => Ok(*p),
+        Ok(Fetched::Failed(e)) => Err(e),
+        Ok(_) => Err("unexpected answer".into()),
+        Err(e) => Err(e.to_string()),
+    };
+    super::DebugServer {
+        server_info: pretty(server_info),
+        item: pretty(item),
+        direct: (direct_body, pretty(d)),
+        transcode: (transcode_body, pretty(t)),
+        play,
+    }
 }

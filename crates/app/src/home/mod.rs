@@ -7,6 +7,7 @@
 
 mod accounts;
 mod blade;
+mod debug_dialog;
 mod detail;
 mod library;
 pub mod model;
@@ -157,6 +158,7 @@ pub struct HomeApp {
     starting: Option<(String, Instant)>,
     /// Asking how to play something this device can't play directly (D71).
     choice: Option<play_choice::PlayChoice>,
+    debug: Option<debug_dialog::DebugDialog>,
     /// Open over everything else (spec 5.5).
     power: Option<power_menu::PowerMenu>,
     /// Exit chosen in the power menu, for the frame loop.
@@ -319,6 +321,7 @@ impl HomeApp {
             cache_used: None,
             starting: None,
             choice: None,
+            debug: None,
             power: None,
             exit_requested: false,
             play: None,
@@ -388,6 +391,14 @@ impl HomeApp {
     fn open(&mut self, o: Open, now: Instant) {
         let vp = self.vp;
         let page = match o {
+            Open::Debug { id, title } => {
+                let dir =
+                    crate::net::store::data_dir().unwrap_or_else(std::env::temp_dir).join("debug");
+                let path =
+                    crate::debug_report::path_for(&dir, &title, std::time::SystemTime::now());
+                self.debug = Some(debug_dialog::DebugDialog::new(id, title, path));
+                return;
+            }
             Open::Play { id, start_ticks, tracks, title, .. } => {
                 tracing::info!(%title, "play requested");
                 self.starting = Some((title, now));
@@ -789,6 +800,35 @@ impl HomeApp {
     }
 
     fn fetched(&mut self, id: u64, result: Fetched, now: Instant) -> bool {
+        if self.debug.as_ref().is_some_and(|d| d.req == Some(id)) {
+            match result {
+                Fetched::Debug(server) => {
+                    let Some(d) = &self.debug else { return true };
+                    let (title, item_id, path) =
+                        (d.title.clone(), d.item_id.clone(), d.path.clone());
+                    let input = crate::debug_report::Input {
+                        title,
+                        item_id,
+                        server: *server,
+                        about: self.about(),
+                        settings: self.debug_settings(),
+                        audio_devices: self.audio_device_list().unwrap_or_default(),
+                        auto_audio: self.auto_audio_device(),
+                    };
+                    let w = crate::debug_report::start(input, path);
+                    if let Some(d) = self.debug.as_mut() {
+                        d.writing(w);
+                    }
+                }
+                Fetched::Failed(e) => {
+                    if let Some(d) = self.debug.as_mut() {
+                        d.failed(e);
+                    }
+                }
+                _ => {}
+            }
+            return true;
+        }
         if self.play_req == Some(id) {
             self.play_req = None;
             match result {
@@ -850,6 +890,22 @@ impl HomeApp {
     fn audio_device_list(&self) -> Option<Vec<crate::audio::AudioDevice>> {
         let list = self.audio_devices.get()?;
         Some(crate::audio::annotate(list.clone(), &jellyroll_platform::hdmi_audio::connected()))
+    }
+
+    /// The settings in effect and the saved choices, for a debug report.
+    fn debug_settings(&self) -> Vec<(String, String)> {
+        let saved = self
+            .ui
+            .save_to
+            .as_ref()
+            .map(|p| {
+                std::fs::read_to_string(p).unwrap_or_else(|e| format!("({}: {e})", p.display()))
+            })
+            .unwrap_or_else(|| "(not saved)".into());
+        vec![
+            ("in effect".into(), format!("{:#?}", self.settings_values())),
+            ("ui.json".into(), saved),
+        ]
     }
 
     /// The audio output setting is automatic.
@@ -1024,6 +1080,20 @@ impl HomeApp {
     /// Applies an action. Returns true if it was used (a redraw is due and
     /// Back must not quit the app).
     pub fn on_action(&mut self, a: InputAction, now: Instant) -> bool {
+        if let Some(d) = &mut self.debug {
+            match d.on_action(a) {
+                debug_dialog::Outcome::Stay => {}
+                debug_dialog::Outcome::Close => self.debug = None,
+                debug_dialog::Outcome::Write => {
+                    let id = d.item_id.clone();
+                    let req = self.with_ctx(now, |_, ctx| ctx.fetch(Fetch::Debug(id)));
+                    if let Some(d) = self.debug.as_mut() {
+                        d.fetching(req);
+                    }
+                }
+            }
+            return true;
+        }
         if let Some(c) = &mut self.choice {
             if let play_choice::Outcome::Picked(pick) = c.on_action(a)
                 && let Some(c) = self.choice.take()
@@ -1155,6 +1225,7 @@ impl HomeApp {
         }
         let tex = &self.textures;
         let mut devices_arrived = self.power.as_mut().is_some_and(|m| m.update());
+        devices_arrived |= self.debug.as_mut().is_some_and(|d| d.update());
         if matches!(self.stack.last(), Some(Page::Settings(v)) if !v.has_devices())
             && let Some(list) = self.audio_device_list().filter(|l| !l.is_empty())
             && let Some(Page::Settings(v)) = self.stack.last_mut()
@@ -1230,6 +1301,10 @@ impl HomeApp {
         let now = Instant::now();
         let toast = self.toast.as_ref().map(|t| t.1);
         let toast = match (toast, self.power.as_ref().and_then(|m| m.next_deadline(now))) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        let toast = match (toast, self.debug.as_ref().and_then(|d| d.next_deadline(now))) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };
@@ -1317,6 +1392,9 @@ impl HomeApp {
         self.draw_toast(r, now, safe, false);
         if let Some(c) = &self.choice {
             c.draw(r);
+        }
+        if let Some(d) = &self.debug {
+            d.draw(r);
         }
         if let Some(m) = &self.power {
             m.draw(r);

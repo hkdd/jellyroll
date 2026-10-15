@@ -49,6 +49,8 @@ enum Action {
     Subtitles,
     Watched,
     Favorite,
+    /// Write a debug report (D83).
+    Debug,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -315,6 +317,9 @@ impl DetailView {
             Action::Favorite,
             if d.favorite { s::REMOVE_FAVORITE } else { s::ADD_FAVORITE }.into(),
         ));
+        if playable {
+            b.push((Action::Debug, s::DEBUG_INFO.into()));
+        }
         self.buttons = b
             .into_iter()
             .map(|(action, label)| Button { action, label, rect: Rect::default() })
@@ -501,6 +506,15 @@ impl DetailView {
                     self.toggle_req = Some(
                         ctx.fetch(Fetch::SetFavorite { id: self.id.clone(), on: !d.favorite }),
                     );
+                }
+                Action::Debug => {
+                    let title = match d.card.kind {
+                        Kind::Episode if !d.card.subtitle.is_empty() => {
+                            format!("{} {}", d.card.title, d.card.subtitle)
+                        }
+                        _ => d.card.title.clone(),
+                    };
+                    ctx.open = Some(Open::Debug { id: d.card.id.clone(), title });
                 }
             }
             return true;
@@ -868,8 +882,16 @@ mod tests {
             &mut ctx,
         );
         let labels: Vec<&str> = v.buttons.iter().map(|b| b.label.as_str()).collect();
-        assert_eq!(labels, ["Resume 10:00", "From the start", "Mark watched", "Add to favorites"]);
+        assert_eq!(
+            labels,
+            ["Resume 10:00", "From the start", "Mark watched", "Add to favorites", s::DEBUG_INFO]
+        );
         assert!(matches!(take_fetch(&mut ctx).1, Fetch::Similar(_)));
+        // Debug info opens the report dialog for this item (D83).
+        v.button_focus = Some(4);
+        v.on_action(InputAction::Select, t, &mut ctx);
+        assert!(matches!(ctx.open.take(), Some(Open::Debug { ref id, .. }) if *id == v.id));
+        v.button_focus = Some(0);
         // Select on Resume plays from the resume point.
         v.on_action(InputAction::Select, t, &mut ctx);
         assert!(matches!(ctx.open, Some(Open::Play { start_ticks: 6_000_000_000, .. })));

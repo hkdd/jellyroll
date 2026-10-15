@@ -189,6 +189,8 @@ pub enum Fetch {
         /// Have the server transcode (the user chose it, D71).
         transcode: bool,
     },
+    /// What the server says about an item, for a debug report (D83).
+    Debug(String),
 }
 
 /// Tracks chosen before Play, as server stream indexes; None keeps the
@@ -212,7 +214,22 @@ pub enum Fetched {
     Names(Vec<String>),
     UserData { favorite: bool, played: bool },
     Play(Box<PlayFetched>),
+    Debug(Box<DebugServer>),
     Failed(String),
+}
+
+/// The server's side of a debug report (D83): raw JSON as the server sent
+/// it (tokens still in; the report redacts), or the error instead.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DebugServer {
+    pub server_info: String,
+    pub item: String,
+    /// PlaybackInfo as jellyroll asks for direct play: (request, answer).
+    pub direct: (String, String),
+    /// PlaybackInfo asking for a transcode: (request, answer).
+    pub transcode: (String, String),
+    /// What Play would get (stream URL, jellyroll's PlayInfo), or why not.
+    pub play: Result<PlayFetched, String>,
 }
 
 /// The player's data plus how to reach the server (stream URL, external
@@ -655,6 +672,56 @@ mod tests {
         assert_eq!(pf.info.audio.len(), 2);
         assert!(pf.info.subtitles.iter().any(|t| t.external.is_some()));
         assert!(pf.authorization.contains("Token="));
+
+        // Debug report (D83): the server's side, then the whole file, with
+        // the access token left out.
+        assert!(h.send(Cmd::Fetch { id: 78, req: Fetch::Debug(movie.clone()) }));
+        let dbg = loop {
+            match next(&mut h, deadline) {
+                Event::Fetched { id: 78, result: Fetched::Debug(d) } => break d,
+                Event::Fetched { id: 78, result } => panic!("{result:?}"),
+                _ => {}
+            }
+        };
+        assert!(dbg.item.contains("\"MediaStreams\""), "{}", dbg.item);
+        assert!(dbg.direct.0.contains("\"DeviceProfile\""));
+        assert!(dbg.direct.1.contains("\"MediaSources\""), "{}", dbg.direct.1);
+        assert!(dbg.server_info.contains("\"Version\""), "{}", dbg.server_info);
+        assert!(dbg.play.is_ok());
+        let path = std::env::temp_dir()
+            .join(format!("jellyroll-debug-test-{}", std::process::id()))
+            .join("report.txt");
+        let input = crate::debug_report::Input {
+            title: "Test".into(),
+            item_id: movie.clone(),
+            server: *dbg,
+            about: vec![("Version".into(), "test".into())],
+            settings: vec![("audio".into(), "auto".into())],
+            audio_devices: Vec::new(),
+            auto_audio: None,
+        };
+        let done = crate::debug_report::start(input, path.clone());
+        while done.get().is_none() {
+            assert!(Instant::now() < deadline + Duration::from_secs(60), "report never finished");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(done.get().unwrap().as_ref().unwrap(), &path);
+        let text = std::fs::read_to_string(&path).unwrap();
+        for section in [
+            "===== This machine =====",
+            "===== Audio =====",
+            "===== Item, as the server describes it",
+            "===== PlaybackInfo: direct play answer =====",
+            "===== PlaybackInfo: transcode answer =====",
+            "===== jellyroll's decision =====",
+            "===== Test decode",
+            "===== jellyroll log (recent) =====",
+        ] {
+            assert!(text.contains(section), "missing {section}");
+        }
+        assert!(text.contains("check: Play"), "decision written");
+        assert!(!text.contains(jellyroll_mock_server::TOKEN), "token redacted");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
         assert!(h.send(Cmd::Report(Box::new(jellyfin_api::playback::Report {
             kind: jellyfin_api::playback::ReportKind::Stopped,
             item_id: movie.clone(),

@@ -7,6 +7,7 @@ mod args;
 mod audio;
 mod bench_scroll;
 mod config;
+mod debug_report;
 mod diagnostics;
 mod focus;
 mod frame_loop;

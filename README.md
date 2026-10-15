@@ -260,6 +260,18 @@ During playback:
 | Previous / next | Previous / next chapter |
 | Back | Close the menu, cancel a seek or the next-episode countdown, or stop |
 
+### Debug info (playback problems)
+
+On an item page, **Debug info** writes everything needed to diagnose why that
+item doesn't play well into one text file: this machine's decode
+capabilities, display and audio outputs, installed driver packages and
+settings; the server's full description of the file and its playback
+decision; jellyroll's own decision; an 8-second hidden test decode with the
+player's verbose log; and recent log lines. Access tokens are left out. The
+dialog shows the path, e.g.
+`/home/jellyroll/.local/share/jellyroll/debug/jellyroll-debug-heat-20261015-010203.txt`.
+Fetch it with `sudo cat` (over SSH) and attach it to a bug report.
+
 ### HDMI-CEC (TV remote)
 
 jellyroll talks to the kernel's CEC devices (`/dev/cec0`, ...) directly. On

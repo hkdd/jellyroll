@@ -28,6 +28,11 @@ pub enum Open {
         title: String,
         tracks: crate::net::TrackChoice,
     },
+    /// Write a debug report for an item (D83).
+    Debug {
+        id: String,
+        title: String,
+    },
 }
 
 /// A setting changed on the Settings page; HomeApp applies and saves it.

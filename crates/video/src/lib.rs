@@ -15,6 +15,7 @@
 //! synchronous getter.
 
 mod ffi;
+pub mod probe;
 pub mod va;
 
 use std::ffi::{CStr, CString, c_char, c_int, c_void};

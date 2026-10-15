@@ -188,9 +188,31 @@ pub fn fill(template: &str, args: &[&str]) -> String {
     out
 }
 
+pub const DEBUG_INFO: &str = "Debug info";
+pub const DEBUG_TITLE: &str = "Debug information";
+pub const DEBUG_CONFIRM: &str =
+    "Write everything needed to diagnose playback problems with %s to this file?";
+pub const DEBUG_TAKES: &str = "It takes about 15 seconds: the item plays for a few seconds without picture or sound. Access tokens are left out.";
+pub const DEBUG_WRITE: &str = "Write";
+pub const DEBUG_WORKING: &str = "Collecting… (about 15 seconds)";
+pub const DEBUG_DONE: &str = "Written to:";
+pub const DEBUG_READ_HINT: &str = "Over SSH: sudo cat <that path>";
+pub const DEBUG_FAILED: &str = "Couldn't write it: %s";
+pub const OK: &str = "OK";
+
 /// Every string, for the glyph-coverage test.
 #[cfg(test)]
 pub const ALL: &[&str] = &[
+    DEBUG_INFO,
+    DEBUG_TITLE,
+    DEBUG_CONFIRM,
+    DEBUG_TAKES,
+    DEBUG_WRITE,
+    DEBUG_WORKING,
+    DEBUG_DONE,
+    DEBUG_READ_HINT,
+    DEBUG_FAILED,
+    OK,
     NAV_HOME,
     NAV_SEARCH,
     NAV_SETTINGS,

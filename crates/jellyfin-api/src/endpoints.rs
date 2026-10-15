@@ -40,6 +40,12 @@ impl<T> Request<T> {
         self.body = Some(body.to_string());
         self
     }
+
+    /// The same request with the answer kept as raw JSON (every field the
+    /// server sends, for diagnostics; the DTOs keep only what the app uses).
+    pub fn raw(self) -> Request<serde_json::Value> {
+        Request { method: self.method, path: self.path, body: self.body, _response: PhantomData }
+    }
 }
 
 /// Fields beyond the defaults that rows need.

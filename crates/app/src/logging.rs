@@ -7,6 +7,13 @@
 //! disabled where they are written (a cached check, no allocation). Built
 //! with `--features profile` and run with `--trace FILE`, a Chrome-trace
 //! layer records them (and info-level events) to FILE.
+//!
+//! The last few hundred info-and-above lines are also kept in memory for
+//! debug reports (D83): the journal isn't readable by the app's user.
+
+use std::collections::VecDeque;
+use std::fmt::Write as _;
+use std::sync::Mutex;
 
 use tracing_subscriber::Layer;
 use tracing_subscriber::filter::{LevelFilter, Targets};
@@ -22,6 +29,60 @@ fn filter(config_level: &str) -> Targets {
         .and_then(|s| s.parse::<Targets>().ok())
         .or_else(|| config_level.parse::<Targets>().ok())
         .unwrap_or_else(|| Targets::new().with_default(LevelFilter::INFO))
+}
+
+/// Lines kept for [`recent`].
+const RECENT_LINES: usize = 400;
+
+static RECENT: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+
+/// The latest log lines, oldest first ("2026-10-15T01:02:03Z INFO target:
+/// message key=value").
+pub fn recent() -> Vec<String> {
+    RECENT.lock().map(|r| r.iter().cloned().collect()).unwrap_or_default()
+}
+
+/// Keeps info-and-above events in [`RECENT`]. Only logged events cost
+/// anything (they allocate; logging is never per frame).
+struct Recent;
+
+impl<S: tracing::Subscriber> Layer<S> for Recent {
+    fn on_event(&self, e: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        struct Fields(String, String);
+        impl tracing::field::Visit for Fields {
+            fn record_debug(&mut self, f: &tracing::field::Field, v: &dyn std::fmt::Debug) {
+                if f.name() == "message" {
+                    let _ = write!(self.0, "{v:?}");
+                } else {
+                    let _ = write!(self.1, " {}={v:?}", f.name());
+                }
+            }
+            fn record_str(&mut self, f: &tracing::field::Field, v: &str) {
+                if f.name() == "message" {
+                    self.0.push_str(v);
+                } else {
+                    let _ = write!(self.1, " {}={v}", f.name());
+                }
+            }
+        }
+        let mut fields = Fields(String::new(), String::new());
+        e.record(&mut fields);
+        let m = e.metadata();
+        let line = format!(
+            "{} {} {}: {}{}",
+            crate::debug_report::utc_now(),
+            m.level(),
+            m.target(),
+            fields.0,
+            fields.1
+        );
+        if let Ok(mut r) = RECENT.lock() {
+            if r.len() == RECENT_LINES {
+                r.pop_front();
+            }
+            r.push_back(line);
+        }
+    }
 }
 
 /// Keeps the trace file open; dropping it writes the end of the file.
@@ -74,7 +135,8 @@ pub fn init(config_level: &str, trace: Option<&std::path::Path>) -> Option<Trace
         }
         (None, None)
     };
-    let registry = tracing_subscriber::registry().with(chrome);
+    let recent = Recent.with_filter(LevelFilter::INFO);
+    let registry = tracing_subscriber::registry().with(chrome).with(recent);
     // Use native journald fields (priorities, spans) only when stderr really
     // is the journal stream systemd set up for us.
     if stderr_is_journal()
