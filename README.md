@@ -245,7 +245,7 @@ repeats at the same rate.
 | Seek back / forward | `r` / `f` | LB / RB | Rewind / Fast-forward |
 | Previous / next | `,` / `.` | LT / RT | Skip back / forward, Channel −/+ |
 | Search | `/` | Back / Select | Blue |
-| Volume, mute | `+` `-` `m` | | Volume, Mute (if the TV forwards them) |
+| Volume, mute (during playback; jellyroll's own volume, remembered) | `+` `-` `m`, media keys | | Volume, Mute (if the TV forwards them) |
 | Perf HUD | F3 | | |
 
 During playback:
@@ -259,6 +259,15 @@ During playback:
 | Info | Codec, decoder, play method, dropped frames |
 | Previous / next | Previous / next chapter |
 | Back | Close the menu, cancel a seek or the next-episode countdown, or stop |
+
+### Volume
+
+During playback, `+`/`-` (or a media remote's volume keys) change
+jellyroll's own volume in 5 % steps and `m` mutes; a small indicator shows
+the level. The level is remembered for the next video. Jellyfin remote
+control apps can set it too (volume slider, mute), and see the current
+level. It is mpv's software volume, not the TV's: it has no effect on
+passthrough audio (Dolby/DTS sent to a receiver untouched).
 
 ### HDR10 passthrough
 

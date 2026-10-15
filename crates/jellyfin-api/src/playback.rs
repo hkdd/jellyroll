@@ -179,6 +179,11 @@ pub struct Report {
     pub audio_stream_index: Option<i32>,
     pub subtitle_stream_index: Option<i32>,
     pub play_method: PlayMethod,
+    /// Volume 0-100 and mute, for remote-control apps' volume controls.
+    #[serde(default = "full_volume")]
+    pub volume: u8,
+    #[serde(default)]
+    pub muted: bool,
     /// Whose playback this is (not sent: the token says that). Queued
     /// reports go out only while this user is signed in; empty in reports
     /// saved by older versions.
@@ -191,6 +196,10 @@ pub enum ReportKind {
     Start,
     Progress,
     Stopped,
+}
+
+fn full_volume() -> u8 {
+    100
 }
 
 impl Report {
@@ -210,7 +219,8 @@ impl Report {
             let extra = json!({
                 "CanSeek": true,
                 "IsPaused": self.paused,
-                "IsMuted": false,
+                "IsMuted": self.muted,
+                "VolumeLevel": self.volume,
                 "PlayMethod": self.play_method,
                 "AudioStreamIndex": self.audio_stream_index,
                 // -1: subtitles off (Jellyfin's convention).
@@ -290,6 +300,8 @@ mod tests {
             audio_stream_index: Some(1),
             subtitle_stream_index: None,
             play_method: PlayMethod::DirectPlay,
+            volume: 65,
+            muted: true,
             user_id: String::new(),
         };
         let req = r.request();
@@ -299,6 +311,8 @@ mod tests {
         assert_eq!(b["IsPaused"], true);
         assert_eq!(b["SubtitleStreamIndex"], -1);
         assert_eq!(b["PlayMethod"], "DirectPlay");
+        assert_eq!(b["VolumeLevel"], 65);
+        assert_eq!(b["IsMuted"], true);
         r.kind = ReportKind::Stopped;
         let b: Value = serde_json::from_str(r.request().body.as_deref().unwrap()).unwrap();
         assert_eq!(b["PositionTicks"], 42);

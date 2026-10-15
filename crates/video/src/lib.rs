@@ -75,6 +75,9 @@ pub struct PlayerOptions {
     pub render_quality: String,
     /// The TV is in HDR10 mode (M9): render PQ/BT.2020, no tone mapping.
     pub hdr_output: bool,
+    /// mpv `volume` (0-100) and `mute` at the start.
+    pub volume: u8,
+    pub mute: bool,
 }
 
 impl Default for PlayerOptions {
@@ -98,6 +101,8 @@ impl Default for PlayerOptions {
             tone_mapping: "auto".into(),
             render_quality: "auto".into(),
             hdr_output: false,
+            volume: 100,
+            mute: false,
         }
     }
 }
@@ -505,6 +510,8 @@ impl Player {
             player.set_option("profile", "fast")?;
             player.state.fast_render = true;
         }
+        player.set_option("volume", &opts.volume.min(100).to_string())?;
+        player.set_option("mute", if opts.mute { "yes" } else { "no" })?;
         if opts.hdr_output {
             for (k, v) in hdr_target(true, player.fast_render) {
                 player.set_option(k, v)?;
@@ -681,6 +688,15 @@ impl Player {
     }
 
     /// Switches the audio output (mpv `audio-device`) during playback.
+    /// Software volume, 0-100 (no effect on passthrough audio).
+    pub fn set_volume(&mut self, volume: u8) {
+        let _ = self.command(&["set", "volume", &volume.min(100).to_string()]);
+    }
+
+    pub fn set_mute(&mut self, mute: bool) {
+        let _ = self.command(&["set", "mute", if mute { "yes" } else { "no" }]);
+    }
+
     pub fn set_audio_device(&mut self, device: &str) {
         let _ = self.command(&["set", "audio-device", device]);
     }

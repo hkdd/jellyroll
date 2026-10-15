@@ -1240,6 +1240,7 @@ fn start_play<P: Platform>(
         audio_device: req.audio.device,
         audio_spdif: req.audio.spdif,
         audio_channels: req.audio.channels,
+        volume: req.audio.volume.unwrap_or(100),
         interpolation: req.video.interpolation,
         deinterlace: req.video.deinterlace,
         tone_mapping: req.video.tone_mapping,

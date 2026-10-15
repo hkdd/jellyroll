@@ -28,6 +28,8 @@ pub struct UiPrefs {
     pub tone_mapping: Option<String>,
     pub render_quality: Option<String>,
     pub hdr: Option<String>,
+    /// Playback volume 0-100 (jellyroll's own, not the TV's); None: 100.
+    pub volume: Option<u8>,
     /// Artwork disk cache size in MB; None: the config's.
     pub image_cache_mb: Option<u64>,
     /// Screensaver delay in minutes (0 = off); None: the config's.

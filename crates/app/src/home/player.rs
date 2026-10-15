@@ -30,6 +30,8 @@ use crate::osd::fmt_time;
 use crate::playback::Playback;
 
 const OSD_HIDE: Duration = Duration::from_secs(4);
+/// How long the volume indicator stays after a change.
+const VOLUME_SHOW: Duration = Duration::from_secs(2);
 /// Progress report period while playing (spec 7.2: ~10 s).
 const REPORT_EVERY: Duration = Duration::from_secs(10);
 /// The red software-decoding badge shows this long after the first frame
@@ -125,6 +127,11 @@ pub struct PlayerUi {
     count_l: Line<48>,
     count_shown: i64,
     info: [Line<112>; 7],
+    /// Volume and mute as last applied (for reports and the indicator).
+    vol: (u8, bool),
+    /// Show the volume indicator until then.
+    vol_until: Option<Instant>,
+    vol_l: Line<24>,
 }
 
 fn secs_to_ticks(s: f64) -> i64 {
@@ -195,6 +202,9 @@ impl PlayerUi {
             count_l: Line::default(),
             count_shown: -1,
             info: Default::default(),
+            vol: (100, false),
+            vol_until: None,
+            vol_l: Line::default(),
         };
         (ui, req)
     }
@@ -215,6 +225,8 @@ impl PlayerUi {
             audio_stream_index: self.audio,
             subtitle_stream_index: self.subtitle,
             play_method: i.play_method,
+            volume: self.vol.0,
+            muted: self.vol.1,
             user_id: String::new(),
         }))
     }
@@ -245,6 +257,7 @@ impl PlayerUi {
     pub fn overlay_visible(&self, now: Instant, st: &PlaybackState) -> bool {
         self.osd_visible(now, st)
             || self.diagnostics
+            || self.vol_until.is_some_and(|t| now < t)
             || (st.software_decode() && self.software_badge(now))
             || !self.started
             || st.buffering
@@ -265,10 +278,8 @@ impl PlayerUi {
             (a, b) => a.or(b),
         };
         let scrub = self.scrub.as_ref().map(|s| s.last + SCRUB_COMMIT);
-        match (osd, scrub) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        let vol = self.vol_until.filter(|t| *t > now);
+        [osd, scrub, vol].into_iter().flatten().min()
     }
 
     // ---- tracks --------------------------------------------------------
@@ -401,6 +412,11 @@ impl PlayerUi {
         ctx: &mut Ctx,
     ) -> Outcome {
         use InputAction as A;
+        // Volume keys work over menus and don't bring up the bar.
+        if pb.volume_action(a) {
+            self.volume_changed(pb, now, ctx);
+            return Outcome::Continue { redraw: true };
+        }
         self.show(now);
         if let Some(f) = self.menu {
             let rows = self.rows();
@@ -463,6 +479,15 @@ impl PlayerUi {
         now: Instant,
         ctx: &mut Ctx,
     ) -> Outcome {
+        match rc {
+            Remote::SetVolume(v) => pb.set_volume(*v),
+            Remote::SetMute(m) => pb.set_muted(*m),
+            _ => {}
+        }
+        if matches!(rc, Remote::SetVolume(_) | Remote::SetMute(_)) {
+            self.volume_changed(pb, now, ctx);
+            return Outcome::Continue { redraw: true };
+        }
         self.show(now);
         let row = match rc {
             Remote::SetPaused(want) => {
@@ -498,6 +523,17 @@ impl PlayerUi {
         Outcome::Continue { redraw: true }
     }
 
+    /// After a volume change: indicator up, and the server told (remote
+    /// apps show the level).
+    fn volume_changed(&mut self, pb: &Playback, now: Instant, ctx: &mut Ctx) {
+        self.vol = (pb.volume, pb.muted);
+        self.vol_until = Some(now + VOLUME_SHOW);
+        if self.started {
+            let st = &pb.player.state;
+            ctx.send(self.report(ReportKind::Progress, st.time_pos, st.paused));
+        }
+    }
+
     /// A fetch answered (the next episode's play data).
     pub fn on_fetched(&mut self, id: u64, result: &Fetched) -> bool {
         if self.next_fetch != Some(id) {
@@ -519,6 +555,7 @@ impl PlayerUi {
     /// Reports, scrub commits, the next-episode countdown and the end.
     pub fn tick(&mut self, pb: &mut Playback, now: Instant, ctx: &mut Ctx) -> Tick {
         let mut redraw = false;
+        self.vol = (pb.volume, pb.muted);
         let (pos, paused) = (pb.player.state.time_pos, pb.player.state.paused);
         if pb.started && !self.started {
             self.started = true;
@@ -675,6 +712,9 @@ impl PlayerUi {
         }
         if self.diagnostics {
             self.draw_info(r, st, sx, sy);
+        }
+        if self.vol_until.is_some_and(|t| now < t) {
+            self.draw_volume(r, lw - sx, sy);
         }
 
         let osd = self.osd_visible(now, st);
@@ -916,6 +956,28 @@ impl PlayerUi {
             let c = if n == focus { Color::rgb(10, 10, 14) } else { TEXT };
             r.text(label, &item, Point::new(x + 8.0, y), c);
             y += 44.0;
+        }
+    }
+
+    /// "Volume 65 %" with a bar, or "Muted", right-aligned at `right`.
+    fn draw_volume<R: Renderer>(&mut self, r: &mut R, right: f32, top: f32) {
+        let (v, muted) = self.vol;
+        self.vol_l.clear();
+        if muted {
+            let _ = write!(self.vol_l, "{}", s::MUTED);
+        } else {
+            let _ = write!(self.vol_l, "{} {v} %", s::VOLUME);
+        }
+        let style = TextStyle::new(24.0, Weight::Bold);
+        let (w, h) = (300.0, 92.0);
+        let panel = Rect::new(right - w, top, w, h);
+        r.fill_rrect(panel, 12.0, PANEL);
+        r.text(self.vol_l.as_str(), &style, Point::new(panel.x + 20.0, panel.y + 16.0), TEXT);
+        let track = Rect::new(panel.x + 20.0, panel.y + 62.0, w - 40.0, 8.0);
+        r.fill_rrect(track, 4.0, TRACK_BG);
+        let frac = if muted { 0.0 } else { v as f32 / 100.0 };
+        if frac > 0.0 {
+            r.fill_rrect(Rect::new(track.x, track.y, track.w * frac, track.h), 4.0, TEXT);
         }
     }
 

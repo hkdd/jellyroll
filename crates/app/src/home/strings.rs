@@ -169,6 +169,8 @@ pub const PLAYER_HINT: &str =
     "Left/Right: seek    Down: audio & subtitles    Info: details    Back: stop";
 pub const PAUSED: &str = "Paused";
 pub const BUFFERING: &str = "Buffering…";
+pub const VOLUME: &str = "Volume";
+pub const MUTED: &str = "Muted";
 pub const AUDIO: &str = "Audio";
 pub const SUBTITLES: &str = "Subtitles";
 pub const SUBTITLES_OFF: &str = "Off";
@@ -373,6 +375,8 @@ pub const ALL: &[&str] = &[
     PLAYER_HINT,
     PAUSED,
     BUFFERING,
+    VOLUME,
+    MUTED,
     AUDIO,
     SUBTITLES,
     SUBTITLES_OFF,

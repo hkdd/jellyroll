@@ -54,6 +54,12 @@ pub const SUPPORTED: &[G] = &[
     G::DisplayMessage,
     G::SetAudioStreamIndex,
     G::SetSubtitleStreamIndex,
+    G::VolumeUp,
+    G::VolumeDown,
+    G::ToggleMute,
+    G::Mute,
+    G::Unmute,
+    G::SetVolume,
 ];
 
 /// A random-ish factor in [0.5, 1.5) for backoff jitter (std only: the
@@ -118,6 +124,15 @@ pub fn remote(msg: &ServerMessage) -> Option<Remote> {
                         .map_or(MESSAGE_DEFAULT, Duration::from_millis)
                         .min(Duration::from_secs(60));
                     Remote::Message { text, timeout }
+                }
+                G::VolumeUp => Remote::Input(A::VolUp),
+                G::VolumeDown => Remote::Input(A::VolDown),
+                G::ToggleMute => Remote::Input(A::Mute),
+                G::Mute => Remote::SetMute(true),
+                G::Unmute => Remote::SetMute(false),
+                G::SetVolume => {
+                    let v = arg("Volume")?.trim().parse::<f64>().ok()?;
+                    Remote::SetVolume(v.round().clamp(0.0, 100.0) as u8)
                 }
                 G::SetAudioStreamIndex => Remote::AudioStream(index()?),
                 G::SetSubtitleStreamIndex => Remote::SubtitleStream(index()?),
@@ -382,6 +397,15 @@ mod tests {
         );
         assert_eq!(remote(&gc(G::DisplayMessage, &[])), None);
         assert_eq!(remote(&gc(G::TakeScreenshot, &[])), None);
+        // Volume from remote-control apps.
+        assert_eq!(remote(&gc(G::VolumeUp, &[])), Some(Remote::Input(InputAction::VolUp)));
+        assert_eq!(remote(&gc(G::ToggleMute, &[])), Some(Remote::Input(InputAction::Mute)));
+        assert_eq!(remote(&gc(G::Mute, &[])), Some(Remote::SetMute(true)));
+        assert_eq!(remote(&gc(G::Unmute, &[])), Some(Remote::SetMute(false)));
+        assert_eq!(remote(&gc(G::SetVolume, &[("Volume", "42")])), Some(Remote::SetVolume(42)));
+        assert_eq!(remote(&gc(G::SetVolume, &[("Volume", "250")])), Some(Remote::SetVolume(100)));
+        assert_eq!(remote(&gc(G::SetVolume, &[])), None);
+        assert!(SUPPORTED.contains(&G::SetVolume));
     }
 
     #[test]

@@ -125,6 +125,8 @@ pub struct AudioOut {
     pub spdif: Option<String>,
     /// mpv `audio-channels`; None: mpv's default.
     pub channels: Option<String>,
+    /// Volume 0-100 at the start; None: 100.
+    pub volume: Option<u8>,
 }
 
 pub struct HomeApp {
@@ -279,6 +281,7 @@ impl UiSetting {
             spdif: self.passthrough(&device).then(|| self.audio.passthrough_codecs.clone()),
             channels: some(self.audio_channels()),
             device: some(device).or(auto),
+            volume: self.prefs.volume,
         }
     }
 
@@ -801,6 +804,7 @@ impl HomeApp {
                     None => player::Outcome::Stop,
                 });
                 self.update_player_wants();
+                self.remember_volume(pb);
                 out
             }
             (Remote::Input(a), None) => {
@@ -963,7 +967,16 @@ impl HomeApp {
             None => player::Outcome::Stop,
         });
         self.update_player_wants();
+        self.remember_volume(pb);
         out
+    }
+
+    /// Keeps the playback volume for the next video (and restarts).
+    fn remember_volume(&mut self, pb: &crate::playback::Playback) {
+        if self.ui.prefs.volume.unwrap_or(100) != pb.volume {
+            self.ui.prefs.volume = Some(pb.volume);
+            self.ui.save();
+        }
     }
 
     /// Per-frame playback work (reports, countdowns, the end). On `Next`,

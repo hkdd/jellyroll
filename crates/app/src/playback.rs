@@ -32,10 +32,16 @@ pub struct Playback {
     reported_decoder: bool,
     /// When mpv was started (the first-frame log says how long it took).
     opened_at: Instant,
+    /// Volume 0-100 and mute (mpv's software volume).
+    pub volume: u8,
+    pub muted: bool,
     /// Since when playback has been waiting for the network.
     stalled_at: Option<Instant>,
     stalls: u32,
 }
+
+/// Volume change per key press, in percent.
+const VOLUME_STEP: u8 = 5;
 
 /// Bytes per second to Mbit/s.
 pub fn mbit(bytes_per_sec: i64) -> f64 {
@@ -91,6 +97,8 @@ impl Playback {
             opened_at: now,
             stalled_at: None,
             stalls: 0,
+            volume: opts.volume.min(100),
+            muted: opts.mute,
         })
     }
 
@@ -146,6 +154,31 @@ impl Playback {
             redraw = true;
         }
         redraw
+    }
+
+    /// Volume up/down (5 % steps) or mute toggle. True if it was one.
+    pub fn volume_action(&mut self, a: InputAction) -> bool {
+        match a {
+            InputAction::VolUp => self.set_volume(self.volume.saturating_add(VOLUME_STEP)),
+            InputAction::VolDown => self.set_volume(self.volume.saturating_sub(VOLUME_STEP)),
+            InputAction::Mute => self.set_muted(!self.muted),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Sets the volume (0-100); changing it unmutes, like a TV.
+    pub fn set_volume(&mut self, v: u8) {
+        self.volume = v.min(100);
+        self.player.set_volume(self.volume);
+        if self.muted {
+            self.set_muted(false);
+        }
+    }
+
+    pub fn set_muted(&mut self, m: bool) {
+        self.muted = m;
+        self.player.set_mute(m);
     }
 
     /// Logs when playback stops to wait for the network and when it resumes,
@@ -216,6 +249,9 @@ impl Playback {
             A::Info => {
                 self.osd.diagnostics = !self.osd.diagnostics;
                 self.drops_next = now;
+            }
+            A::VolUp | A::VolDown | A::Mute => {
+                self.volume_action(a);
             }
             _ => {}
         }

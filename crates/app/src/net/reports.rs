@@ -165,6 +165,8 @@ mod tests {
             audio_stream_index: None,
             subtitle_stream_index: None,
             play_method: PlayMethod::DirectPlay,
+            volume: 100,
+            muted: false,
             user_id: String::new(),
         }
     }

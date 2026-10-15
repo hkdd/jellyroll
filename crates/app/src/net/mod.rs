@@ -277,6 +277,9 @@ pub enum Remote {
     /// Jellyfin stream index; -1 turns subtitles off.
     AudioStream(i32),
     SubtitleStream(i32),
+    /// Playback volume 0-100.
+    SetVolume(u8),
+    SetMute(bool),
     /// Show a message for a while.
     Message {
         text: String,
@@ -732,6 +735,8 @@ mod tests {
             audio_stream_index: Some(1),
             subtitle_stream_index: None,
             play_method: pf.info.play_method,
+            volume: 100,
+            muted: false,
             user_id: String::new(),
         }))));
         let mut n = 100;
