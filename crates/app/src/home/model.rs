@@ -379,15 +379,13 @@ pub fn badges(item: &BaseItemDto) -> Vec<Badge> {
             Some(V::HDR10) => "HDR10",
             Some(V::HDR10Plus) => "HDR10+",
             Some(V::HLG) => "HLG",
-            Some(
-                V::DOVI
-                | V::DOVIWithHDR10
-                | V::DOVIWithHLG
-                | V::DOVIWithSDR
-                | V::DOVIWithEL
-                | V::DOVIWithHDR10Plus
-                | V::DOVIWithELHDR10Plus,
-            ) => "Dolby Vision",
+            // With its fallback layer: what plays on a TV or player
+            // without Dolby Vision (jellyroll sends the HDR10 layer, M9).
+            Some(V::DOVIWithHDR10 | V::DOVIWithEL) => "Dolby Vision · HDR10",
+            Some(V::DOVIWithHDR10Plus | V::DOVIWithELHDR10Plus) => "Dolby Vision · HDR10+",
+            Some(V::DOVIWithHLG) => "Dolby Vision · HLG",
+            Some(V::DOVIWithSDR) => "Dolby Vision · SDR",
+            Some(V::DOVI) => "Dolby Vision",
             _ => "",
         };
         if !range.is_empty() {
