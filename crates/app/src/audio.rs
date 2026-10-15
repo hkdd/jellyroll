@@ -25,20 +25,27 @@ impl AudioDevice {
 }
 
 /// mpv's ALSA device for an HDMI output with a screen: `alsa/hdmi:CARD=<id>,`
-/// whose description names the PCM ("HDA Intel PCH, HDMI 0", possibly
-/// followed by "/HDMI Audio Output").
+/// whose description names the PCM ("HDA Intel PCH, HDMI 0/HDMI Audio
+/// Output"). With a screen connected ALSA names it after the screen instead
+/// ("HDA Intel PCH, LG TV SSCR2/…", as on an N150), so that matches too; and
+/// failing both, "HDMI n" is `DEV=n`.
 fn device_for<'a>(devices: &'a [AudioDevice], sink: &HdmiSink) -> Option<&'a AudioDevice> {
-    if sink.pcm_name.is_empty() {
-        return None;
-    }
     let prefix = format!("alsa/hdmi:CARD={},", sink.card);
-    devices.iter().find(|d| {
-        d.name.starts_with(&prefix)
-            && d.description
-                .split(['/', '\n'])
-                .next()
-                .and_then(|first| first.split_once(", "))
-                .is_some_and(|(_, pcm)| pcm.trim() == sink.pcm_name)
+    let named = |want: &str| {
+        devices.iter().find(|d| {
+            !want.is_empty()
+                && d.name.starts_with(&prefix)
+                && d.description
+                    .split(['/', '\n'])
+                    .next()
+                    .and_then(|first| first.split_once(", "))
+                    .is_some_and(|(_, pcm)| pcm.trim() == want)
+        })
+    };
+    named(&sink.pcm_name).or_else(|| named(&sink.monitor)).or_else(|| {
+        let n: u32 = sink.pcm_name.strip_prefix("HDMI ")?.trim().parse().ok()?;
+        let name = format!("{prefix}DEV={n}");
+        devices.iter().find(|d| d.name == name)
     })
 }
 
@@ -57,7 +64,10 @@ pub fn annotate(mut devices: Vec<AudioDevice>, sinks: &[HdmiSink]) -> Vec<AudioD
         if auto_note.is_none() {
             auto_note = Some(format!("{} · {screen}", s.pcm_name));
         }
-        if let Some(d) = devices.iter_mut().find(|d| d.name == name) {
+        // ALSA may already name the output after the screen.
+        if let Some(d) = devices.iter_mut().find(|d| d.name == name)
+            && !d.description.contains(&screen)
+        {
             d.note = screen;
         }
     }
@@ -135,6 +145,20 @@ mod tests {
         assert_eq!(auto_device(&devices, &[]), None, "no screen: mpv decides");
         let other_card = HdmiSink { card: "NVidia".into(), ..sink(3, "HDMI 0", "TV") };
         assert_eq!(auto_device(&devices, &[other_card]), None);
+    }
+
+    /// The N150's real list (debug report): ALSA names the connected output
+    /// after the TV, not "HDMI 0".
+    #[test]
+    fn finds_the_output_alsa_names_after_the_tv() {
+        let mut devices = n150();
+        devices[3].description = "HDA Intel PCH, LG TV SSCR2/HDMI Audio Output".into();
+        let tv = sink(3, "HDMI 0", "LG TV SSCR2");
+        assert_eq!(auto_device(&devices, &[tv]).as_deref(), Some("alsa/hdmi:CARD=PCH,DEV=0"));
+        // Neither name matches: HDMI n is DEV=n.
+        devices[5].description = "HDA Intel PCH, Something/HDMI Audio Output".into();
+        let other = sink(8, "HDMI 2", "Projector");
+        assert_eq!(auto_device(&devices, &[other]).as_deref(), Some("alsa/hdmi:CARD=PCH,DEV=2"));
     }
 
     #[test]

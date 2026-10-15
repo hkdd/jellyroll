@@ -271,6 +271,10 @@ pub fn run<P: Platform, R: Renderer>(
     // the desktop mode), and a play request waiting for a mode switch to
     // be presented (and the TV given time) before mpv starts.
     let mut playing_mode: Option<ModeInfo> = None;
+    // When jellyroll last changed the output mode, and a disconnect seen
+    // soon after (the TV re-syncing, D84).
+    let mut mode_switched_at: Option<Instant> = None;
+    let mut link_dropped_at: Option<Instant> = None;
     let mut pending_play: Option<PendingPlay> = None;
     let switch_delay = Duration::from_millis(config.config.display.refresh_switch_delay_ms);
     let mut last_present: Option<Instant> = None;
@@ -408,6 +412,14 @@ pub fn run<P: Platform, R: Renderer>(
                     hud.toggle(now);
                     dirty = true;
                 }
+                PlatformEvent::OutputConnected { connected: false }
+                    if in_mode_switch(mode_switched_at, now) =>
+                {
+                    // Many TVs drop the link while they re-sync to a new
+                    // mode (D84): not a disconnect unless it lasts.
+                    tracing::info!("display link dropped during a mode switch; waiting for it");
+                    link_dropped_at = Some(now);
+                }
                 PlatformEvent::OutputConnected { connected: false } => {
                     // TV off or cable out (spec 5.2): pause, keep running.
                     tracing::warn!("display disconnected; pausing playback");
@@ -416,6 +428,18 @@ pub fn run<P: Platform, R: Renderer>(
                     {
                         pb.player.toggle_pause();
                     }
+                }
+                PlatformEvent::OutputConnected { connected: true }
+                    if link_dropped_at.take().is_some() =>
+                {
+                    // Back from the re-sync: the mode is still the one we
+                    // set, so setting it again would only make the TV
+                    // re-sync once more. HDMI audio restarted with the link.
+                    tracing::info!("display link back after the mode switch");
+                    if let Some(pb) = playback.as_mut() {
+                        reopen_audio(pb, &view);
+                    }
+                    dirty = true;
                 }
                 PlatformEvent::OutputConnected { connected: true } => {
                     tracing::info!("display connected again; setting the output mode");
@@ -632,6 +656,9 @@ pub fn run<P: Platform, R: Renderer>(
                 && let Some(req) = h.take_play()
             {
                 pending_play = Some(prepare_play(p, req, &mut playing_mode, switch_delay, now));
+                if pending_play.as_ref().is_some_and(|pp| pp.needs_present) {
+                    mode_switched_at = Some(now);
+                }
                 overlay_shown = false;
                 repeat.reset();
                 dirty = true;
@@ -656,6 +683,9 @@ pub fn run<P: Platform, R: Renderer>(
                 && let Some(req) = h.take_play()
             {
                 pending_play = Some(prepare_play(p, req, &mut playing_mode, switch_delay, now));
+                if pending_play.as_ref().is_some_and(|pp| pp.needs_present) {
+                    mode_switched_at = Some(now);
+                }
             }
             overlay_shown = false;
             dirty = true;
@@ -666,16 +696,30 @@ pub fn run<P: Platform, R: Renderer>(
         {
             playback = start_play(p, pp.req, pp.matched, now);
             if playback.is_none() {
-                restore_mode(p, &mut playing_mode);
+                if restore_mode(p, &mut playing_mode) {
+                    mode_switched_at = Some(now);
+                }
                 if let View::Home(h) = &mut view {
                     h.playback_finished(now);
                 }
             }
             dirty = true;
         }
+        // Still no link once the re-sync window is over: a real disconnect.
+        if link_dropped_at.is_some() && !in_mode_switch(mode_switched_at, now) {
+            link_dropped_at = None;
+            tracing::warn!("display still disconnected after the mode switch; pausing playback");
+            if let Some(pb) = playback.as_mut()
+                && !pb.player.state.paused
+            {
+                pb.player.toggle_pause();
+            }
+        }
         if std::mem::take(&mut stop_playback) {
             playback = None;
-            restore_mode(p, &mut playing_mode);
+            if restore_mode(p, &mut playing_mode) {
+                mode_switched_at = Some(now);
+            }
             // mpv changed GL state; Skia must not trust its cache.
             r.reset_gl_state();
             repeat.reset();
@@ -839,6 +883,7 @@ pub fn run<P: Platform, R: Renderer>(
             tracing::info!(ms, settle_ms = pp.settle.as_millis() as u64, "output mode switched");
             pp.needs_present = false;
             pp.at = presented + pp.settle;
+            mode_switched_at = Some(presented);
         }
         if let Some(pb) = playback.as_mut() {
             pb.player.report_swap();
@@ -971,14 +1016,30 @@ fn prepare_play<P: Platform>(
     pending
 }
 
-/// Back to the desktop mode after playback, if it was changed.
-fn restore_mode<P: Platform>(p: &mut P, playing_mode: &mut Option<ModeInfo>) {
-    if playing_mode.take().is_some() {
-        match p.set_mode(None) {
-            Ok(()) => tracing::info!("output mode restored"),
-            Err(e) => tracing::warn!("restoring the output mode failed: {e}"),
+/// Back to the desktop mode after playback, if it was changed. True if
+/// a mode switch was requested.
+fn restore_mode<P: Platform>(p: &mut P, playing_mode: &mut Option<ModeInfo>) -> bool {
+    if playing_mode.take().is_none() {
+        return false;
+    }
+    match p.set_mode(None) {
+        Ok(()) => {
+            tracing::info!("output mode restored");
+            true
+        }
+        Err(e) => {
+            tracing::warn!("restoring the output mode failed: {e}");
+            false
         }
     }
+}
+
+/// How long after a mode switch a dropped link counts as the TV re-syncing
+/// (D84). TVs take 1-5 s; some drop the link twice.
+const RESYNC_GRACE: Duration = Duration::from_secs(10);
+
+fn in_mode_switch(switched_at: Option<Instant>, now: Instant) -> bool {
+    switched_at.is_some_and(|t| now < t + RESYNC_GRACE)
 }
 
 /// Starts mpv for a request from the browsing UI. `matched`: the output
@@ -1204,6 +1265,19 @@ fn finish_bench<P: Platform, R: Renderer>(
     }
     println!("result: {}", if pass { "PASS" } else { "FAIL" });
     if pass { Exit::BenchPassed } else { Exit::BenchFailed }
+}
+
+#[cfg(test)]
+mod resync_tests {
+    use super::*;
+
+    #[test]
+    fn link_drops_right_after_a_mode_switch_are_a_resync() {
+        let t = Instant::now();
+        assert!(!in_mode_switch(None, t), "no switch: a real disconnect");
+        assert!(in_mode_switch(Some(t), t + Duration::from_secs(2)));
+        assert!(!in_mode_switch(Some(t), t + RESYNC_GRACE), "too late: a real disconnect");
+    }
 }
 
 #[cfg(test)]

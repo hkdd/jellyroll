@@ -1229,6 +1229,25 @@ collects, on a background thread:
 Access tokens (`api_key=`, `ApiKey=`, `Token="…"`, `"AccessToken"`) are
 redacted. It shows on playable items only, after the other buttons.
 
+**D84: A dropped link right after a mode switch is the TV re-syncing.** A
+debug report from the N150 (4K HEVC HDR film, refresh switched to
+3840x2160 at 23.976 Hz on an LG TV) showed decoding was fine, but the TV
+dropped HDMI hot-plug for about a second while it re-synced. jellyroll took
+that as "display disconnected", paused the film, and when the link came back
+set the mode again, which made the TV re-sync once more: a black screen and
+"no signal" until Escape. Now, for 10 s after jellyroll changes the mode
+(requested, and again when presented), a disconnect is noted but nothing is
+paused. When the link returns, the mode is left as it is and only the audio
+output is reopened (HDMI audio restarts with the link). If the link is still
+down after those 10 s, it is a real disconnect, and playback pauses as
+before. Disconnects at any other time are handled as before.
+
+The same report showed D82's automatic audio never matched on that machine:
+with a screen connected, ALSA describes the HDMI device after the screen
+("HDA Intel PCH, LG TV SSCR2/HDMI Audio Output"), not the PCM name "HDMI 0".
+The match now accepts the PCM name, the screen's name, or failing both "HDMI
+n" as `DEV=n`; tested with that machine's real list.
+
 ## Dependency approvals
 
 | Crate | Status |
