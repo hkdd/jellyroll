@@ -257,3 +257,5 @@ Steps 1–4 work on beelink01 (cb0f79f; see Field notes). Next:
 
 - Next (2026-10-15): one atomic commit for refresh + HDR instead of two
   changes and a delay — plan in `docs/M9-SINGLE-SWITCH-PLAN.md`.
+- 2026-10-15: start/stop now one atomic commit (D87), confirmed on
+  beelink01; no "no signal" and no delay.
