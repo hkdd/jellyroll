@@ -187,7 +187,12 @@ impl SettingsView {
     }
 
     fn device_name(&self, d: &AudioDevice) -> String {
-        if d.name == "auto" { s::AUDIO_AUTO.into() } else { d.label().to_string() }
+        match d.name.as_str() {
+            "auto" if d.note.is_empty() => s::AUDIO_AUTO.into(),
+            // Where automatic plays: "automatic (HDMI 0 · LG TV SSCR2)".
+            "auto" => format!("{} ({})", s::AUDIO_AUTO, d.note),
+            _ => d.label(),
+        }
     }
 
     fn device_label(&self) -> String {
@@ -500,7 +505,11 @@ mod tests {
     fn devices() -> Vec<AudioDevice> {
         ["auto", "pipewire", "alsa/hdmi:CARD=PCH,DEV=0"]
             .iter()
-            .map(|n| AudioDevice { name: n.to_string(), description: String::new() })
+            .map(|n| AudioDevice {
+                name: n.to_string(),
+                description: String::new(),
+                note: String::new(),
+            })
             .collect()
     }
 

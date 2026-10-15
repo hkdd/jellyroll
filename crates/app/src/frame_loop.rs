@@ -425,14 +425,14 @@ pub fn run<P: Platform, R: Renderer>(
                     // HDMI audio went away with the display; reopen it.
                     if let Some(pb) = playback.as_mut() {
                         tracing::info!("reopening the audio output");
-                        pb.player.reload_audio();
+                        reopen_audio(pb, &view);
                     }
                     dirty = true;
                 }
                 PlatformEvent::AudioSinkChanged => {
                     if let Some(pb) = playback.as_mut() {
                         tracing::info!("HDMI audio sink changed; reopening the audio output");
-                        pb.player.reload_audio();
+                        reopen_audio(pb, &view);
                     }
                 }
                 PlatformEvent::CecStandby => {
@@ -887,6 +887,18 @@ pub fn run<P: Platform, R: Renderer>(
             systemd.ready(t);
             p.start_input_devices();
         }
+    }
+}
+
+/// Reopens the audio output after HDMI changed. On automatic it follows the
+/// TV to whichever HDMI output it is on now (D82).
+fn reopen_audio(pb: &mut Playback, view: &View) {
+    match view {
+        View::Home(h) if h.audio_auto() => match h.auto_audio_device() {
+            Some(d) => pb.player.set_audio_device(&d),
+            None => pb.player.reload_audio(),
+        },
+        _ => pb.player.reload_audio(),
     }
 }
 

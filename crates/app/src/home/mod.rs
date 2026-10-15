@@ -253,14 +253,22 @@ impl UiSetting {
         }
     }
 
-    pub fn audio_out(&self) -> AudioOut {
+    /// `auto`: where "auto" plays when an HDMI output has the TV on it
+    /// (D82); None leaves it to mpv.
+    pub fn audio_out(&self, auto: Option<String>) -> AudioOut {
         let device = self.audio_device();
         let some = |v: String| (!v.is_empty() && v != "auto").then_some(v);
         AudioOut {
             spdif: self.passthrough(&device).then(|| self.audio.passthrough_codecs.clone()),
             channels: some(self.audio_channels()),
-            device: some(device),
+            device: some(device).or(auto),
         }
+    }
+
+    /// The setting is automatic (no output chosen).
+    pub fn audio_auto(&self) -> bool {
+        let d = self.audio_device();
+        d.is_empty() || d == "auto"
     }
 }
 
@@ -402,7 +410,7 @@ impl HomeApp {
                     .as_ref()
                     .map(|h| (h.data.user_name.clone(), h.data.server_name.clone()))
                     .unwrap_or_default();
-                let devices = self.audio_devices.get().cloned().unwrap_or_default();
+                let devices = self.audio_device_list().unwrap_or_default();
                 let values = self.settings_values();
                 Page::Settings(Box::new(SettingsView::new(
                     vp,
@@ -823,11 +831,37 @@ impl HomeApp {
         used
     }
 
+    /// With the output on automatic: the HDMI output the TV is on, if mpv
+    /// lists it (D82). PipeWire's default can be another jack entirely
+    /// (on an N150 it is the analog line out).
+    pub fn auto_audio_device(&self) -> Option<String> {
+        if !self.ui.audio_auto() {
+            return None;
+        }
+        let devices = self.audio_devices.get()?;
+        let sinks = jellyroll_platform::hdmi_audio::connected();
+        let d = crate::audio::auto_device(devices, &sinks);
+        tracing::info!(device = d.as_deref().unwrap_or("mpv default"), "automatic audio output");
+        d
+    }
+
+    /// The audio outputs for Settings, marked with the screen on each HDMI
+    /// output.
+    fn audio_device_list(&self) -> Option<Vec<crate::audio::AudioDevice>> {
+        let list = self.audio_devices.get()?;
+        Some(crate::audio::annotate(list.clone(), &jellyroll_platform::hdmi_audio::connected()))
+    }
+
+    /// The audio output setting is automatic.
+    pub fn audio_auto(&self) -> bool {
+        self.ui.audio_auto()
+    }
+
     /// A playback request for the frame loop, once its stream URL is known.
     pub fn take_play(&mut self) -> Option<PlayRequest> {
         let mut req = self.play.take()?;
         req.match_refresh = self.ui.match_refresh(&self.output_key());
-        req.audio = self.ui.audio_out();
+        req.audio = self.ui.audio_out(self.auto_audio_device());
         req.video = self.ui.video_out(req.interlaced);
         Some(req)
     }
@@ -1121,12 +1155,11 @@ impl HomeApp {
         }
         let tex = &self.textures;
         let mut devices_arrived = self.power.as_mut().is_some_and(|m| m.update());
-        if let (Some(Page::Settings(v)), Some(list)) =
-            (self.stack.last_mut(), self.audio_devices.get())
-            && !v.has_devices()
-            && !list.is_empty()
+        if matches!(self.stack.last(), Some(Page::Settings(v)) if !v.has_devices())
+            && let Some(list) = self.audio_device_list().filter(|l| !l.is_empty())
+            && let Some(Page::Settings(v)) = self.stack.last_mut()
         {
-            v.set_devices(list.clone());
+            v.set_devices(list);
             devices_arrived = true;
         }
         let mut dirty = devices_arrived

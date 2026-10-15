@@ -1185,6 +1185,24 @@ the saved default target (or `graphical.target` when a display manager is
 installed); and starts `getty@tty1`. The `jellyroll` user and its data stay
 unless `--purge`.
 
+**D82: Automatic audio follows the TV's HDMI output.** On an N150 (Fedora
+44) "automatic" was silent: mpv's automatic choice is PipeWire's default
+sink, which there is the analog line out (ALC897), and PipeWire offered no
+HDMI sink at all. Choosing an HDMI output by hand was guesswork too: the TV
+was on "HDMI 0" (PCM 3), not the output number matching the physical port.
+`platform::hdmi_audio` now reads each HDMI PCM's "ELD" control (ALSA
+control ioctls `ELEM_LIST`/`ELEM_READ` on `/dev/snd/controlC*`, as `amixer`
+does, no alsa-lib). It maps a connected screen to its PCM device, which
+`/proc/asound/card*/eld#*` can't do (Intel pairs pins and PCMs
+dynamically), and reads the screen's name from the ELD. With the output on
+automatic, playback uses mpv's `alsa/hdmi:CARD=<id>,DEV=n` device whose
+description names that PCM ("HDA Intel PCH, HDMI 0"). On an HDMI change
+during playback it switches `audio-device` to wherever the TV is now. With
+no screen on HDMI it leaves the choice to mpv as before. Settings labels
+each HDMI output with its screen ("… HDMI 0 · LG TV SSCR2") and shows where
+automatic plays ("automatic (HDMI 0 · LG TV SSCR2)"). An output chosen by
+hand is used as is.
+
 ## Dependency approvals
 
 | Crate | Status |

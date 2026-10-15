@@ -593,6 +593,11 @@ impl Player {
         let _ = self.command(&["stop"]);
     }
 
+    /// Switches the audio output (mpv `audio-device`) during playback.
+    pub fn set_audio_device(&mut self, device: &str) {
+        let _ = self.command(&["set", "audio-device", device]);
+    }
+
     /// Reopens the audio output: after the display (and with it HDMI
     /// audio) came back, a sink that went away can stay silent otherwise.
     pub fn reload_audio(&mut self) {

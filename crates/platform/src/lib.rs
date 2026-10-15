@@ -11,6 +11,7 @@ pub mod alloc_counter;
 pub mod cec;
 mod console;
 pub mod gl;
+pub mod hdmi_audio;
 mod hotplug;
 pub mod pad;
 mod sdl;
