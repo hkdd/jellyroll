@@ -254,3 +254,6 @@ Steps 1–4 work on beelink01 (cb0f79f; see Field notes). Next:
   HDR10 base layer) start reliably in HDR10 on beelink01 with the
   sequenced switch. Steps 1–4 confirmed on hardware. Next: Step 5 (OSD
   brightness in HDR), then Step 6 only if banding is visible.
+
+- Next (2026-10-15): one atomic commit for refresh + HDR instead of two
+  changes and a delay — plan in `docs/M9-SINGLE-SWITCH-PLAN.md`.
