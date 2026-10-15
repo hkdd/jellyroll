@@ -222,3 +222,17 @@ above), TODO.md (M9 status), debug report fields, config.example.toml.
 | 5 OSD in PQ | not started | |
 | 6 10-bit framebuffer | not started | |
 | 7 Docs | partly (README "HDR10 passthrough", D86; finish after hardware test) | see git log |
+
+## Resume here
+
+Steps 1–4 are built and pushed (main, commit b57144a or later) but not yet
+run on beelink01. Next:
+
+1. Get the probe output from beelink01 (`--print-diagnostics | grep ^hdr`)
+   and check `PQ yes`, `HDR_OUTPUT_METADATA present`, `BT2020_RGB` listed.
+2. Play an HDR10 film; check the journal (`sudo journalctl -t jellyroll`)
+   for `HDR10 passthrough on=true` or the reason it didn't switch, the TV's
+   HDR badge, the Info panel's "HDR10 to the TV", and whether `vo` drops
+   stop.
+3. If the set fails with `EACCES`/`EINVAL`, see **Risks and checks**.
+4. Then Step 5 (OSD in PQ), Step 6 if banding shows, Step 7.
