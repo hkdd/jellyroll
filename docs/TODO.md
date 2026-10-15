@@ -55,5 +55,6 @@ Not doing:
 
 Deferred:
 - M9 (HDR10 passthrough, native DRM backend, overlay-plane video, spec
-  7.4) until newer hardware (D59).
+  7.4) until newer hardware (D59). HDR10 passthrough is now in progress
+  on the N150: plan and progress in `docs/M9-HDR-PLAN.md`.
 - The 72-hour soak (M10): everyday use instead; `--soak` stays.
