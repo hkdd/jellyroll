@@ -290,7 +290,15 @@ pub fn run<P: Platform, R: Renderer>(
             earliest(systemd.next_deadline(), bench_end),
         );
         let deadline = earliest(deadline, script.as_ref().and_then(|s| s.next_deadline()));
-        let deadline = earliest(deadline, pending_play.as_ref().map(|pp| pp.at));
+        let deadline = earliest(
+            deadline,
+            pending_play.as_ref().map(|pp| match pp.hdr_next {
+                // While the link is down, its return (an event) wakes the
+                // loop; poll gently rather than spin on a past deadline.
+                Some(_) => (pp.at + HDR_AFTER_MODE).max(now + Duration::from_millis(100)),
+                None => pp.at,
+            }),
+        );
         let deadline = earliest(deadline, soak.as_ref().and_then(|s| s.next_deadline()));
         let deadline = earliest(deadline, saver.next_deadline());
         let (deadline, animating) = match (&playback, &view) {
@@ -695,7 +703,24 @@ pub fn run<P: Platform, R: Renderer>(
             dirty = true;
         }
         // Start a waiting request once its mode switch is on screen.
-        if pending_play.as_ref().is_some_and(|pp| !pp.needs_present && now >= pp.at)
+        // The refresh switch has settled: now HDR, then settle again.
+        if let Some(pp) = pending_play.as_mut()
+            && !pp.needs_present
+            && pp.hdr_next.is_some()
+            && link_dropped_at.is_none()
+            && now >= pp.at + HDR_AFTER_MODE
+            && let Some(want) = pp.hdr_next.take()
+        {
+            if apply_hdr(p, want, &mut hdr_on) {
+                pp.needs_present = true;
+                mode_switched_at = Some(now);
+            }
+            pp.hdr = hdr_on;
+            dirty = true;
+        }
+        if pending_play
+            .as_ref()
+            .is_some_and(|pp| !pp.needs_present && pp.hdr_next.is_none() && now >= pp.at)
             && let Some(pp) = pending_play.take()
         {
             playback = start_play(p, pp.req, pp.matched, pp.hdr, now);
@@ -965,6 +990,8 @@ struct PendingPlay {
     at: Instant,
     /// The TV is in HDR10 mode: mpv renders PQ.
     hdr: bool,
+    /// HDR on/off still to switch once the refresh switch has settled.
+    hdr_next: Option<bool>,
 }
 
 /// Picks the output mode for a request (spec 5.2) and asks for it.
@@ -978,7 +1005,30 @@ fn prepare_play<P: Platform>(
     settle: Duration,
     now: Instant,
 ) -> PendingPlay {
-    let hdr_switched = switch_hdr(p, &req, hdr_on);
+    let want = want_hdr(p, &req);
+    let mut pp = prepare_mode(p, req, playing_mode, settle, now);
+    if want != *hdr_on {
+        if pp.needs_present {
+            // Two changes back to back can leave the TV without a picture
+            // (it is still re-syncing from the first): switch HDR once the
+            // refresh switch has settled.
+            pp.hdr_next = Some(want);
+        } else if apply_hdr(p, want, hdr_on) {
+            pp.needs_present = true;
+        }
+    }
+    pp.hdr = *hdr_on;
+    pp
+}
+
+/// The refresh-rate half of [`prepare_play`].
+fn prepare_mode<P: Platform>(
+    p: &mut P,
+    req: crate::home::PlayRequest,
+    playing_mode: &mut Option<ModeInfo>,
+    settle: Duration,
+    now: Instant,
+) -> PendingPlay {
     let desktop = p.desktop_mode();
     let target = match (req.match_refresh, req.fps, &desktop) {
         (true, Some(fps), Some(d)) => crate::refresh::pick(&p.display_modes(), d, fps).cloned(),
@@ -994,11 +1044,12 @@ fn prepare_play<P: Platform>(
     };
     let mut pending = PendingPlay {
         matched: target.is_some(),
-        needs_present: hdr_switched,
+        needs_present: false,
         settle,
         at: now,
         req,
-        hdr: *hdr_on,
+        hdr: false,
+        hdr_next: None,
     };
     if pending.req.match_refresh && target.is_none() {
         tracing::info!(fps = pending.req.fps, "no output mode matches this video's frame rate");
@@ -1030,11 +1081,10 @@ fn prepare_play<P: Platform>(
     pending
 }
 
-/// HDR10 passthrough for a request (M9): switches the TV into HDR10 for
-/// an HDR10 video when the setting allows it and the TV supports PQ, and
-/// back to SDR otherwise. True if the TV was switched (it re-syncs).
-fn switch_hdr<P: Platform>(p: &mut P, req: &crate::home::PlayRequest, hdr_on: &mut bool) -> bool {
-    let want = req.hdr10
+/// HDR10 passthrough for a request (M9): HDR10 for an HDR10 video when the
+/// setting allows it and the TV supports PQ, SDR otherwise.
+fn want_hdr<P: Platform>(p: &P, req: &crate::home::PlayRequest) -> bool {
+    req.hdr10
         && req.video.hdr == "auto"
         && match p.hdr_caps() {
             Some(c) if c.pq => true,
@@ -1046,7 +1096,12 @@ fn switch_hdr<P: Platform>(p: &mut P, req: &crate::home::PlayRequest, hdr_on: &m
                 tracing::info!("the TV reports no HDR support (EDID); tone mapping to SDR");
                 false
             }
-        };
+        }
+}
+
+/// Switches the TV into (`want`) or out of HDR10. True if it switched (the
+/// TV re-syncs).
+fn apply_hdr<P: Platform>(p: &mut P, want: bool, hdr_on: &mut bool) -> bool {
     if want == *hdr_on {
         return false;
     }
@@ -1100,6 +1155,10 @@ fn restore_mode<P: Platform>(
         }
     }
 }
+
+/// After a refresh switch, how long the link must have been back before
+/// the HDR switch (two changes back to back left the TV without a picture).
+const HDR_AFTER_MODE: Duration = Duration::from_secs(3);
 
 /// How long after a mode switch a dropped link counts as the TV re-syncing
 /// (D84). TVs take 1-5 s; some drop the link twice.

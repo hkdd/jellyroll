@@ -236,3 +236,18 @@ run on beelink01. Next:
    stop.
 3. If the set fails with `EACCES`/`EINVAL`, see **Risks and checks**.
 4. Then Step 5 (OSD in PQ), Step 6 if banding shows, Step 7.
+
+### Field notes
+
+- 2026-10-15, beelink01 + LG TV: a Dolby Vision (HDR10 base layer) film
+  played in HDR10, TV showed its HDR badge. Then, intermittently, films
+  (the same one too) ended on "no signal" while jellyroll's log showed the
+  link back and mpv rendering. The HDR property change and SDL's refresh
+  modeset were back to back (the HDR set happened in `prepare_play`, the
+  refresh modeset at the next swap). Changed: the HDR switch now waits
+  until the refresh switch is presented, the link is back, and
+  `HDR_AFTER_MODE` (3 s) has passed; mpv starts after that
+  (`PendingPlay.hdr_next`). If it still fails, compare
+  `/sys/kernel/debug/dri/*/i915_display_info` (pipe bpp, output format)
+  between a working and a failing start, and consider Colorspace
+  `Default` (metadata only) or capping `max bpc`.
