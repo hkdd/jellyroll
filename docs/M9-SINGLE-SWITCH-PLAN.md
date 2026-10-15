@@ -135,7 +135,7 @@ One commit, objects and properties:
 | Step | State | Notes |
 |---|---|---|
 | Plan (this file) | done | |
-| 1 Atomic plumbing | not started | |
+| 1 Atomic plumbing | done | in `drm_hdr.rs`: `DrmMode`, `pick_mode`, `connector_modes`, `atomic_commit`, `HdrSwitch::commit_mode_hdr` (TEST_ONLY then commit); layout tests |
 | 2 set_mode_hdr | not started | |
 | 3 Frame loop | not started | |
 | 4 Test + docs | not started | |

@@ -168,6 +168,7 @@ impl HdrMetadata {
 // ---- DRM property ioctls (<drm/drm_mode.h>, 64-bit layouts) ----------------
 
 const OBJECT_CONNECTOR: u32 = 0xc0c0_c0c0;
+const OBJECT_CRTC: u32 = 0xcccc_cccc;
 const PROP_ENUM: u32 = 1 << 3;
 const PROP_BITMASK: u32 = 1 << 5;
 const PROP_NAME_LEN: usize = 32;
@@ -225,6 +226,127 @@ struct DestroyBlob {
     blob_id: u32,
 }
 
+/// `struct drm_mode_modeinfo`: one display mode as the kernel describes it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DrmMode {
+    pub clock: u32,
+    pub hdisplay: u16,
+    pub hsync_start: u16,
+    pub hsync_end: u16,
+    pub htotal: u16,
+    pub hskew: u16,
+    pub vdisplay: u16,
+    pub vsync_start: u16,
+    pub vsync_end: u16,
+    pub vtotal: u16,
+    pub vscan: u16,
+    pub vrefresh: u32,
+    pub flags: u32,
+    pub type_: u32,
+    pub name: [u8; PROP_NAME_LEN],
+}
+
+const MODE_FLAG_INTERLACE: u32 = 1 << 4;
+const MODE_FLAG_DBLSCAN: u32 = 1 << 5;
+
+impl DrmMode {
+    /// Exact refresh rate in Hz (23.976 and 24 differ here, not in
+    /// `vrefresh`).
+    pub fn hz(&self) -> f64 {
+        let total = self.htotal as f64 * self.vtotal as f64;
+        if total == 0.0 {
+            return 0.0;
+        }
+        let mut hz = self.clock as f64 * 1000.0 / total;
+        if self.flags & MODE_FLAG_INTERLACE != 0 {
+            hz *= 2.0;
+        }
+        if self.flags & MODE_FLAG_DBLSCAN != 0 {
+            hz /= 2.0;
+        }
+        hz
+    }
+
+    pub fn interlaced(&self) -> bool {
+        self.flags & MODE_FLAG_INTERLACE != 0
+    }
+
+    fn zeroed() -> Self {
+        Self {
+            clock: 0,
+            hdisplay: 0,
+            hsync_start: 0,
+            hsync_end: 0,
+            htotal: 0,
+            hskew: 0,
+            vdisplay: 0,
+            vsync_start: 0,
+            vsync_end: 0,
+            vtotal: 0,
+            vscan: 0,
+            vrefresh: 0,
+            flags: 0,
+            type_: 0,
+            name: [0; PROP_NAME_LEN],
+        }
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        // SAFETY: plain-data repr(C) struct without padding (size checked
+        // in tests: 68 bytes, all fields packed naturally).
+        unsafe { std::slice::from_raw_parts(self as *const Self as *const u8, size_of::<Self>()) }
+    }
+}
+
+/// The progressive mode of `w`×`h` closest to `hz`, within 0.01 Hz.
+pub fn pick_mode(modes: &[DrmMode], w: u32, h: u32, hz: f64) -> Option<&DrmMode> {
+    modes
+        .iter()
+        .filter(|m| m.hdisplay as u32 == w && m.vdisplay as u32 == h && !m.interlaced())
+        .map(|m| (m, (m.hz() - hz).abs()))
+        .filter(|(_, d)| *d < 0.01)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(m, _)| m)
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct GetConnector {
+    encoders_ptr: u64,
+    modes_ptr: u64,
+    props_ptr: u64,
+    prop_values_ptr: u64,
+    count_modes: u32,
+    count_props: u32,
+    count_encoders: u32,
+    encoder_id: u32,
+    connector_id: u32,
+    connector_type: u32,
+    connector_type_id: u32,
+    connection: u32,
+    mm_width: u32,
+    mm_height: u32,
+    subpixel: u32,
+    _pad: u32,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct Atomic {
+    flags: u32,
+    count_objs: u32,
+    objs_ptr: u64,
+    count_props_ptr: u64,
+    props_ptr: u64,
+    prop_values_ptr: u64,
+    reserved: u64,
+    user_data: u64,
+}
+
+pub const ATOMIC_TEST_ONLY: u32 = 0x0100;
+pub const ATOMIC_ALLOW_MODESET: u32 = 0x0400;
+
 const fn iowr(nr: c_ulong, size: usize) -> c_ulong {
     (3 << 30) | ((size as c_ulong) << 16) | ((b'd' as c_ulong) << 8) | nr
 }
@@ -233,6 +355,8 @@ const OBJ_GETPROPERTIES: c_ulong = iowr(0xB9, size_of::<ObjGetProperties>());
 const OBJ_SETPROPERTY: c_ulong = iowr(0xBA, size_of::<ObjSetProperty>());
 const CREATEPROPBLOB: c_ulong = iowr(0xBD, size_of::<CreateBlob>());
 const DESTROYPROPBLOB: c_ulong = iowr(0xBE, size_of::<DestroyBlob>());
+const GETCONNECTOR: c_ulong = iowr(0xA7, size_of::<GetConnector>());
+const ATOMIC: c_ulong = iowr(0xBC, size_of::<Atomic>());
 
 unsafe extern "C" {
     fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
@@ -282,7 +406,64 @@ impl Prop {
 
 /// All properties of connector `id`. Works on any open card fd.
 pub fn connector_props(fd: RawFd, id: u32) -> std::io::Result<Vec<Prop>> {
-    let mut q = ObjGetProperties { obj_id: id, obj_type: OBJECT_CONNECTOR, ..Default::default() };
+    object_props(fd, id, OBJECT_CONNECTOR)
+}
+
+/// The modes connector `id` offers (no re-probe of the TV).
+pub fn connector_modes(fd: RawFd, id: u32) -> std::io::Result<Vec<DrmMode>> {
+    // A non-zero count_modes keeps the kernel from re-probing the
+    // connector (an EDID read); it copies only when the buffer is big
+    // enough, and always reports the real count.
+    let mut buf = vec![DrmMode::zeroed(); 1];
+    loop {
+        let mut q = GetConnector {
+            connector_id: id,
+            count_modes: buf.len() as u32,
+            modes_ptr: buf.as_mut_ptr() as u64,
+            ..Default::default()
+        };
+        ioctl_mut(fd, GETCONNECTOR, &mut q)?;
+        let n = q.count_modes as usize;
+        if n <= buf.len() {
+            buf.truncate(n);
+            return Ok(buf);
+        }
+        buf = vec![DrmMode::zeroed(); n];
+    }
+}
+
+/// One atomic commit of (object, property, value) triples. Needs the DRM
+/// master fd with the atomic client cap (SDL sets it when it uses atomic).
+pub fn atomic_commit(fd: RawFd, props: &[(u32, u32, u64)], flags: u32) -> std::io::Result<()> {
+    // The ioctl wants objects listed once, each with its properties.
+    let mut objs: Vec<u32> = Vec::new();
+    let mut counts: Vec<u32> = Vec::new();
+    let mut ids: Vec<u32> = Vec::new();
+    let mut values: Vec<u64> = Vec::new();
+    for obj in props.iter().map(|p| p.0) {
+        if objs.contains(&obj) {
+            continue;
+        }
+        objs.push(obj);
+        let mine: Vec<_> = props.iter().filter(|p| p.0 == obj).collect();
+        counts.push(mine.len() as u32);
+        ids.extend(mine.iter().map(|p| p.1));
+        values.extend(mine.iter().map(|p| p.2));
+    }
+    let mut a = Atomic {
+        flags,
+        count_objs: objs.len() as u32,
+        objs_ptr: objs.as_ptr() as u64,
+        count_props_ptr: counts.as_ptr() as u64,
+        props_ptr: ids.as_ptr() as u64,
+        prop_values_ptr: values.as_ptr() as u64,
+        ..Default::default()
+    };
+    ioctl_mut(fd, ATOMIC, &mut a)
+}
+
+fn object_props(fd: RawFd, id: u32, obj_type: u32) -> std::io::Result<Vec<Prop>> {
+    let mut q = ObjGetProperties { obj_id: id, obj_type, ..Default::default() };
     ioctl_mut(fd, OBJ_GETPROPERTIES, &mut q)?;
     let n = q.count_props as usize;
     let mut ids = vec![0u32; n];
@@ -352,6 +533,19 @@ pub struct HdrSwitch {
     colorspace: Option<(u32, u64, u64)>,
     /// The metadata blob in use while HDR is on.
     blob: Option<u32>,
+    /// For one-commit mode + HDR switches: the connector's `CRTC_ID`
+    /// property and the CRTC it drives with its `MODE_ID` and `ACTIVE`.
+    kms: Option<Kms>,
+    /// The mode blob of our last mode switch.
+    mode_blob: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Kms {
+    conn_crtc_prop: u32,
+    crtc: u32,
+    mode_id_prop: u32,
+    active_prop: u32,
 }
 
 /// EBUSY: a page flip is in flight; retry.
@@ -392,13 +586,93 @@ impl HdrSwitch {
                 .iter()
                 .find(|p| p.name == "Colorspace")
                 .and_then(|p| Some((p.id, p.enum_value("BT2020_RGB")?, p.enum_value("Default")?)));
-            return Ok(Self { fd, connector: c, hdr_prop: hdr.id, colorspace, blob: None });
+            let kms = (|| {
+                let crtc_prop = props.iter().find(|p| p.name == "CRTC_ID")?;
+                let crtc = crtc_prop.value as u32;
+                let cprops = object_props(fd, crtc, OBJECT_CRTC).ok()?;
+                let find = |n: &str| cprops.iter().find(|p| p.name == n).map(|p| p.id);
+                Some(Kms {
+                    conn_crtc_prop: crtc_prop.id,
+                    crtc: (crtc != 0).then_some(crtc)?,
+                    mode_id_prop: find("MODE_ID")?,
+                    active_prop: find("ACTIVE")?,
+                })
+            })();
+            return Ok(Self {
+                fd,
+                connector: c,
+                hdr_prop: hdr.id,
+                colorspace,
+                blob: None,
+                kms,
+                mode_blob: None,
+            });
         }
         Err(why)
     }
 
     pub fn is_on(&self) -> bool {
         self.blob.is_some()
+    }
+
+    /// The modes the connector offers.
+    pub fn modes(&self) -> Result<Vec<DrmMode>, String> {
+        connector_modes(self.fd, self.connector.id).map_err(|e| format!("modes: {e}"))
+    }
+
+    /// Sets the output mode and HDR (`Some`) or SDR (`None`) in **one**
+    /// atomic commit, so the TV re-syncs once. Tested first (TEST_ONLY);
+    /// on any error nothing has changed and the caller can fall back to
+    /// separate switches.
+    pub fn commit_mode_hdr(
+        &mut self,
+        mode: &DrmMode,
+        meta: Option<&HdrMetadata>,
+    ) -> Result<(), String> {
+        let k = self.kms.ok_or("no CRTC properties for an atomic mode switch")?;
+        let fd = self.fd;
+        let mode_blob = create_blob(fd, mode.as_bytes()).map_err(|e| format!("mode blob: {e}"))?;
+        let hdr_blob = match meta {
+            Some(m) => match create_blob(fd, &m.to_blob()) {
+                Ok(b) => Some(b),
+                Err(e) => {
+                    let _ = destroy_blob(fd, mode_blob);
+                    return Err(format!("HDR blob: {e}"));
+                }
+            },
+            None => None,
+        };
+        let conn = self.connector.id;
+        let mut props = vec![
+            (k.crtc, k.mode_id_prop, mode_blob as u64),
+            (k.crtc, k.active_prop, 1),
+            (conn, k.conn_crtc_prop, k.crtc as u64),
+            (conn, self.hdr_prop, hdr_blob.unwrap_or(0) as u64),
+        ];
+        if let Some((cs, bt2020, default)) = self.colorspace {
+            props.push((conn, cs, if meta.is_some() { bt2020 } else { default }));
+        }
+        let result =
+            with_retry(|| atomic_commit(fd, &props, ATOMIC_ALLOW_MODESET | ATOMIC_TEST_ONLY))
+                .map_err(|e| format!("atomic test: {e}"))
+                .and_then(|()| {
+                    with_retry(|| atomic_commit(fd, &props, ATOMIC_ALLOW_MODESET))
+                        .map_err(|e| format!("atomic commit: {e}"))
+                });
+        if let Err(e) = result {
+            let _ = destroy_blob(fd, mode_blob);
+            if let Some(b) = hdr_blob {
+                let _ = destroy_blob(fd, b);
+            }
+            return Err(e);
+        }
+        for old in [self.mode_blob.replace(mode_blob), std::mem::replace(&mut self.blob, hdr_blob)]
+            .into_iter()
+            .flatten()
+        {
+            let _ = destroy_blob(fd, old);
+        }
+        Ok(())
     }
 
     /// Sends `meta` to the TV and switches the colour space to BT.2020.
@@ -544,7 +818,36 @@ mod tests {
     }
 
     #[test]
+    fn mode_rates_and_picking() {
+        let mk = |w: u16, h: u16, clock: u32, htotal: u16, vtotal: u16| DrmMode {
+            clock,
+            hdisplay: w,
+            htotal,
+            vdisplay: h,
+            vtotal,
+            ..DrmMode::zeroed()
+        };
+        // CTA-861 4K timings: 24, 23.976 (clock /1.001) and 60.
+        let m24 = mk(3840, 2160, 297_000, 5500, 2250);
+        let m23 = mk(3840, 2160, 296_703, 5500, 2250);
+        let m60 = mk(3840, 2160, 594_000, 4400, 2250);
+        assert!((m24.hz() - 24.0).abs() < 1e-6);
+        assert!((m23.hz() - 23.976).abs() < 0.001);
+        let modes = [m60, m24, m23];
+        assert_eq!(pick_mode(&modes, 3840, 2160, 23.976), Some(&m23));
+        assert_eq!(pick_mode(&modes, 3840, 2160, 24.0), Some(&m24));
+        assert_eq!(pick_mode(&modes, 3840, 2160, 50.0), None);
+        assert_eq!(pick_mode(&modes, 1920, 1080, 60.0), None);
+        assert_eq!(m24.as_bytes().len(), 68);
+    }
+
+    #[test]
     fn struct_layouts_match_the_kernel() {
+        assert_eq!(size_of::<DrmMode>(), 68);
+        assert_eq!(size_of::<GetConnector>(), 80);
+        assert_eq!(size_of::<Atomic>(), 56);
+        assert_eq!(GETCONNECTOR, 0xC050_64A7);
+        assert_eq!(ATOMIC, 0xC038_64BC);
         assert_eq!(size_of::<ObjGetProperties>(), 32);
         assert_eq!(size_of::<GetProperty>(), 64);
         assert_eq!(size_of::<PropertyEnum>(), 40);
