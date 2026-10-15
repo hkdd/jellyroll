@@ -114,23 +114,68 @@ sudo dnf install -y 'pkgconfig(mpv)' 'pkgconfig(libva)' 'pkgconfig(libva-drm)'  
 sudo apt install libmpv-dev libva-dev                                               # Debian/Ubuntu
 ```
 
-On Fedora, H.264/HEVC playback also needs the full ffmpeg from RPM Fusion
-(`sudo dnf swap ffmpeg-free ffmpeg --allowerasing`); `ffmpeg-free` leaves
-those codecs out.
+On Fedora, H.264/HEVC playback also needs the full FFmpeg and VA-API driver
+from RPM Fusion; see [Fedora 44: codecs and hardware decode](#fedora-44-codecs-and-hardware-decode).
 
 HDMI-CEC uses the kernel's CEC devices directly (no libcec). The
 Jellyfin client needs no extra system packages: TLS (rustls with
 aws-lc) builds with the C compiler already required above.
 
-**Hardware video decode on Fedora (Intel):** Fedora's own
-`libva-intel-media-driver` leaves out H.264 and HEVC. Install the full
-driver from RPM Fusion nonfree (enable RPM Fusion per
-https://rpmfusion.org/Configuration first):
+### Fedora 44: codecs and hardware decode
 
-```sh
-sudo dnf swap libva-intel-media-driver intel-media-driver --allowerasing
-vainfo   # (libva-utils) should list VAProfileH264* and VAProfileHEVCMain
-```
+Fedora leaves patented codecs out of its own packages, so out of the box
+jellyroll can't decode H.264 or HEVC (8- or 10-bit) in hardware and the item
+page says "Can't play directly". Two packages need replacing with RPM Fusion's
+full builds: the FFmpeg that mpv decodes with, and the VA-API driver. Run
+these on the HTPC. Tested on an Intel N150 (Twin Lake), where it enables HEVC
+10-bit and AV1.
+
+1. See what the driver reports now:
+
+   ```sh
+   sudo dnf install -y libva-utils
+   vainfo --display drm --device /dev/dri/renderD128 2>&1 | grep -E "Driver version|HEVC"
+   ```
+
+2. Enable RPM Fusion (free and nonfree), unless it already is:
+
+   ```sh
+   sudo dnf install -y https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
+   ```
+
+3. Intel GPUs (Broadwell and newer, including N100/N150): replace Fedora's
+   VA-API driver with the full one:
+
+   ```sh
+   sudo dnf swap -y libva-intel-media-driver intel-media-driver --allowerasing
+   ```
+
+   AMD GPUs instead need Mesa's full VA-API driver:
+   `sudo dnf swap -y mesa-va-drivers mesa-va-drivers-freeworld --allowerasing`.
+
+4. Replace the codec-stripped FFmpeg (prints "not installed" if it already
+   has been):
+
+   ```sh
+   rpm -q ffmpeg-free && sudo dnf swap -y ffmpeg-free ffmpeg --allowerasing
+   ```
+
+5. Check, and restart jellyroll (it asks the driver at every play, so no
+   rebuild):
+
+   ```sh
+   vainfo --display drm --device /dev/dri/renderD128 2>&1 | grep -E "Driver version|HEVCMain10"
+   sudo systemctl restart jellyroll
+   ```
+
+   Expect `Intel iHD driver` and `VAProfileHEVCMain10 : VAEntrypointVLD`.
+   After playing something, `sudo journalctl -t jellyroll -b | grep -E
+   "VA-API hardware decode|hardware decoding"` shows what jellyroll found and
+   used.
+
+If HEVC stops working after a large update (reinstalling Fedora's
+multimedia group can bring the stripped driver back), check
+`rpm -q intel-media-driver libva-intel-media-driver` and repeat step 3.
 
 ## Running
 
