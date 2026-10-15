@@ -1248,6 +1248,23 @@ with a screen connected, ALSA describes the HDMI device after the screen
 The match now accepts the PCM name, the screen's name, or failing both "HDMI
 n" as `DEV=n`; tested with that machine's real list.
 
+**D85: Fast rendering for 4K and HDR video.** On the Intel N150 a 4K HDR10
+HEVC remux decoded fine through VA-API, but the Info panel showed renderer
+frame drops on every frame. mpv's default rendering (lanczos scaling, linear
+and sigmoid scaling, dithering, and per-frame HDR peak detection with a
+compute shader) takes longer than a frame at 4K on that GPU. The network was
+ruled out: the box is wired.
+
+A new setting, "Video rendering" (config `playback.render_quality`), has three
+choices. "High quality" uses mpv's defaults. "Fast" uses mpv's built-in `fast`
+profile: bilinear scaling, no dithering, no peak detection. "Automatic" is
+the default. It switches to the fast profile, with `apply-profile fast`, once
+mpv reports a video larger than 1440p or with a PQ/HLG transfer, and leaves
+anything else at full quality. At 4K on a 4K TV little scaling happens, so
+bilinear costs almost nothing visible. Tone mapping still runs, using a fixed
+peak instead of a measured one. The Info panel shows which rendering is in
+use.
+
 ## Dependency approvals
 
 | Crate | Status |
