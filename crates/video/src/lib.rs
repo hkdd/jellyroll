@@ -142,6 +142,30 @@ pub struct PlaybackState {
     pub seeking: bool,
     /// Rendering with mpv's `fast` profile.
     pub fast_render: bool,
+    /// Rendering PQ/BT.2020 for a TV in HDR mode (M9), no tone mapping.
+    pub hdr_output: bool,
+}
+
+/// The video's HDR description from mpv's `video-params` (M9). Fields the
+/// file doesn't carry are None.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VideoHdr {
+    /// Transfer function: "pq", "hlg", "bt.1886"...
+    pub gamma: String,
+    pub primaries: String,
+    /// Mastering display primaries (red, green, blue) and white point, xy.
+    pub mastering: Option<[(f32, f32); 4]>,
+    /// Mastering display luminance, cd/m².
+    pub max_luma: Option<f32>,
+    pub min_luma: Option<f32>,
+    pub max_cll: Option<f32>,
+    pub max_fall: Option<f32>,
+}
+
+impl VideoHdr {
+    pub fn is_pq(&self) -> bool {
+        self.gamma == "pq"
+    }
 }
 
 impl PlaybackState {
@@ -584,7 +608,11 @@ impl Player {
     }
 
     pub fn load(&mut self, url: &str) -> Result<(), String> {
-        self.state = PlaybackState { fast_render: self.fast_render, ..Default::default() };
+        self.state = PlaybackState {
+            fast_render: self.fast_render,
+            hdr_output: self.state.hdr_output,
+            ..Default::default()
+        };
         self.command(&["loadfile", url])
     }
 
@@ -661,6 +689,53 @@ impl Player {
         }
         self.fast_render = true;
         self.state.fast_render = true;
+    }
+
+    /// The video's HDR description; None until the video is configured.
+    pub fn video_hdr(&self) -> Option<VideoHdr> {
+        let gamma = self.property("video-params/gamma")?;
+        let num = |name: &str| -> Option<f32> {
+            self.property(&format!("video-params/{name}"))?.parse().ok().filter(|v: &f32| *v > 0.0)
+        };
+        let xy = |c: &str| Some((num(&format!("prim-{c}-x"))?, num(&format!("prim-{c}-y"))?));
+        let mastering = (|| Some([xy("red")?, xy("green")?, xy("blue")?, xy("white")?]))();
+        Some(VideoHdr {
+            gamma,
+            primaries: self.property("video-params/primaries").unwrap_or_default(),
+            mastering,
+            max_luma: num("max-luma"),
+            min_luma: num("min-luma"),
+            max_cll: num("max-cll"),
+            max_fall: num("max-fall"),
+        })
+    }
+
+    /// Renders for a TV in HDR10 mode: PQ and BT.2020 out, with a target
+    /// peak of 10000 cd/m² so mpv does no tone mapping (the TV maps to its
+    /// panel). Dithering stays on (the framebuffer is 8-bit; the fast
+    /// profile turns it off). Off: mpv picks the target again (SDR).
+    pub fn set_hdr_output(&mut self, on: bool) {
+        let opts: [(&str, &str); 4] = if on {
+            [
+                ("target-trc", "pq"),
+                ("target-prim", "bt.2020"),
+                ("target-peak", "10000"),
+                ("dither", "ordered"),
+            ]
+        } else {
+            [
+                ("target-trc", "auto"),
+                ("target-prim", "auto"),
+                ("target-peak", "auto"),
+                ("dither", if self.fast_render { "no" } else { "fruit" }),
+            ]
+        };
+        for (k, v) in opts {
+            if let Err(e) = self.command(&["set", k, v]) {
+                tracing::warn!("{k}={v}: {e}");
+            }
+        }
+        self.state.hdr_output = on;
     }
 
     /// A property as mpv formats it; None if unavailable.
