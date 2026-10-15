@@ -82,13 +82,24 @@ if [[ ! -e "$CFG_DIR/config.toml" ]]; then
   run install -m 644 -o "$APP_USER" -g "$APP_USER" "$HERE/dist/config.example.toml" "$CFG_DIR/config.toml"
 fi
 
-# 4. Text-mode boot with no display manager.
+# 4. Boot to text mode, where jellyroll takes the screen. A display manager
+#    only starts with graphical.target, so it is left installed and enabled:
+#    `systemctl isolate graphical.target` still gets the desktop, and
+#    scripts/uninstall.sh puts the old default back. Earlier versions of this
+#    script masked display managers; undo that.
+STATE_DIR=/var/lib/jellyroll-install
 run systemctl daemon-reload
+if [[ ! -e "$STATE_DIR/default-target" ]]; then
+  echo "+ remember the default target ($(systemctl get-default)) in $STATE_DIR"
+  if [[ $DRY -eq 0 ]]; then
+    install -d -m 755 "$STATE_DIR"
+    systemctl get-default > "$STATE_DIR/default-target"
+  fi
+fi
 run systemctl set-default multi-user.target
 for dm in gdm gdm3 sddm lightdm lxdm xdm greetd ly; do
-  if systemctl list-unit-files "$dm.service" --no-legend 2>/dev/null | grep -q "^$dm.service"; then
-    run systemctl disable "$dm.service" || true
-    run systemctl mask "$dm.service"
+  if [[ "$(systemctl is-enabled "$dm.service" 2>/dev/null || true)" == masked ]]; then
+    run systemctl unmask "$dm.service"
   fi
 done
 run systemctl enable jellyroll.service
@@ -97,4 +108,6 @@ echo
 echo "Installed. Reboot, or start now with: systemctl start jellyroll"
 echo "Config: $CFG_DIR/config.toml"
 echo "Logs: sudo journalctl -t jellyroll -f"
-echo "To get a login prompt back: systemctl stop jellyroll && systemctl start getty@tty1"
+echo "Shell: power menu (Back on the home screen) -> Exit to console"
+echo "Desktop for this boot: systemctl stop jellyroll && systemctl isolate graphical.target"
+echo "Undo: sudo scripts/uninstall.sh"

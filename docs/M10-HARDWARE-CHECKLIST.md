@@ -31,8 +31,9 @@ copy them from the desktop with `cat FILE | tee >(wl-copy)`.
 4. **Stop during playback:** play something for a minute, then from SSH or
    another console `pkill -TERM jellyroll`. In Jellyfin's web app the
    movie's resume point is where it was stopped.
-5. **Optional, when you make it boot-to-app** (it disables the desktop's
-   display manager; maybe on newer hardware):
+5. **Optional, when you make it boot-to-app** (it boots to text mode; the
+   desktop stays available with `systemctl isolate graphical.target`, and
+   `scripts/uninstall.sh` undoes it):
    ```sh
    sudo scripts/install.sh --user "$USER"
    sudo systemctl start jellyroll

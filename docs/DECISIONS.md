@@ -1171,6 +1171,20 @@ prompt appears on the TV. `sudo systemctl start jellyroll` or a reboot
 brings the app back. `--allow-exit` now only lets Back quit from top-level
 screens (it is still implied by `--dev`).
 
+**D81: install.sh no longer touches the display manager; uninstall.sh.**
+It used to disable and mask every display manager after setting the default
+target to `multi-user.target`. That was unnecessary (a display manager only
+starts with `graphical.target`) and harmful: on a machine that is also a
+desktop, `systemctl isolate graphical.target` failed, and unmasking alone
+didn't help because disabling had removed the `display-manager.service`
+link. Now install.sh only sets the default target, after saving the old one
+in `/var/lib/jellyroll-install/default-target`, and unmasks any display
+manager an older version masked. `scripts/uninstall.sh` removes the service,
+binary and polkit rule; unmasks and re-enables the display manager; restores
+the saved default target (or `graphical.target` when a display manager is
+installed); and starts `getty@tty1`. The `jellyroll` user and its data stay
+unless `--purge`.
+
 ## Dependency approvals
 
 | Crate | Status |

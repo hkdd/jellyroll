@@ -290,12 +290,20 @@ The script is idempotent. It:
 - installs `/usr/local/bin/jellyroll` and `jellyroll.service`
 - copies the example config to `~jellyroll/.config/jellyroll/config.toml`
   (only if there isn't one already)
-- sets the default target to **`multi-user.target`**
-- masks any display manager
+- sets the default target to **`multi-user.target`** (remembering the old
+  one). A desktop's display manager is left installed and enabled: it only
+  starts with `graphical.target`, so `sudo systemctl stop jellyroll && sudo
+  systemctl isolate graphical.target` still gets the desktop
+- unmasks display managers an older version of the script masked
+
+`sudo scripts/uninstall.sh` undoes it: removes the service, binary and polkit
+rule, puts the old default target back (and the display manager, if one is
+installed), and starts the login prompt on tty1. The `jellyroll` user and its
+sign-in and caches stay unless you add `--purge`.
 
 > **Use `multi-user.target`, not `rescue.target`.** "Single user" mode
 > (`rescue.target`) starts no networking. A text-mode `multi-user.target`
-> with no display manager is the equivalent you want.
+> is the equivalent you want.
 
 The unit runs the app in a logind session on tty1 (`PAMName=login`), which
 grants DRM master and input access. It sends `READY=1` after the first frame
